@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+dist/
+build/
+*.db
+*.sqlite
+.env
+.env.local
+go.work
+go.work.sum

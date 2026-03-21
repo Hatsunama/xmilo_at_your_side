@@ -1,0 +1,10 @@
+{
+  "current_mission_name": null,
+  "current_phase": null,
+  "current_confirmed_findings": [],
+  "current_ambiguous_findings": [],
+  "exact_next_command": null,
+  "reason_for_pause": null,
+  "cooldown_timer_active": false,
+  "background_process_started": false
+}

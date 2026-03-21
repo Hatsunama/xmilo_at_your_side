@@ -1,0 +1,23 @@
+app = "xmilo-relay-prod"
+primary_region = "dfw"
+
+[build]
+  # Fly builds from the Dockerfile in this directory.
+  # If no Dockerfile exists, Fly auto-detects the Go module and builds it.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 150
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

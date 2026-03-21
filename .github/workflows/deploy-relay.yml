@@ -1,0 +1,29 @@
+name: Deploy Relay
+
+# Trigger: push to main branch touching relay-go files, or manual
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'relay-go/**'
+      - '.github/workflows/deploy-relay.yml'
+  workflow_dispatch:  # manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy
+        working-directory: relay-go
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --app xmilo-relay-prod --remote-only

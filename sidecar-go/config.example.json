@@ -1,0 +1,9 @@
+{
+  "host": "127.0.0.1",
+  "port": 42817,
+  "db_path": ".miloclaw/picoclaw.sqlite",
+  "bearer_token": "replace_me_with_app_generated_token",
+  "relay_base_url": "http://127.0.0.1:8080",
+  "mind_root": "../docs/authority/xMilo_v1",
+  "runtime_id": "local-dev"
+}

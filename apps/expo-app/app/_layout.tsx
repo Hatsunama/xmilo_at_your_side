@@ -1,0 +1,41 @@
+import { Stack } from "expo-router";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { StatusBar } from "react-native";
+import { AppProvider } from "../src/state/AppContext";
+import { useWakeWord } from "../src/hooks/useWakeWord";
+
+// Mounts inside AppProvider so it can read wakeWordEnabled from context.
+function WakeWordController() {
+  useWakeWord();
+  return null;
+}
+
+export default function RootLayout() {
+  return (
+    <SafeAreaProvider>
+      <AppProvider>
+        <WakeWordController />
+        <StatusBar barStyle="light-content" />
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: "#111827" },
+            headerTintColor: "#E5E7EB",
+            contentStyle: { backgroundColor: "#0B1020" }
+          }}
+        >
+          <Stack.Screen name="index" options={{ title: "xMilo" }} />
+          <Stack.Screen name="setup" options={{ title: "Setup" }} />
+          <Stack.Screen name="settings" options={{ title: "Settings" }} />
+          <Stack.Screen name="archive" options={{ title: "Archive" }} />
+          <Stack.Screen
+            name="lair"
+            options={{
+              title: "Wizard Lair",
+              headerShown: false,
+            }}
+          />
+        </Stack>
+      </AppProvider>
+    </SafeAreaProvider>
+  );
+}

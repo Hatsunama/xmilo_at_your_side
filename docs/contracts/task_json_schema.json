@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelayTurnResponse",
+  "type": "object",
+  "properties": {
+    "intent": {
+      "type": "string"
+    },
+    "target_room": {
+      "type": "string"
+    },
+    "thought_text": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "report_text": {
+      "type": "string"
+    },
+    "requires_user_choice": {
+      "type": "boolean"
+    },
+    "choices": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "intent",
+    "target_room",
+    "thought_text",
+    "summary",
+    "report_text",
+    "requires_user_choice",
+    "choices"
+  ],
+  "additionalProperties": false
+}
