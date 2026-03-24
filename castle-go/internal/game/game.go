@@ -1,11 +1,11 @@
 // Package game implements the Ebiten game loop for the Milo Wizard Lair castle scene.
 // The Game struct is the single point of integration between:
-//   - PicoClaw WebSocket events (received via client.Connect)
+//   - xMilo sidecar WebSocket events (received via client.Connect)
 //   - Milo's visual state (MiloAnimator)
 //   - Room scene rendering (RoomScene)
 //   - Isometric camera projection (Camera)
 //
-// All spatial decisions come from PicoClaw. This file only executes them visually.
+// All spatial decisions come from the sidecar. This file only executes them visually.
 package game
 
 import (
@@ -27,7 +27,7 @@ type Game struct {
 	idle    *IdleDirector
 	eventCh chan client.RawEvent
 
-	// current known room and anchor from PicoClaw
+	// current known room and anchor from the sidecar
 	currentRoomID string
 	currentAnchor string
 	currentState  string
@@ -53,7 +53,7 @@ func newGameWithChannel(ch chan client.RawEvent) *Game {
 	}
 }
 
-// NewGame constructs the game and starts the PicoClaw WebSocket connection.
+// NewGame constructs the game and starts the sidecar WebSocket connection.
 // wsURL is typically "ws://127.0.0.1:42817/ws".
 func NewGame(wsURL string) *Game {
 	ch := make(chan client.RawEvent, 128)
@@ -90,7 +90,7 @@ func (g *Game) Layout(outsideW, outsideH int) (int, int) {
 }
 
 // Update implements ebiten.Game. Called 60 times per second.
-// Drains all pending PicoClaw events and advances animations.
+// Drains all pending sidecar events and advances animations.
 func (g *Game) Update() error {
 	if !g.initialized {
 		return nil
@@ -148,7 +148,7 @@ func (g *Game) ApplyRawEvent(ev client.RawEvent) {
 	g.handleEvent(ev)
 }
 
-// handleEvent processes a single raw event from PicoClaw.
+// handleEvent processes a single raw event from the sidecar.
 // The switch covers every event type the task engine emits.
 // Unknown event types are silently ignored — forward compatibility.
 func (g *Game) handleEvent(ev client.RawEvent) {
@@ -165,7 +165,7 @@ func (g *Game) handleEvent(ev client.RawEvent) {
 		}
 		toX, toY := g.cam.AnchorToScreen(p.ToAnchor)
 		facing := WalkFacing(p.FromAnchor, p.ToAnchor)
-		// If PicoClaw provided a nonzero duration use it; otherwise compute from grid distance.
+		// If the sidecar provided a nonzero duration use it; otherwise compute from grid distance.
 		durationMS := p.EstimatedMS
 		if durationMS == 0 {
 			durationMS = WalkDurationMS(p.FromAnchor, p.ToAnchor)

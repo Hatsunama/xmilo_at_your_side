@@ -36,7 +36,7 @@ type EbitenViewProps = ViewProps & {
 const EbitenView = requireNativeComponent<EbitenViewProps>("EbitenView");
 
 interface CastleViewProps {
-  /** PicoClaw WebSocket URL. Always "ws://127.0.0.1:42817/ws" on device. */
+  /** xMilo Sidecar WebSocket URL. Always "ws://127.0.0.1:42817/ws" on device. */
   wsURL: string;
   style?: ViewStyle;
   roomLabel?: string;

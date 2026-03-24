@@ -21,7 +21,7 @@ func ensureDrawPrimitives() {
 }
 
 // Prop is a single room decoration at a fixed grid position.
-// Props with an AmbientKey can be activated by "ambient" events from PicoClaw.
+// Props with an AmbientKey can be activated by "ambient" events from the sidecar.
 type Prop struct {
 	SpriteKey    string
 	GridX, GridY int
@@ -109,7 +109,7 @@ func (rs *RoomScene) SetRoute(route []RouteStep) {
 }
 
 // TriggerAmbient activates an ambient prop effect by effect ID.
-// Called on "ambient" events — currently PicoClaw does not emit these yet,
+// Called on "ambient" events — currently the sidecar does not emit these yet,
 // but the handler is wired so adding them to the engine requires zero renderer changes.
 func (rs *RoomScene) TriggerAmbient(effectID string) {
 	room, ok := rs.rooms[rs.activeID]

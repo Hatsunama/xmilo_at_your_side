@@ -74,6 +74,8 @@ jobs:
           path: |
             dist/${{ matrix.asset_name }}
             dist/${{ matrix.asset_name }}.sha256
+            dist/install.sh
+            dist/install.sh.sha256
           retention-days: 1
 
   release:

@@ -199,7 +199,7 @@ ASSET_NAME="${BINARY_NAME}-${ARCH}"
 
 # One-time migration away from legacy workspace naming.
 if [ -d "${LEGACY_WORKSPACE}" ] && [ ! -d "${WORKSPACE}" ]; then
-  warn "Legacy workspace detected at ${LEGACY_WORKSPACE}. Migrating to ${WORKSPACE}..."
+  warn "Legacy workspace detected. Migrating to the new xMilo workspace..."
   mv "${LEGACY_WORKSPACE}" "${WORKSPACE}" || fail "Could not migrate legacy workspace to ${WORKSPACE}"
 fi
 

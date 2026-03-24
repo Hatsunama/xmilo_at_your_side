@@ -16,7 +16,7 @@ const (
 )
 
 // MiloAnimator owns all of Milo's visual state.
-// State transitions are driven exclusively by events received from PicoClaw.
+// State transitions are driven exclusively by events received from the sidecar.
 // The animator never decides what state Milo should be in — it only executes
 // what it is told via SetState() and StartWalk().
 type MiloAnimator struct {
@@ -89,11 +89,11 @@ func NewMiloAnimator(cam *Camera) *MiloAnimator {
 }
 
 // SetState changes Milo's animation state and facing.
-// Called in response to "milo.state_changed" events from PicoClaw.
-// picoClawState is one of "idle" | "moving" | "working".
+// Called in response to "milo.state_changed" events from the sidecar.
+// sidecarState is one of "idle" | "moving" | "working".
 // It is mapped to the visual animation state appropriate for the current room.
-func (m *MiloAnimator) SetState(picoClawState, roomID, facing string, loop bool) {
-	visualState := mapState(picoClawState, roomID)
+func (m *MiloAnimator) SetState(sidecarState, roomID, facing string, loop bool) {
+	visualState := mapState(sidecarState, roomID)
 	if visualState == m.state && facing == m.facing {
 		return // no redundant sheet swap
 	}
@@ -115,7 +115,7 @@ func (m *MiloAnimator) SetIdleStyle(style string) {
 
 // StartWalk begins a walk interpolation from current position to a target anchor.
 // Called in response to "milo.movement_started" events.
-// durationMS is the PicoClaw-specified walk duration (estimated_ms field).
+// durationMS is the sidecar-specified walk duration (estimated_ms field).
 func (m *MiloAnimator) StartWalk(toX, toY float64, facing string, durationMS int) {
 	if durationMS <= 0 {
 		m.screenX = toX
@@ -206,11 +206,11 @@ func (m *MiloAnimator) Draw(screen *ebiten.Image) {
 	}
 }
 
-// mapState translates PicoClaw's behavioral state names into
+// mapState translates the sidecar's behavioral state names into
 // Milo's visual animation state for the current room.
 // This is the only place where room-specific idle animations are chosen.
-func mapState(picoState, roomID string) string {
-	switch picoState {
+func mapState(sidecarState, roomID string) string {
+	switch sidecarState {
 	case "moving":
 		return "walking"
 	case "working":

@@ -1,0 +1,104 @@
+{
+  "generated_at": "IMPORT_TIMESTAMP_PLACEHOLDER",
+  "profile_version": 1,
+  "profile_status": "baseline_recovered_and_cleaned",
+  "revalidation_queued": ["Torch", "Clipboard", "Proximity Sensor"],
+  "revalidation_note": "Capabilities listed in revalidation_queued must be re-tested live on first healthy PicoClaw startup after migration. Do not treat them as available until re-tested.",
+  "device_identity": "Android Device",
+  "commands_tested": [
+    "termux-tts-speak",
+    "termux-camera-info",
+    "termux-camera-photo",
+    "termux-battery-status",
+    "termux-vibrate",
+    "termux-torch",
+    "termux-clipboard-get",
+    "termux-clipboard-set",
+    "termux-sensor"
+  ],
+  "capabilities": {
+    "TTS": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-tts-speak"],
+      "notes": "Worked reliably in the recovered baseline."
+    },
+    "Camera": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-camera-info", "termux-camera-photo"],
+      "consent_gate": "Tier 3 for capture, Tier 2 for info only",
+      "notes": "Permissions granted previously. Validate by file existence and non-zero size. Capture requires explicit user consent."
+    },
+    "Battery": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-battery-status"],
+      "notes": "Worked reliably in the recovered baseline."
+    },
+    "Vibration": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-vibrate"],
+      "consent_gate": "Tier 2",
+      "notes": "Worked reliably in the recovered baseline."
+    },
+    "Gravity Sensor": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-sensor -s gravity"],
+      "notes": "Worked reliably in the recovered baseline."
+    },
+    "Orientation Sensor": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-sensor -s \"Orientation Sensor\""],
+      "notes": "Worked reliably in the recovered baseline."
+    },
+    "Light Sensor": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-sensor -s light"],
+      "notes": "Worked reliably in the recovered baseline."
+    },
+    "Step Counter": {
+      "available": true,
+      "confidence": "historical_verified",
+      "commands": ["termux-sensor -s step_counter"],
+      "notes": "Worked reliably in the recovered baseline."
+    },
+    "Torch": {
+      "available": null,
+      "confidence": "needs_revalidation",
+      "commands": ["command -v termux-torch", "termux-torch on", "termux-torch off"],
+      "consent_gate": "Tier 2",
+      "notes": "Older baseline used the wrong command name. Must be re-tested live."
+    },
+    "Clipboard": {
+      "available": null,
+      "confidence": "needs_revalidation",
+      "commands": ["termux-clipboard-set", "termux-clipboard-get"],
+      "consent_gate": "Tier 3 for read, Tier 2 for write",
+      "notes": "Must be tested with set-then-get, not get alone. Read requires explicit user consent."
+    },
+    "Proximity Sensor": {
+      "available": null,
+      "confidence": "needs_revalidation",
+      "commands": ["termux-sensor -s \"Proximity Sensor\" -n 1"],
+      "notes": "Older baseline had no valid readings. Re-test live before concluding unavailable."
+    },
+    "Tilt Detector": {
+      "available": null,
+      "confidence": "not_yet_tested_in_canonical_pack",
+      "commands": [],
+      "notes": "Use exact live sensor name only if it appears in termux-sensor -l."
+    },
+    "Environmental Sensors": {
+      "available": null,
+      "confidence": "not_yet_tested_in_canonical_pack",
+      "commands": [],
+      "notes": "Use exact live sensor names only if they appear in termux-sensor -l."
+    }
+  },
+  "recommended_upgrades": []
+}

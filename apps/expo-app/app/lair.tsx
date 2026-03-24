@@ -6,9 +6,9 @@
  * the chat input bar at the bottom so the user can give Milo tasks
  * without leaving the castle view.
  *
- * The castle renderer connects directly to PicoClaw via WebSocket.
+ * The castle renderer connects directly to the xMilo Sidecar via WebSocket.
  * Room routing, Milo movement, and all spatial decisions happen
- * inside PicoClaw — this screen just shows the result.
+ * inside the sidecar runtime — this screen just shows the result.
  *
  * Navigation: accessible from the main index screen via "Enter the Lair".
  */

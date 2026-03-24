@@ -40,7 +40,7 @@ func Load() (Config, error) {
 	}
 
 	if cfg.BearerToken == "" {
-		return Config{}, errors.New("missing bearer token: set XMILO_BEARER_TOKEN (or legacy PICOCLAW_BEARER_TOKEN) or provide config file bearer_token")
+		return Config{}, errors.New("missing bearer token: set XMILO_BEARER_TOKEN or provide config file bearer_token")
 	}
 
 	return cfg, nil

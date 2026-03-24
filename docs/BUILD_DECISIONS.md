@@ -17,7 +17,7 @@ When something was a normal safe app-default, it was chosen automatically instea
 ## Architecture
 
 - `Mind v4` remains the policy + knowledge layer.
-- `PicoClaw Go` remains the only runtime authority on-device.
+- `xMilo Sidecar Go` remains the only runtime authority on-device.
 - The user-facing product / sidecar name is **xMilo**.
 - The relay is a separate hosted backend.
 - The sidecar and relay are both implemented in **Go**.

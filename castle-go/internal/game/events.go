@@ -1,12 +1,12 @@
 // Package game — events.go
-// Defines the JSON payload structs for every WebSocket event that PicoClaw emits.
+// Defines the JSON payload structs for every WebSocket event that the xMilo sidecar emits.
 // These match the map[string]any payloads in sidecar-go/internal/tasks/engine.go
 // exactly. The renderer only reacts to these; it never initiates state changes.
 package game
 
 import "encoding/json"
 
-// Envelope is the top-level wrapper PicoClaw sends for every broadcast.
+// Envelope is the top-level wrapper the sidecar sends for every broadcast.
 // Matches ws.Envelope in sidecar-go/internal/ws/hub.go
 type Envelope struct {
 	Type      string          `json:"type"`
