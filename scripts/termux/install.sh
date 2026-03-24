@@ -6,8 +6,9 @@ set -euo pipefail
 GITHUB_OWNER="Hatsunama"
 GITHUB_REPO="xmilo_at_your_side"
 GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
-BINARY_NAME="picoclaw"
-WORKSPACE="${HOME}/.miloclaw"
+BINARY_NAME="xmilo-sidecar"
+WORKSPACE="${HOME}/.xmilo"
+LEGACY_WORKSPACE="${HOME}/.miloclaw"
 BIN_DIR="${WORKSPACE}/bin"
 LOG_DIR="${WORKSPACE}/logs"
 CONFIG_PATH="${WORKSPACE}/config.json"
@@ -89,7 +90,7 @@ build_from_source() {
   (
     cd "${repo_root}/sidecar-go" || exit 1
     # Termux runs on Android. Build for android so the resulting binary is ABI/OS-correct.
-    CGO_ENABLED=0 GOOS=android GOARCH="$(go env GOARCH)" go build -trimpath -o "${target_bin}" ./cmd/picoclaw
+    CGO_ENABLED=0 GOOS=android GOARCH="$(go env GOARCH)" go build -trimpath -o "${target_bin}" ./cmd/xmilo_sidecar
   ) || fail "Go build failed while compiling ${BINARY_NAME} from source."
 
   chmod +x "${target_bin}"
@@ -195,6 +196,13 @@ esac
 ok "CPU architecture: ${ARCH} (from ${RAW_ARCH})"
 
 ASSET_NAME="${BINARY_NAME}-${ARCH}"
+
+# One-time migration away from legacy workspace naming.
+if [ -d "${LEGACY_WORKSPACE}" ] && [ ! -d "${WORKSPACE}" ]; then
+  warn "Legacy workspace detected at ${LEGACY_WORKSPACE}. Migrating to ${WORKSPACE}..."
+  mv "${LEGACY_WORKSPACE}" "${WORKSPACE}" || fail "Could not migrate legacy workspace to ${WORKSPACE}"
+fi
+
 mkdir -p "${BIN_DIR}" "${LOG_DIR}"
 ok "Workspace ready: ${WORKSPACE}"
 

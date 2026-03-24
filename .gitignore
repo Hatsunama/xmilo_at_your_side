@@ -15,6 +15,7 @@ castle-go/topology-report.json
 
 # Local/runtime artifacts
 validation-artifacts/
+sidecar-go/.xmilo/
 sidecar-go/.miloclaw/
 **/*.log
 **/*.err.log

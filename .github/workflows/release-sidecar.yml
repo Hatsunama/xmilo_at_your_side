@@ -22,7 +22,7 @@ jobs:
           - arch: arm64
             GOOS: android
             GOARCH: arm64
-            asset_name: picoclaw-arm64
+            asset_name: xmilo-sidecar-arm64
 
     steps:
       - name: Checkout
@@ -50,7 +50,7 @@ jobs:
             -trimpath \
             -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
             -o ../dist/${{ matrix.asset_name }} \
-            ./cmd/picoclaw
+            ./cmd/xmilo_sidecar
 
       - name: SHA256 checksum
         run: |
@@ -108,15 +108,15 @@ jobs:
             ### Manual download
             | Architecture | File | Notes |
             |---|---|---|
-            | arm64 | `picoclaw-arm64` | Most Android phones (2017+) |
+            | arm64 | `xmilo-sidecar-arm64` | Most Android phones (2017+) |
 
             Verify your download:
             ```bash
-            sha256sum -c picoclaw-arm64.sha256
+            sha256sum -c xmilo-sidecar-arm64.sha256
             ```
           files: |
-            dist/picoclaw-arm64
-            dist/picoclaw-arm64.sha256
+            dist/xmilo-sidecar-arm64
+            dist/xmilo-sidecar-arm64.sha256
             dist/install.sh
             dist/install.sh.sha256
           draft: false

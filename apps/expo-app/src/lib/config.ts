@@ -19,7 +19,7 @@ export const PRIVACY_POLICY_URL = `${WEBSITE_BASE_URL}/privacy`;
 export const SUPPORT_URL = `${WEBSITE_BASE_URL}/support`;
 export const DELETE_ACCOUNT_URL = `${WEBSITE_BASE_URL}/delete-account`;
 
-type SidecarAssetName = "picoclaw-arm64" | "picoclaw-arm" | "picoclaw-amd64";
+type SidecarAssetName = "xmilo-sidecar-arm64" | "xmilo-sidecar-arm" | "xmilo-sidecar-amd64";
 type SidecarArchResolution = {
   assetName: SidecarAssetName;
   checksumName: `${SidecarAssetName}.sha256`;
@@ -53,8 +53,8 @@ export function resolveSidecarReleaseAsset(): SidecarArchResolution {
 
   if (abis.some((abi) => abi.includes("arm64") || abi.includes("aarch64"))) {
     return {
-      assetName: "picoclaw-arm64",
-      checksumName: "picoclaw-arm64.sha256",
+      assetName: "xmilo-sidecar-arm64",
+      checksumName: "xmilo-sidecar-arm64.sha256",
       abiLabel: "arm64-v8a",
       detectedFrom: "android_abis"
     };
@@ -62,8 +62,8 @@ export function resolveSidecarReleaseAsset(): SidecarArchResolution {
 
   if (abis.some((abi) => abi.includes("armeabi") || abi === "arm")) {
     return {
-      assetName: "picoclaw-arm",
-      checksumName: "picoclaw-arm.sha256",
+      assetName: "xmilo-sidecar-arm",
+      checksumName: "xmilo-sidecar-arm.sha256",
       abiLabel: "armeabi-v7a",
       detectedFrom: "android_abis"
     };
@@ -71,16 +71,16 @@ export function resolveSidecarReleaseAsset(): SidecarArchResolution {
 
   if (abis.some((abi) => abi.includes("x86_64") || abi.includes("amd64"))) {
     return {
-      assetName: "picoclaw-amd64",
-      checksumName: "picoclaw-amd64.sha256",
+      assetName: "xmilo-sidecar-amd64",
+      checksumName: "xmilo-sidecar-amd64.sha256",
       abiLabel: "x86_64",
       detectedFrom: "android_abis"
     };
   }
 
   return {
-    assetName: "picoclaw-arm64",
-    checksumName: "picoclaw-arm64.sha256",
+    assetName: "xmilo-sidecar-arm64",
+    checksumName: "xmilo-sidecar-arm64.sha256",
     abiLabel: "arm64-v8a",
     detectedFrom: "platform_fallback"
   };

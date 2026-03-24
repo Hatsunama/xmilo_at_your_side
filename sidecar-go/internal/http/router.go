@@ -408,7 +408,7 @@ func (a *App) handleWebsiteHandoffCreate(w http.ResponseWriter, r *http.Request)
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runtime.HealthResponse{
 		OK:        true,
-		Service:   "picoclaw-sidecar",
+		Service:   "xmilo-sidecar",
 		Version:   "0.1.0",
 		UptimeSec: int64(time.Since(a.startedAt).Seconds()),
 	})

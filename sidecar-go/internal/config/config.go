@@ -20,16 +20,16 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Host:         getenv("PICOCLAW_HOST", "127.0.0.1"),
-		Port:         getenvInt("PICOCLAW_PORT", 42817),
-		DBPath:       getenv("PICOCLAW_DB_PATH", filepath.Join(".miloclaw", "picoclaw.sqlite")),
-		BearerToken:  getenv("PICOCLAW_BEARER_TOKEN", ""),
-		RelayBaseURL: getenv("PICOCLAW_RELAY_BASE_URL", "http://127.0.0.1:8080"),
-		MindRoot:     getenv("PICOCLAW_MIND_ROOT", filepath.Join("..", "docs", "authority", "xMilo_v1")),
-		RuntimeID:    getenv("PICOCLAW_RUNTIME_ID", "dev-local"),
+		Host:         getenvAny([]string{"XMILO_SIDECAR_HOST", "PICOCLAW_HOST"}, "127.0.0.1"),
+		Port:         getenvIntAny([]string{"XMILO_SIDECAR_PORT", "PICOCLAW_PORT"}, 42817),
+		DBPath:       getenvAny([]string{"XMILO_SIDECAR_DB_PATH", "PICOCLAW_DB_PATH"}, filepath.Join(".xmilo", "xmilo.db")),
+		BearerToken:  getenvAny([]string{"XMILO_BEARER_TOKEN", "XMILO_SIDECAR_BEARER_TOKEN", "PICOCLAW_BEARER_TOKEN"}, ""),
+		RelayBaseURL: getenvAny([]string{"XMILO_RELAY_BASE_URL", "XMILO_RELAY_URL", "XMILO_SIDECAR_RELAY_BASE_URL", "PICOCLAW_RELAY_BASE_URL"}, "http://127.0.0.1:8080"),
+		MindRoot:     getenvAny([]string{"XMILO_MIND_ROOT", "XMILO_SIDECAR_MIND_ROOT", "PICOCLAW_MIND_ROOT"}, filepath.Join("..", "docs", "authority", "xMilo_v1")),
+		RuntimeID:    getenvAny([]string{"XMILO_RUNTIME_ID", "XMILO_SIDECAR_RUNTIME_ID", "PICOCLAW_RUNTIME_ID"}, "dev-local"),
 	}
 
-	if path := os.Getenv("PICOCLAW_CONFIG"); path != "" {
+	if path := getenvAny([]string{"XMILO_SIDECAR_CONFIG", "PICOCLAW_CONFIG"}, ""); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return Config{}, err
@@ -40,23 +40,27 @@ func Load() (Config, error) {
 	}
 
 	if cfg.BearerToken == "" {
-		return Config{}, errors.New("missing bearer token: set PICOCLAW_BEARER_TOKEN or config file bearer_token")
+		return Config{}, errors.New("missing bearer token: set XMILO_BEARER_TOKEN (or legacy PICOCLAW_BEARER_TOKEN) or provide config file bearer_token")
 	}
 
 	return cfg, nil
 }
 
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func getenvAny(keys []string, fallback string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
 	}
 	return fallback
 }
 
-func getenvInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil {
-			return parsed
+func getenvIntAny(keys []string, fallback int) int {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			if parsed, err := strconv.Atoi(v); err == nil {
+				return parsed
+			}
 		}
 	}
 	return fallback

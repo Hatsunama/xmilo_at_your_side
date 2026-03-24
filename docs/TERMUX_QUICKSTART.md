@@ -63,15 +63,15 @@ echo "Your token: $TOKEN"
 ```bash
 cd ~/xmilo_v6/sidecar-go
 
-export PICOCLAW_BEARER_TOKEN="<your token from Step 2>"
-export PICOCLAW_HOST="127.0.0.1"
-export PICOCLAW_PORT="42817"
-export PICOCLAW_DB_PATH="$HOME/.miloclaw/picoclaw.sqlite"
-export PICOCLAW_MIND_ROOT="$HOME/xmilo_v6/xMilo_v6/docs/authority/xMilo_v1"
-export PICOCLAW_RELAY_BASE_URL="http://127.0.0.1:8080"
+export XMILO_BEARER_TOKEN="<your token from Step 2>"
+export XMILO_SIDECAR_HOST="127.0.0.1"
+export XMILO_SIDECAR_PORT="42817"
+export XMILO_SIDECAR_DB_PATH="$HOME/.xmilo/xmilo.db"
+export XMILO_MIND_ROOT="$HOME/xmilo_v6/xMilo_v6/docs/authority/xMilo_v1"
+export XMILO_RELAY_BASE_URL="http://127.0.0.1:8080"
 ```
 
-For a relay you actually have running (even localhost), set `PICOCLAW_RELAY_BASE_URL` to its real address.
+For a relay you actually have running (even localhost), set `XMILO_RELAY_BASE_URL` to its real address.
 If no relay is running, tasks will enter the `stuck` state with a relay error — the sidecar itself will still start and the bridge/WebSocket will work.
 
 ---
@@ -85,25 +85,25 @@ cd ~/xmilo_v6/sidecar-go
 go mod download
 
 # Build
-go build -o ~/bin/picoclaw ./cmd/picoclaw
+go build -o ~/bin/xmilo-sidecar ./cmd/xmilo_sidecar
 
 # Run
-mkdir -p ~/.miloclaw
-~/bin/picoclaw
+mkdir -p ~/.xmilo
+~/bin/xmilo-sidecar
 ```
 
 Expected output:
 
 ```
 2026/... load config: ok
-2026/... starting picoclaw-sidecar on 127.0.0.1:42817
+2026/... starting xmilo-sidecar on 127.0.0.1:42817
 ```
 
 Verify it is alive:
 
 ```bash
 curl -s -H "Authorization: Bearer <your token>" http://127.0.0.1:42817/health
-# → {"ok":true,"service":"picoclaw-sidecar",...}
+# → {"ok":true,"service":"xmilo-sidecar",...}
 ```
 
 ---
@@ -130,7 +130,7 @@ npm install
 npx expo start --lan --clear
 ```
 
-Open in Expo Go on the same phone. The Bridge pill in Main Hall should show `picoclaw-sidecar`.
+Open in Expo Go on the same phone. The Bridge pill in Main Hall should show `xmilo-sidecar`.
 
 ---
 
@@ -141,7 +141,7 @@ Acquire a wake lock before running:
 
 ```bash
 termux-wake-lock
-~/bin/picoclaw
+~/bin/xmilo-sidecar
 ```
 
 Or run in a Termux session you keep open. The sidecar also calls `termux-wake-lock` on startup automatically — but the Termux:API app must be installed for that to work.
@@ -153,7 +153,7 @@ Or run in a Termux session you keep open. The sidecar also calls `termux-wake-lo
 The relay requires Postgres. Fastest local option for dev:
 
 1. Skip it entirely — the sidecar handles all non-LLM events without the relay. Tasks will fail with a relay error but the WebSocket, state, and archive all work.
-2. Run Postgres + relay on your computer and point `PICOCLAW_RELAY_BASE_URL` at your computer's LAN IP (e.g. `http://192.168.x.x:8080`).
+2. Run Postgres + relay on your computer and point `XMILO_RELAY_BASE_URL` at your computer's LAN IP (e.g. `http://192.168.x.x:8080`).
 
 The relay itself is in `relay-go/`. Its required env vars are in `relay-go/.env.example`.
 
@@ -163,7 +163,7 @@ The relay itself is in `relay-go/`. Its required env vars are in `relay-go/.env.
 
 ```bash
 cd ~/xmilo_v6/sidecar-go
-go build -o ~/bin/picoclaw ./cmd/picoclaw && ~/bin/picoclaw
+go build -o ~/bin/xmilo-sidecar ./cmd/xmilo_sidecar && ~/bin/xmilo-sidecar
 ```
 
 No need to re-run `go mod download` unless `go.mod` changed.

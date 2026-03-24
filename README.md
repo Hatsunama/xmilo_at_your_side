@@ -103,7 +103,7 @@ go run ./cmd/milo-relay
 
 # Sidecar (local)
 cd sidecar-go && cp config.example.json config.json  # fill in values
-go run ./cmd/picoclaw
+go run ./cmd/xmilo_sidecar
 
 # App
 cd apps/expo-app && cp .env.example .env.local  # fill in values

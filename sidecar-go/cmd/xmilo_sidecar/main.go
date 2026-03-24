@@ -13,12 +13,12 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "", "path to config.json (overrides PICOCLAW_CONFIG env var)")
+	configPath := flag.String("config", "", "path to config.json (overrides XMILO_SIDECAR_CONFIG env var; legacy PICOCLAW_CONFIG still supported)")
 	flag.Parse()
 
 	// --config flag takes priority over env var
 	if *configPath != "" {
-		os.Setenv("PICOCLAW_CONFIG", *configPath)
+		os.Setenv("XMILO_SIDECAR_CONFIG", *configPath)
 	}
 
 	cfg, err := config.Load()
