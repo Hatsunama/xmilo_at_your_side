@@ -34,6 +34,24 @@ ensure_tool() {
     pkg install -y "$1" >/dev/null 2>&1 || fail "Could not install $1. Run: pkg install $1"
   fi
 }
+detect_dev_localhost_token() {
+  local package_dump=""
+
+  if command -v cmd >/dev/null 2>&1; then
+    package_dump="$(cmd package list packages 2>/dev/null || true)"
+  elif command -v pm >/dev/null 2>&1; then
+    package_dump="$(pm list packages 2>/dev/null || true)"
+  fi
+
+  case "${package_dump}" in
+    *"package:com.hatsunama.xmilo.dev"*)
+      printf '%s' "REMOVED_TOKEN"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
 download_release_binary() {
   local asset_name="$1"
   local download_url="$2"
@@ -222,6 +240,11 @@ TOKEN_FILE="${WORKSPACE}/bearer_token"
 BEARER_TOKEN=""
 [ -f "${TOKEN_FILE}" ] && BEARER_TOKEN="$(cat "${TOKEN_FILE}")"
 [ -z "$BEARER_TOKEN" ] && [ -n "${XMILO_BEARER_TOKEN:-}" ] && BEARER_TOKEN="${XMILO_BEARER_TOKEN}"
+[ -z "$BEARER_TOKEN" ] && BEARER_TOKEN="$(detect_dev_localhost_token || true)"
+
+if [ -n "$BEARER_TOKEN" ] && [ ! -f "${TOKEN_FILE}" ] && [ -z "${XMILO_BEARER_TOKEN:-}" ]; then
+  info "Detected xMilo dev build on this phone. Using the dev localhost token for bootstrap."
+fi
 
 if [ -z "$BEARER_TOKEN" ]; then
   echo ""
