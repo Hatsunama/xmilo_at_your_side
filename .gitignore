@@ -7,6 +7,12 @@ apps/expo-app/.expo/
 # Build outputs
 dist/
 
+# Generated preview artifacts (rebuildable)
+castle-go/fixture-previews/
+castle-go/*-preview.png
+castle-go/behavior-report.json
+castle-go/topology-report.json
+
 # Local/runtime artifacts
 validation-artifacts/
 sidecar-go/.miloclaw/
