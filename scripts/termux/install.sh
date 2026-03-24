@@ -235,6 +235,10 @@ fi
 
 [ -z "$BEARER_TOKEN" ] && fail "No bearer token available. Aborting."
 BEARER_TOKEN="$(printf '%s' "${BEARER_TOKEN}" | tr -d '\r\n')"
+umask 077
+printf '%s\n' "${BEARER_TOKEN}" > "${TOKEN_FILE}"
+chmod 600 "${TOKEN_FILE}" 2>/dev/null || true
+ok "Bearer token stored: ${TOKEN_FILE}"
 
 RELAY_URL_FILE="${WORKSPACE}/relay_url"
 RELAY_URL=""
@@ -242,6 +246,9 @@ RELAY_URL=""
 [ -z "$RELAY_URL" ] && [ -n "${XMILO_RELAY_URL:-}" ] && RELAY_URL="${XMILO_RELAY_URL}"
 [ -z "$RELAY_URL" ] && RELAY_URL="https://relay.xmiloatyourside.com" && \
   info "Using default relay URL: ${RELAY_URL}"
+printf '%s\n' "${RELAY_URL}" > "${RELAY_URL_FILE}"
+chmod 600 "${RELAY_URL_FILE}" 2>/dev/null || true
+ok "Relay URL stored: ${RELAY_URL_FILE}"
 
 if [ -z "${MIND_ROOT}" ]; then
   MIND_ROOT="${WORKSPACE}/mind"
