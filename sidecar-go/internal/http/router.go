@@ -249,9 +249,11 @@ func (a *App) handleAuthInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.SetRuntimeConfig("relay_session_jwt", newJWT)
 	_ = a.store.SetRuntimeConfig("relay_expires_at", newExpiry)
+	_ = a.store.SetRuntimeConfig("relay_device_user_id", jwtStringClaim(newJWT, "sub"))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                     true,
+		"device_user_id":         jwtStringClaim(newJWT, "sub"),
 		"entitled":               jwtEntitledClaim(newJWT),
 		"expires_at":             newExpiry,
 		"access_mode":            jwtStringClaim(newJWT, "access_mode"),
@@ -277,9 +279,11 @@ func (a *App) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.SetRuntimeConfig("relay_session_jwt", newJWT)
 	_ = a.store.SetRuntimeConfig("relay_expires_at", newExpiry)
+	_ = a.store.SetRuntimeConfig("relay_device_user_id", jwtStringClaim(newJWT, "sub"))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                     true,
+		"device_user_id":         jwtStringClaim(newJWT, "sub"),
 		"entitled":               jwtEntitledClaim(newJWT),
 		"expires_at":             newExpiry,
 		"access_mode":            jwtStringClaim(newJWT, "access_mode"),
@@ -448,6 +452,7 @@ func (a *App) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.store.SetRuntimeConfig("relay_session_jwt", req.SessionJWT)
 	_ = a.store.SetRuntimeConfig("relay_expires_at", req.ExpiresAt)
+	_ = a.store.SetRuntimeConfig("relay_device_user_id", jwtStringClaim(req.SessionJWT, "sub"))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -787,8 +792,9 @@ func bootstrapRelaySession(cfg config.Config, store *db.Store) error {
 		return fmt.Errorf("session/start failed: %s", string(raw))
 	}
 	var out struct {
-		SessionJWT string `json:"session_jwt"`
-		ExpiresAt  string `json:"expires_at"`
+		DeviceUserID string `json:"device_user_id"`
+		SessionJWT   string `json:"session_jwt"`
+		ExpiresAt    string `json:"expires_at"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return err
@@ -798,5 +804,8 @@ func bootstrapRelaySession(cfg config.Config, store *db.Store) error {
 	}
 	_ = store.SetRuntimeConfig("relay_session_jwt", out.SessionJWT)
 	_ = store.SetRuntimeConfig("relay_expires_at", out.ExpiresAt)
+	if out.DeviceUserID != "" {
+		_ = store.SetRuntimeConfig("relay_device_user_id", out.DeviceUserID)
+	}
 	return nil
 }

@@ -113,6 +113,7 @@ export async function authRegister(email: string, deviceUserID: string) {
  * of the relay verifying the token.
  */
 export async function authCheck(): Promise<{
+  device_user_id?: string;
   entitled: boolean;
   expires_at: string;
   access_mode?: string;

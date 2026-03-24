@@ -150,8 +150,10 @@ export default function SetupScreen() {
         }
         const s = await getState();
         const runtimeId = s.runtime_id ?? "";
-        setDeviceUserID(runtimeId);
-        syncRevenueCat(runtimeId);
+        const relayDeviceUserID = check.device_user_id ?? "";
+        const resolvedDeviceUserID = relayDeviceUserID || runtimeId;
+        setDeviceUserID(resolvedDeviceUserID);
+        syncRevenueCat(resolvedDeviceUserID);
         setStep("email");
       } catch {
         setStep("waiting_sidecar");
@@ -185,20 +187,21 @@ export default function SetupScreen() {
       try {
         await getHealth();
         stopPoll();
-        try {
-          const check = await authCheck();
+        const check = await authCheck().catch(() => null);
+        if (check) {
           setAccessConfig(check);
           if (check.entitled) {
             router.replace("/");
             return;
           }
-        } catch {
-          // not entitled yet, continue to email step
         }
+
         const s = await getState();
         const runtimeId = s.runtime_id ?? "";
-        setDeviceUserID(runtimeId);
-        syncRevenueCat(runtimeId);
+        const relayDeviceUserID = check?.device_user_id ?? "";
+        const resolvedDeviceUserID = relayDeviceUserID || runtimeId;
+        setDeviceUserID(resolvedDeviceUserID);
+        syncRevenueCat(resolvedDeviceUserID);
         setStep("email");
       } catch {
         // still not up
