@@ -17,7 +17,7 @@ Locked v1 sequence:
 3. app calls relay `/session/start` again
 4. if entitlement is restored:
    - app updates unlocked state
-   - if PicoClaw is already running, app calls localhost `/auth/refresh`
+   - if xMilo Sidecar is already running, app calls localhost `/auth/refresh`
    - otherwise normal bootstrap/setup continues
 
 ## 15. OTA updates
@@ -25,7 +25,7 @@ Locked v1:
 - **enabled for JS-layer updates only**
 - do not rely on OTA for:
   - native module changes
-  - PicoClaw binary changes
+  - xMilo Sidecar binary changes
   - manifest/permission changes
 
 ## 16. In-app rating prompt

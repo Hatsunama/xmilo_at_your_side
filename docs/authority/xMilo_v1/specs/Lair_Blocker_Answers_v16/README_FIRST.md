@@ -5,7 +5,7 @@ This is a minimal delta over v15.
 Keep all approved v15 files unchanged except where this patch explicitly adds or clarifies behavior.
 
 ## Terminology correction
-Any earlier mistaken reference to "miniclaw" should be read as **PicoClaw**.
+Any earlier mistaken reference to "miniclaw" should be read as **xMilo Sidecar**.
 
 ## What this patch locks
 - Android back button behavior

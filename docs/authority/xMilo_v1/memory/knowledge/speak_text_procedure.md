@@ -3,13 +3,13 @@
 ## Two separate speech layers — do not mix
 
 ### Layer 1 — On-phone runtime speech (this file)
-Used by PicoClaw / Termux runtime when Milo needs to speak locally on the device.
+Used by xMilo Sidecar / Termux runtime when Milo needs to speak locally on the device.
 
 Primary command: `~/.local/bin/milo-say`
 Background command: `~/.local/bin/milo-say-bg`
 Fallback: `termux-tts-speak`
 
-Source: `milo-say` and `milo-say-bg` are installed during the MiloClaw Termux bootstrap.
+Source: `milo-say` and `milo-say-bg` are installed during the xMilo Termux bootstrap.
 They are defined in the sidecar bootstrap scripts and installed to `~/.local/bin/` during setup.
 They are NOT part of Termux or the Play Store app — they are sidecar-installed wrappers.
 

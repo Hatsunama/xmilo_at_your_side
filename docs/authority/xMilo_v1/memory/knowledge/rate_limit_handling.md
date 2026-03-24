@@ -16,7 +16,7 @@ switch to RATE LIMIT MODE immediately.
 ## Relay 500 errors
 HTTP 500 from the relay follows the same cooldown policy as rate limits.
 A 500 means the relay is broken, not an auth or entitlement issue.
-PicoClaw retries the relay call up to 3 times (2s / 5s / 10s backoff) before transitioning the active task to stuck.
+xMilo Sidecar retries the relay call up to 3 times (2s / 5s / 10s backoff) before transitioning the active task to stuck.
 Do not retry indefinitely on a 500.
 
 ## RATE LIMIT MODE

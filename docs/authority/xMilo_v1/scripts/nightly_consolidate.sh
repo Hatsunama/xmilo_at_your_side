@@ -1,10 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # nightly_consolidate.sh
 # Maintenance utility only. Not runtime authority.
-# Wire into PicoClaw's nightly maintenance scheduler or run via cron.
+# Wire into xMilo Sidecar's nightly maintenance scheduler or run via cron.
 set -eu
 
-WORKSPACE="${WORKSPACE:-$HOME/.miloclaw/workspace}"
+WORKSPACE="${WORKSPACE:-$HOME/.xMilo/workspace}"
 MEMORY_DIR="$WORKSPACE/memory"
 KNOWLEDGE_DIR="$MEMORY_DIR/knowledge"
 LOG_FILE="$WORKSPACE/logs/recovery.log"
@@ -16,7 +16,7 @@ touch "$KNOWLEDGE_DIR/lessons.md" "$KNOWLEDGE_DIR/tools.md" "$KNOWLEDGE_DIR/proj
 python3 <<'PY'
 import os, datetime
 
-workspace = os.path.expanduser(os.environ.get("WORKSPACE", os.path.expanduser("~/.miloclaw/workspace")))
+workspace = os.path.expanduser(os.environ.get("WORKSPACE", os.path.expanduser("~/.xMilo/workspace")))
 today_file = f"{workspace}/memory/{datetime.datetime.now().strftime('%Y-%m-%d')}.md"
 knowledge_dir = f"{workspace}/memory/knowledge"
 lessons_file = f"{knowledge_dir}/lessons.md"

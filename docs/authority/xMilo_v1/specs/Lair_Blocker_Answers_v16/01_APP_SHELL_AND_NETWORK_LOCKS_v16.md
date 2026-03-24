@@ -23,12 +23,12 @@ Locked behavior by surface:
 
 ## 2. Mid-session network loss while Milo is working
 Locked v1 behavior:
-- PicoClaw retries the failed relay call **3 times** with backoff:
+- xMilo Sidecar retries the failed relay call **3 times** with backoff:
   - 2s
   - 5s
   - 10s
 - if all retries fail:
-  - PicoClaw emits `runtime.error` with `recoverable = true`
+  - xMilo Sidecar emits `runtime.error` with `recoverable = true`
   - active task transitions to `task.stuck`
   - stuck reason should indicate network/connection loss
 - no special paused state is added in v1
@@ -101,5 +101,5 @@ Locked v1:
 Locked v1:
 - maximum wall-clock task duration = **10 minutes**
 - if exceeded:
-  - PicoClaw transitions task to `task.stuck`
+  - xMilo Sidecar transitions task to `task.stuck`
   - stuck reason should indicate timeout

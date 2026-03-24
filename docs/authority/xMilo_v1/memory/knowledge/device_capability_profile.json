@@ -3,7 +3,7 @@
   "profile_version": 1,
   "profile_status": "baseline_recovered_and_cleaned",
   "revalidation_queued": ["Torch", "Clipboard", "Proximity Sensor"],
-  "revalidation_note": "Capabilities listed in revalidation_queued must be re-tested live on first healthy PicoClaw startup after migration. Do not treat them as available until re-tested.",
+  "revalidation_note": "Capabilities listed in revalidation_queued must be re-tested live on first healthy xMilo Sidecar startup after migration. Do not treat them as available until re-tested.",
   "device_identity": "Android Device",
   "commands_tested": [
     "termux-tts-speak",

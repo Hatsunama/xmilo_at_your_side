@@ -4,7 +4,7 @@
 # Creates today's daily log file if it doesn't exist.
 set -eu
 
-WORKSPACE="${WORKSPACE:-$HOME/.miloclaw/workspace}"
+WORKSPACE="${WORKSPACE:-$HOME/.xMilo/workspace}"
 MEMORY_DIR="$WORKSPACE/memory"
 
 mkdir -p "$MEMORY_DIR"
