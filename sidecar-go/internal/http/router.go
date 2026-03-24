@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"xmilo/sidecar-go/internal/buildinfo"
 	"xmilo/sidecar-go/internal/config"
 	"xmilo/sidecar-go/internal/db"
 	"xmilo/sidecar-go/internal/legacy"
@@ -410,7 +411,7 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runtime.HealthResponse{
 		OK:        true,
 		Service:   "xmilo-sidecar",
-		Version:   "0.1.0",
+		Version:   buildinfo.Version,
 		UptimeSec: int64(time.Since(a.startedAt).Seconds()),
 	})
 }

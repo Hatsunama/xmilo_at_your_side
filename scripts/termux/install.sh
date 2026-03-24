@@ -39,8 +39,12 @@ detect_dev_localhost_token() {
 
   if command -v cmd >/dev/null 2>&1; then
     package_dump="$(cmd package list packages 2>/dev/null || true)"
+  elif [ -x /system/bin/cmd ]; then
+    package_dump="$(/system/bin/cmd package list packages 2>/dev/null || true)"
   elif command -v pm >/dev/null 2>&1; then
     package_dump="$(pm list packages 2>/dev/null || true)"
+  elif [ -x /system/bin/pm ]; then
+    package_dump="$(/system/bin/pm list packages 2>/dev/null || true)"
   fi
 
   case "${package_dump}" in
