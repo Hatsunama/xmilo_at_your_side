@@ -1,0 +1,1 @@
+Procedural sprite placeholders live here until authored PNG sprite sheets land.

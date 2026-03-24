@@ -1,0 +1,23 @@
+# Dependency dirs
+apps/expo-app/node_modules/
+apps/expo-app/android/
+apps/expo-app/ios/
+apps/expo-app/.expo/
+
+# Build outputs
+dist/
+
+# Local/runtime artifacts
+validation-artifacts/
+sidecar-go/.miloclaw/
+**/*.log
+**/*.err.log
+
+# Local device capture artifacts (kept out of git)
+/*.png
+/*.txt
+/*.xml
+
+# Editor/OS
+.DS_Store
+Thumbs.db
