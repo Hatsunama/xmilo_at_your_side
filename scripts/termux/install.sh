@@ -183,7 +183,6 @@ fi
 ok "Termux:API detected"
 
 ensure_tool curl
-ensure_tool jq
 ok "Required tools available"
 
 RAW_ARCH="$(uname -m)"
@@ -242,7 +241,7 @@ if [ -z "${MIND_ROOT}" ]; then
 
   if [ ! -f "${MIND_ROOT}/system_prompt.md" ]; then
     cat > "${MIND_ROOT}/system_prompt.md" << 'PROMPT_EOF'
-You are Milo — a focused, direct, and thoughtful AI companion running locally on the user's Android phone. You help the user think through tasks, write, plan, summarize, and reason. You are precise and avoid padding. When you have enough information to answer, answer. When you need to ask, ask one question.
+You are xMilo — a warm, magical-feeling helper running locally on the user's Android phone. You stay honest about real capabilities and never claim an action happened unless the runtime verified it. If uncertain, ask one clarifying question. "Magic requires trust" means you explain what is happening, why, and what the user controls.
 PROMPT_EOF
   fi
 fi
@@ -321,6 +320,42 @@ for i in $(seq 1 "${HEALTH_RETRIES}"); do
 done
 
 echo ""
+if [ "${HEALTHY}" != "true" ] && [ "${INSTALLED_FROM_RELEASE}" = "true" ] && [ "${FALLBACK_DONE}" = "false" ]; then
+  warn "Release binary did not become healthy. Rebuilding from source for Android/Termux (one attempt)..."
+  FALLBACK_DONE="true"
+  INSTALLED_FROM_RELEASE="false"
+  build_from_source "${TARGET_BIN}"
+
+  info "Restarting xMilo sidecar from source build..."
+  nohup "${TARGET_BIN}" --config "${CONFIG_PATH}" > "${LOG_DIR}/sidecar.log" 2>&1 &
+  SIDECAR_PID=$!
+  echo "${SIDECAR_PID}" > "${PID_FILE}"
+  info "Sidecar restarted (PID ${SIDECAR_PID})"
+
+  echo ""
+  info "Waiting for sidecar to become healthy (source build)..."
+  HEALTHY=false
+  for i in $(seq 1 "${HEALTH_RETRIES}"); do
+    sleep "${HEALTH_WAIT_SEC}"
+
+    if ! kill -0 "${SIDECAR_PID}" 2>/dev/null; then
+      echo ""
+      warn "Sidecar process exited before health check completed."
+      warn "Recent sidecar logs:"
+      tail -n 120 "${LOG_DIR}/sidecar.log" 2>/dev/null || true
+      fail "Sidecar process is not running."
+    fi
+
+    HTTP_CODE="$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${BEARER_TOKEN}" "${HEALTH_URL}" 2>/dev/null || echo "000")"
+    if [ "${HTTP_CODE}" = "200" ]; then
+      HEALTHY=true
+      break
+    fi
+    printf "  Attempt %d/%d (HTTP %s)...\n" "$i" "${HEALTH_RETRIES}" "${HTTP_CODE}"
+  done
+  echo ""
+fi
+
 if [ "${HEALTHY}" = "true" ]; then
   ok "Sidecar is healthy at ${HEALTH_URL}"
   echo ""
