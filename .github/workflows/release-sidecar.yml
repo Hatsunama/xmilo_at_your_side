@@ -24,19 +24,6 @@ jobs:
             GOARCH: arm64
             asset_name: picoclaw-arm64
 
-          # Older 32-bit Android phones
-          - arch: arm
-            GOOS: android
-            GOARCH: arm
-            GOARM: "7"
-            asset_name: picoclaw-arm
-
-          # x86_64 — emulators and edge cases
-          - arch: amd64
-            GOOS: android
-            GOARCH: amd64
-            asset_name: picoclaw-amd64
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -122,8 +109,6 @@ jobs:
             | Architecture | File | Notes |
             |---|---|---|
             | arm64 | `picoclaw-arm64` | Most Android phones (2017+) |
-            | arm | `picoclaw-arm` | Older 32-bit Android phones |
-            | amd64 | `picoclaw-amd64` | x86_64 emulators |
 
             Verify your download:
             ```bash
@@ -132,10 +117,6 @@ jobs:
           files: |
             dist/picoclaw-arm64
             dist/picoclaw-arm64.sha256
-            dist/picoclaw-arm
-            dist/picoclaw-arm.sha256
-            dist/picoclaw-amd64
-            dist/picoclaw-amd64.sha256
             dist/install.sh
             dist/install.sh.sha256
           draft: false
