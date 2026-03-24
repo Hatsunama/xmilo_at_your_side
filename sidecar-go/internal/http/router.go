@@ -21,6 +21,7 @@ import (
 	"xmilo/sidecar-go/internal/maintenance"
 	"xmilo/sidecar-go/internal/mind"
 	"xmilo/sidecar-go/internal/movement"
+	"xmilo/sidecar-go/internal/netutil"
 	"xmilo/sidecar-go/internal/relay"
 	"xmilo/sidecar-go/internal/runtime"
 	"xmilo/sidecar-go/internal/tasks"
@@ -771,7 +772,7 @@ func jwtClaims(token string) map[string]any {
 // bootstrapRelaySession calls POST /session/start and stores the returned JWT.
 func bootstrapRelaySession(cfg config.Config, store *db.Store) error {
 	reqBody, _ := json.Marshal(map[string]string{"device_name": "xmilo-sidecar"})
-	httpClient := &http.Client{Timeout: 15 * time.Second}
+	httpClient := netutil.NewResilientHTTPClient(15 * time.Second)
 	resp, err := httpClient.Post(cfg.RelayBaseURL+"/session/start", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return err

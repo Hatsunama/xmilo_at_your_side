@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xmilo/sidecar-go/internal/db"
+	"xmilo/sidecar-go/internal/netutil"
 	"xmilo/sidecar-go/internal/ws"
 )
 
@@ -168,7 +169,7 @@ func (s *Scheduler) checkLatestRelease(ctx context.Context) releaseCheck {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "xmilo-sidecar-nightly-maintenance")
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := netutil.NewResilientHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return releaseCheck{Status: "unreachable"}
 	}

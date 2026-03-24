@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"xmilo/sidecar-go/internal/netutil"
 	"xmilo/sidecar-go/shared/contracts"
 )
 
@@ -23,7 +24,7 @@ func New(baseURL string, jwtGetter func() (string, error)) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		JWT:     jwtGetter,
-		HTTP:    &http.Client{Timeout: 12 * time.Minute},
+		HTTP:    netutil.NewResilientHTTPClient(12 * time.Minute),
 	}
 }
 
