@@ -45,6 +45,7 @@ func (s *Store) migrate() error {
 		{1, migration001},
 		{2, migration002},
 		{3, migration003},
+		{4, migration004},
 	}
 
 	current := 0
@@ -65,6 +66,8 @@ func (s *Store) migrate() error {
 				// column already exists, nothing to do
 			} else if migration.version == 3 && strings.Contains(err.Error(), "duplicate column name") && strings.Contains(err.Error(), "evidence_boundary") {
 				// column already exists
+			} else if migration.version == 4 && strings.Contains(err.Error(), "already exists") && strings.Contains(err.Error(), "memory_entries") {
+				// table already exists (older build already migrated)
 			} else {
 				return err
 			}
@@ -376,4 +379,181 @@ func (s *Store) GetResumeCheckpoint() (*runtime.ResumeCheckpoint, error) {
 
 func (s *Store) ClearResumeCheckpoint() error {
 	return s.SetResumeCheckpoint(nil)
+}
+
+func (s *Store) SetActiveMemoryEntry(entry runtime.MemoryEntry) error {
+	if entry.Key == "" || entry.Value == "" {
+		return errors.New("memory entry requires key and value")
+	}
+	if entry.Source == "" {
+		entry.Source = "unknown"
+	}
+	if entry.Effect == "" {
+		entry.Effect = "unspecified"
+	}
+	if entry.TrustTier == 0 {
+		entry.TrustTier = 5
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	class := string(entry.Class)
+	status := string(runtime.MemoryEntryStatusActive)
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Supersede any existing active entry for the same class/key so rollback remains possible.
+	if _, err := tx.Exec(`UPDATE memory_entries SET status = ?, updated_at = ? WHERE class = ? AND mkey = ? AND status = ?`,
+		string(runtime.MemoryEntryStatusSuperseded), now, class, entry.Key, status); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`INSERT INTO memory_entries(class, mkey, value, status, source, effect, trust_tier, quarantine_reason, created_at, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		class, entry.Key, entry.Value, status, entry.Source, entry.Effect, entry.TrustTier, entry.QuarantineReason, now, now); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *Store) GetActiveMemoryValue(class runtime.MemoryClass, key string) (string, error) {
+	if key == "" {
+		return "", nil
+	}
+	var value string
+	err := s.DB.QueryRow(`SELECT value FROM memory_entries WHERE class = ? AND mkey = ? AND status = ? ORDER BY id DESC LIMIT 1`,
+		string(class), key, string(runtime.MemoryEntryStatusActive)).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
+}
+
+func (s *Store) ListMemoryEntries(class runtime.MemoryClass, status runtime.MemoryEntryStatus, limit int) ([]runtime.MemoryEntry, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.DB.Query(`SELECT id, class, mkey, value, status, source, effect, trust_tier, quarantine_reason, created_at, updated_at
+        FROM memory_entries WHERE class = ? AND status = ? ORDER BY id DESC LIMIT ?`,
+		string(class), string(status), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []runtime.MemoryEntry
+	for rows.Next() {
+		var e runtime.MemoryEntry
+		var classRaw, statusRaw string
+		if err := rows.Scan(&e.ID, &classRaw, &e.Key, &e.Value, &statusRaw, &e.Source, &e.Effect, &e.TrustTier, &e.QuarantineReason, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		e.Class = runtime.MemoryClass(classRaw)
+		e.Status = runtime.MemoryEntryStatus(statusRaw)
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func (s *Store) QuarantineActiveMemoryEntry(class runtime.MemoryClass, key, reason string) error {
+	if key == "" {
+		return errors.New("memory quarantine requires key")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.DB.Exec(`UPDATE memory_entries SET status = ?, quarantine_reason = ?, updated_at = ?
+        WHERE class = ? AND mkey = ? AND status = ?`,
+		string(runtime.MemoryEntryStatusQuarantined), reason, now, string(class), key, string(runtime.MemoryEntryStatusActive))
+	return err
+}
+
+func (s *Store) RestoreMostRecentSupersededMemoryEntry(class runtime.MemoryClass, key string) error {
+	if key == "" {
+		return errors.New("memory restore requires key")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var restoreID int64
+	err = tx.QueryRow(`SELECT id FROM memory_entries WHERE class = ? AND mkey = ? AND status = ? ORDER BY id DESC LIMIT 1`,
+		string(class), key, string(runtime.MemoryEntryStatusSuperseded)).Scan(&restoreID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("no superseded memory entry to restore")
+	}
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`UPDATE memory_entries SET status = ?, updated_at = ? WHERE class = ? AND mkey = ? AND status = ?`,
+		string(runtime.MemoryEntryStatusSuperseded), now, string(class), key, string(runtime.MemoryEntryStatusActive)); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`UPDATE memory_entries SET status = ?, updated_at = ? WHERE id = ?`,
+		string(runtime.MemoryEntryStatusActive), now, restoreID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ConsolidateMemoryBounded prunes only non-active memory rows (superseded/quarantined),
+// keeping a bounded tail for rollback/debugging. It must never delete active rows.
+// Non-automatic: callers must invoke this explicitly (no background loop wiring here).
+func (s *Store) ConsolidateMemoryBounded(class runtime.MemoryClass, key string, maxSuperseded, maxQuarantined, maxAgeDays int) (int, error) {
+	if key == "" {
+		return 0, errors.New("memory consolidate requires key")
+	}
+	if maxSuperseded < 0 {
+		maxSuperseded = 0
+	}
+	if maxQuarantined < 0 {
+		maxQuarantined = 0
+	}
+	if maxAgeDays < 0 {
+		maxAgeDays = 0
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour).Format(time.RFC3339)
+
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// Defensive: never delete active entries.
+	var deleted int64
+	for _, status := range []runtime.MemoryEntryStatus{runtime.MemoryEntryStatusSuperseded, runtime.MemoryEntryStatusQuarantined} {
+		limit := maxSuperseded
+		if status == runtime.MemoryEntryStatusQuarantined {
+			limit = maxQuarantined
+		}
+
+		_, err := tx.Exec(`DELETE FROM memory_entries
+            WHERE class = ? AND mkey = ? AND status = ? AND updated_at < ? AND id NOT IN (
+                SELECT id FROM memory_entries
+                WHERE class = ? AND mkey = ? AND status = ?
+                ORDER BY id DESC LIMIT ?
+            )`,
+			string(class), key, string(status), cutoff,
+			string(class), key, string(status), limit)
+		if err != nil {
+			return 0, err
+		}
+		res := tx.QueryRow(`SELECT changes()`)
+		var changed int64
+		_ = res.Scan(&changed)
+		deleted += changed
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(deleted), nil
 }

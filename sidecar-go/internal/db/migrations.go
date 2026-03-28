@@ -73,3 +73,24 @@ ALTER TABLE task_slots ADD COLUMN intake_assessment TEXT;
 const migration003 = `
 ALTER TABLE task_slots ADD COLUMN evidence_boundary TEXT;
 `
+
+const migration004 = `
+CREATE TABLE IF NOT EXISTS memory_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    class TEXT NOT NULL,
+    mkey TEXT NOT NULL,
+    value TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source TEXT NOT NULL,
+    effect TEXT NOT NULL,
+    trust_tier INTEGER NOT NULL DEFAULT 5,
+    quarantine_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_entries_class_status_updated
+    ON memory_entries(class, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_class_key_status
+    ON memory_entries(class, mkey, status);
+`

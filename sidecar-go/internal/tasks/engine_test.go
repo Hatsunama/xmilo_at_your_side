@@ -382,36 +382,111 @@ func TestMemoryWriteWithInjectionIsBlocked(t *testing.T) {
 	}
 }
 
-func TestMemoryWriteNeedsApproval(t *testing.T) {
+func TestMemoryWriteIsAllowedAndRouted(t *testing.T) {
 	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
 	assessment := engine.assessPromptIntake("Remember that I prefer cinnamon.")
 	if assessment.MemoryIntent == nil || assessment.MemoryIntent.Effect != "preference_write" {
 		t.Fatalf("unexpected memory intent: %#v", assessment.MemoryIntent)
 	}
-	if assessment.MemoryIntent.SafetyStatus != "needs_confirmation" {
-		t.Fatalf("expected needs_confirmation, got %q", assessment.MemoryIntent.SafetyStatus)
+	if assessment.MemoryIntent.SafetyStatus != "allowed" {
+		t.Fatalf("expected allowed, got %q", assessment.MemoryIntent.SafetyStatus)
 	}
-	if assessment.ChosenClosedAction != "DECLINE_MEMORY_WRITE" {
-		t.Fatalf("expected DECLINE_MEMORY_WRITE, got %q", assessment.ChosenClosedAction)
+	if assessment.ChosenClosedAction != "REQUEST_CONFIRMATION" {
+		t.Fatalf("expected REQUEST_CONFIRMATION, got %q", assessment.ChosenClosedAction)
 	}
 	if assessment.ValidationState != "PENDING_APPROVAL" {
 		t.Fatalf("expected PENDING_APPROVAL, got %q", assessment.ValidationState)
 	}
+	if assessment.MemoryIntent.Key == "" || assessment.MemoryIntent.Value == "" {
+		t.Fatalf("expected memory intent to carry key/value, got %#v", assessment.MemoryIntent)
+	}
 }
 
 func TestMemoryWriteContradictionDowngrades(t *testing.T) {
-	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
-	engine.memoryStore["preference_memory"] = "I prefer cinnamon."
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	if err := store.SetActiveMemoryEntry(runtime.MemoryEntry{
+		Class:     runtime.MemoryClassUserPreference,
+		Key:       "preference_memory",
+		Value:     "I prefer cinnamon.",
+		Source:    "user_prompt",
+		Effect:    "user_teaching",
+		TrustTier: 5,
+	}); err != nil {
+		t.Fatalf("seed memory: %v", err)
+	}
 	assessment := engine.assessPromptIntake("Remember that I prefer mint.")
 	if assessment.MemoryIntent == nil || assessment.MemoryIntent.SafetyStatus != "contradicted" {
 		t.Fatalf("expected contradiction, got %#v", assessment.MemoryIntent)
 	}
-	if assessment.ValidationState != "BLOCKED" {
-		t.Fatalf("expected BLOCKED, got %q", assessment.ValidationState)
+	if assessment.ValidationState != "PENDING_APPROVAL" {
+		t.Fatalf("expected PENDING_APPROVAL, got %q", assessment.ValidationState)
+	}
+	if assessment.ChosenClosedAction != "REQUEST_CONFIRMATION" {
+		t.Fatalf("expected REQUEST_CONFIRMATION, got %q", assessment.ChosenClosedAction)
 	}
 	if !containsString(assessment.SecondaryFlags, "memory_contradiction") {
 		t.Fatalf("expected memory_contradiction flag, got %v", assessment.SecondaryFlags)
 	}
+}
+
+func TestMemoryWriteCreatesApprovalAndCompletesAfterChoiceAndResume(t *testing.T) {
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	task, assessment, err := engine.StartTask(context.Background(), "Remember that I prefer cinnamon.")
+	if err != nil {
+		t.Fatalf("start task memory write: %v", err)
+	}
+	if task == nil || assessment == nil {
+		t.Fatalf("expected task + assessment")
+	}
+
+	approval, err := store.GetApprovalState()
+	if err != nil {
+		t.Fatalf("get approval: %v", err)
+	}
+	if approval == nil || approval.Status != "awaiting_user_choice" {
+		t.Fatalf("expected pending approval, got %#v", approval)
+	}
+	checkpoint, err := store.GetResumeCheckpoint()
+	if err != nil {
+		t.Fatalf("get checkpoint: %v", err)
+	}
+	if checkpoint == nil || checkpoint.Phase != "memory_write" {
+		t.Fatalf("expected memory_write checkpoint, got %#v", checkpoint)
+	}
+
+	if _, _, err := engine.RecordChoice(task.TaskID, "approve_memory", "approve"); err != nil {
+		t.Fatalf("record choice: %v", err)
+	}
+	if _, _, err := engine.ResumePending(context.Background()); err != nil {
+		t.Fatalf("resume pending: %v", err)
+	}
+
+	value, err := store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
+	if err != nil {
+		t.Fatalf("get memory: %v", err)
+	}
+	if strings.TrimSpace(value) == "" {
+		t.Fatalf("expected memory value to be persisted after approval")
+	}
+}
+
+func TestStartTaskMemoryReadSurfacesStoredValue(t *testing.T) {
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	if err := store.SetActiveMemoryEntry(runtime.MemoryEntry{
+		Class:     runtime.MemoryClassUserPreference,
+		Key:       "preference_memory",
+		Value:     "I prefer mint.",
+		Source:    "user_prompt",
+		Effect:    "user_teaching",
+		TrustTier: 5,
+	}); err != nil {
+		t.Fatalf("seed memory: %v", err)
+	}
+
+	if _, _, err := engine.StartTask(context.Background(), "What do you remember about me?"); err != nil {
+		t.Fatalf("start task memory read: %v", err)
+	}
+	assertPendingEventCount(t, store, "task.message_emitted", 1)
 }
 
 func TestRecordChoiceSetsCheckpointOwnedNextStep(t *testing.T) {

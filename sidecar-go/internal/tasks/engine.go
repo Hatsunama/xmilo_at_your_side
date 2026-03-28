@@ -32,7 +32,6 @@ type Engine struct {
 	currentState  string
 	systemPrompt  string
 	responseStyle string
-	memoryStore   map[string]string
 }
 
 var injectionPhrases = []string{
@@ -53,7 +52,6 @@ func New(store *db.Store, relayClient *relay.Client, hub *ws.Hub, systemPrompt s
 		currentState:  "idle",
 		systemPrompt:  systemPrompt,
 		responseStyle: "balanced",
-		memoryStore:   make(map[string]string),
 	}
 }
 
@@ -81,7 +79,10 @@ func (e *Engine) StartTask(ctx context.Context, prompt string) (*runtime.TaskSna
 	defer e.mu.Unlock()
 
 	assessment := e.assessPromptIntake(prompt)
-	if assessment.ChosenClosedAction != "START_TASK" && assessment.ChosenClosedAction != "ANSWER" {
+	if assessment.ChosenClosedAction != "START_TASK" &&
+		assessment.ChosenClosedAction != "ANSWER" &&
+		assessment.ChosenClosedAction != "READ_MEMORY" &&
+		assessment.ChosenClosedAction != "REQUEST_CONFIRMATION" {
 		e.emit("task.intake_evaluated", map[string]any{"surface": "start_task", "assessment": assessment})
 		return nil, assessment, errors.New(strings.ToLower(assessment.ChosenClosedAction))
 	}
@@ -117,6 +118,47 @@ func (e *Engine) StartTask(ctx context.Context, prompt string) (*runtime.TaskSna
 	}
 
 	task.IntakeAssessment = assessment
+
+	if assessment.ChosenClosedAction == "READ_MEMORY" {
+		if err := e.executeMemoryRead(&task, assessment); err != nil {
+			return nil, assessment, err
+		}
+		_ = e.store.AddTaskHistory(task.TaskID, task.Prompt, "completed", "Memory read completed.")
+		e.emit("task.completed", map[string]any{"task_id": task.TaskID, "intent": task.Intent, "summary": "Memory surfaced."})
+		return &task, assessment, nil
+	}
+
+	// Memory writes require explicit confirmation, surfaced as a real approval + checkpoint state.
+	if assessment.ChosenClosedAction == "REQUEST_CONFIRMATION" && assessment.PrimaryClass == "MEMORY_WRITE_CANDIDATE" {
+		blocker := "memory_write_needs_confirmation"
+		if containsStringExact(assessment.SecondaryFlags, "memory_contradiction") {
+			blocker = "memory_write_contradiction_needs_confirmation"
+		}
+		choices := []string{"approve_memory"}
+
+		task.Status = "awaiting_user_choice"
+		task.StuckReason = blocker
+		task.UpdatedAt = now
+		_ = e.store.UpsertTask("awaiting_user_choice", task)
+		_ = e.store.SetApprovalState(buildApprovalState(task.TaskID, blocker, choices))
+		cp := buildApprovalCheckpoint(task, blocker, choices, e.currentContextHash())
+		cp.Phase = "memory_write"
+		if cp.NextStepPayload == nil {
+			cp.NextStepPayload = map[string]any{}
+		}
+		// Store the proposed memory operation in checkpoint-owned typed-ish state.
+		cp.NextStepPayload["memory_write"] = map[string]any{
+			"class":  assessment.MemoryIntent.Class,
+			"key":    assessment.MemoryIntent.Key,
+			"value":  assessment.MemoryIntent.Value,
+			"source": assessment.MemoryIntent.Source,
+			"effect": assessment.MemoryIntent.Effect,
+		}
+		_ = e.store.SetResumeCheckpoint(cp)
+		e.emit("task.intake_evaluated", map[string]any{"surface": "start_task", "assessment": assessment})
+		e.emit("task.accepted", map[string]any{"task_id": task.TaskID, "intent": task.Intent, "room_id": task.RoomID})
+		return &task, assessment, nil
+	}
 
 	if err := e.store.UpsertTask("active", task); err != nil {
 		return nil, assessment, err
@@ -162,16 +204,23 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 	// If the user has an active pasted context (Phase 3), prepend it to the relay
 	// prompt only — conversation history stores the clean prompt so the context
 	// does not bloat every subsequent turn in the tail.
-	promptForRelay := task.Prompt
+	corePrompt := task.Prompt
+	if mem := e.composeMemoryContext(); mem != "" {
+		corePrompt = "<memory_context>\n" + mem + "\n</memory_context>\n\n" + corePrompt
+	}
+
+	activeCtx, _ := e.store.GetRuntimeConfig("active_context")
+	promptForRelay := corePrompt
+	if strings.TrimSpace(activeCtx) != "" {
+		promptForRelay = "<untrusted_staged_context>\n" + activeCtx + "\n</untrusted_staged_context>\n\n" + corePrompt
+	}
+
 	if checkpoint != nil {
 		checkpointPayload, _ := json.Marshal(checkpoint)
-		promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n" + task.Prompt
-	}
-	if activeCtx, _ := e.store.GetRuntimeConfig("active_context"); activeCtx != "" {
-		promptForRelay = "<untrusted_staged_context>\n" + activeCtx + "\n</untrusted_staged_context>\n\n" + task.Prompt
-		if checkpoint != nil {
-			checkpointPayload, _ := json.Marshal(checkpoint)
-			promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n<untrusted_staged_context>\n" + activeCtx + "\n</untrusted_staged_context>\n\n" + task.Prompt
+		if strings.TrimSpace(activeCtx) != "" {
+			promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n<untrusted_staged_context>\n" + activeCtx + "\n</untrusted_staged_context>\n\n" + corePrompt
+		} else {
+			promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n" + corePrompt
 		}
 	}
 
@@ -184,6 +233,26 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		ResponseStyle:    e.responseStyle,
 	})
 	if err != nil {
+		// Avoid stranding tasks on a persistent relay 401 invalid-token loop.
+		if strings.Contains(err.Error(), "401") && strings.Contains(strings.ToLower(err.Error()), "invalid token") {
+			task.Status = "interrupted"
+			task.StuckReason = "relay_invalid_token"
+			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			_ = e.store.UpsertTask("interrupted", task)
+			_ = e.store.SetResumeCheckpoint(buildInterruptedCheckpoint(task, e.currentContextHash()))
+			_ = e.store.ClearApprovalState()
+			_ = e.store.ClearTask("active")
+			e.transitionTo("idle")
+			e.emit("task.stuck", map[string]any{
+				"task_id": task.TaskID,
+				"reason":  "relay_invalid_token",
+				"recovery_options": []string{
+					"auth_check",
+					"restart_sidecar",
+				},
+			})
+			return
+		}
 		// Detect entitlement_lost (relay returns 403 with {"error":"entitlement_lost"}).
 		// Save the task as interrupted so the user can resume after resubscribing.
 		if strings.Contains(err.Error(), "entitlement_lost") {
@@ -534,11 +603,21 @@ func (e *Engine) RecordChoice(taskID, choice, decision string) (*runtime.Approva
 	checkpoint.SelectedChoice = choice
 	checkpoint.Status = "approved_pending_resume"
 	checkpoint.ContinuationStatus = "resumable"
-	checkpoint.NextStepType = "check_state"
-	checkpoint.NextStepPayload = map[string]any{
-		"check_type":     "checkpoint_state",
-		"key":            "status",
-		"expected_value": "approved_pending_resume",
+	if checkpoint.Phase == "memory_write" {
+		// Memory write is executed by runtime after explicit approval, via a bounded emit_message step.
+		memPayload, _ := checkpoint.NextStepPayload["memory_write"].(map[string]any)
+		checkpoint.NextStepType = "emit_message"
+		checkpoint.NextStepPayload = map[string]any{
+			"message":      "Okay. I will remember that.",
+			"memory_write": memPayload,
+		}
+	} else {
+		checkpoint.NextStepType = "check_state"
+		checkpoint.NextStepPayload = map[string]any{
+			"check_type":     "checkpoint_state",
+			"key":            "status",
+			"expected_value": "approved_pending_resume",
+		}
 	}
 	checkpoint.IntakeAssessment = assessment
 	checkpoint.UpdatedAt = now
@@ -915,10 +994,13 @@ func (e *Engine) updateEvidenceFromResponse(boundary *runtime.EvidenceBoundary, 
 	actionType := strings.ToLower(strings.TrimSpace(resp.ActionType))
 	execResult := resp.ExecutionResult
 	if execResult != nil && execResult.Verified {
-		if execResult.ResultSummary != "" && actionType != "emit_message" {
+		// emit_message is normally "surface-only", but some checkpoint-approved paths
+		// may include a bounded runtime operation (e.g., governed memory write).
+		allowMessageEvidence := actionType == "emit_message" && (execResult.Status == "memory_written" || execResult.Status == "memory_read")
+		if execResult.ResultSummary != "" && (actionType != "emit_message" || allowMessageEvidence) {
 			boundary.VerifiedFacts = appendUnique(boundary.VerifiedFacts, execResult.ResultSummary)
 		}
-		if actionType != "emit_message" && execResult.ResultSummary != "" {
+		if (actionType != "emit_message" || allowMessageEvidence) && execResult.ResultSummary != "" {
 			label := actionType
 			if label == "" {
 				label = "runtime"
@@ -1006,6 +1088,55 @@ func (e *Engine) executeEmitMessage(task runtime.TaskSnapshot, payload map[strin
 			Verified:       false,
 			ResultSummary:  "emit_message requires a non-empty message.",
 			BlockingReason: "missing_emit_message_text",
+		}
+	}
+
+	// Optional: execute a governed memory write as part of an approved checkpoint step.
+	if mem, ok := payload["memory_write"].(map[string]any); ok {
+		classRaw, _ := mem["class"].(string)
+		key, _ := mem["key"].(string)
+		value, _ := mem["value"].(string)
+		value = strings.TrimSpace(value)
+		if key == "" {
+			key = "preference_memory"
+		}
+		if value == "" {
+			return &contracts.ExecutionResult{
+				Status:         "invalid",
+				Verified:       false,
+				ResultSummary:  "memory_write requires a value.",
+				BlockingReason: "missing_memory_value",
+			}
+		}
+		class := runtime.MemoryClass(classRaw)
+		if class == "" {
+			class = runtime.MemoryClassUserPreference
+		}
+		if err := e.store.SetActiveMemoryEntry(runtime.MemoryEntry{
+			Class:     class,
+			Key:       key,
+			Value:     value,
+			Source:    "user_prompt",
+			Effect:    "user_teaching",
+			TrustTier: 5,
+		}); err != nil {
+			return &contracts.ExecutionResult{
+				Status:         "failed",
+				Verified:       false,
+				ResultSummary:  "Memory write failed.",
+				BlockingReason: "memory_write_failed",
+			}
+		}
+		// Continue to emit the user-visible message, but mark the step as verified runtime work.
+		e.emit("task.message_emitted", map[string]any{
+			"task_id": task.TaskID,
+			"message": message,
+			"phase":   "memory_write",
+		})
+		return &contracts.ExecutionResult{
+			Status:        "memory_written",
+			Verified:      true,
+			ResultSummary: "Preference memory was saved by runtime.",
 		}
 	}
 
@@ -1600,12 +1731,12 @@ func (e *Engine) assessPromptIntake(prompt string) *runtime.IntakeAssessment {
 	case looksLikeMemoryWrite(lower):
 		assessment.MemoryIntent, _ = e.buildMemoryIntent(trimmed, lower, true, injectionHits)
 		assessment.PrimaryClass = "MEMORY_WRITE_CANDIDATE"
-		assessment.ChosenClosedAction = "DECLINE_MEMORY_WRITE"
+		assessment.ChosenClosedAction = "REQUEST_CONFIRMATION"
 		e.applyMemoryWriteRules(assessment)
 	case looksLikeMemoryRead(lower):
 		assessment.MemoryIntent, _ = e.buildMemoryIntent(trimmed, lower, false, injectionHits)
 		assessment.PrimaryClass = "MEMORY_READ_REQUEST"
-		assessment.ChosenClosedAction = "DECLINE_MEMORY_READ"
+		assessment.ChosenClosedAction = "READ_MEMORY"
 		e.applyMemoryReadRules(assessment)
 	case looksLikePermissionRequest(lower):
 		assessment.PrimaryClass = "PERMISSION_REQUEST"
@@ -1712,12 +1843,21 @@ func appendUnique(values []string, candidate string) []string {
 	return append(values, candidate)
 }
 
+func containsStringExact(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Engine) buildMemoryIntent(prompt, lower string, isWrite bool, injectionHits int) (*runtime.MemoryIntent, string) {
 	effect := "preference_read"
 	if isWrite {
 		effect = "preference_write"
 	}
-	status := "needs_confirmation"
+	status := "allowed"
 	if injectionHits > 0 {
 		status = "blocked"
 	} else if isWrite {
@@ -1725,8 +1865,11 @@ func (e *Engine) buildMemoryIntent(prompt, lower string, isWrite bool, injection
 			status = "contradicted"
 		}
 	}
+	payload := e.extractMemoryPayload(prompt)
 	intent := &runtime.MemoryIntent{
-		Class:        "preference",
+		Class:        string(runtime.MemoryClassUserPreference),
+		Key:          "preference_memory",
+		Value:        payload,
 		Source:       "user_prompt",
 		Effect:       effect,
 		SafetyStatus: status,
@@ -1744,10 +1887,13 @@ func (e *Engine) applyMemoryWriteRules(assessment *runtime.IntakeAssessment) {
 		assessment.ChosenClosedAction = "REFUSE"
 		assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "memory_blocked")
 	case "contradicted":
-		assessment.ValidationState = "BLOCKED"
+		// Benign corrections are allowed, but must be explicit and governed.
+		assessment.ValidationState = "PENDING_APPROVAL"
+		assessment.ChosenClosedAction = "REQUEST_CONFIRMATION"
 		assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "memory_contradiction")
 	default:
 		assessment.ValidationState = "PENDING_APPROVAL"
+		assessment.ChosenClosedAction = "REQUEST_CONFIRMATION"
 	}
 }
 
@@ -1761,7 +1907,7 @@ func (e *Engine) applyMemoryReadRules(assessment *runtime.IntakeAssessment) {
 		assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "memory_blocked")
 		return
 	}
-	assessment.ValidationState = "PENDING_APPROVAL"
+	assessment.ValidationState = "VALID"
 }
 
 func (e *Engine) extractMemoryPayload(prompt string) string {
@@ -1774,11 +1920,103 @@ func (e *Engine) extractMemoryPayload(prompt string) string {
 	return strings.TrimSpace(prompt)
 }
 
+func (e *Engine) executeMemoryWrite(task *runtime.TaskSnapshot, assessment *runtime.IntakeAssessment) error {
+	if task == nil || assessment == nil || assessment.MemoryIntent == nil {
+		return errors.New("memory write unavailable")
+	}
+	if strings.EqualFold(strings.TrimSpace(assessment.MemoryIntent.SafetyStatus), "blocked") {
+		return errors.New("memory write blocked")
+	}
+	payload := strings.TrimSpace(assessment.MemoryIntent.Value)
+	if payload == "" {
+		return errors.New("memory write requires a value")
+	}
+	// Hard stop on obvious instruction-bearing text even when the memory classifier fires.
+	lower := strings.ToLower(payload)
+	for _, phrase := range injectionPhrases {
+		if strings.Contains(lower, phrase) {
+			_ = e.store.QuarantineActiveMemoryEntry(runtime.MemoryClassUserPreference, "preference_memory", "injection_phrase_in_payload")
+			return errors.New("memory write blocked")
+		}
+	}
+
+	entry := runtime.MemoryEntry{
+		Class:     runtime.MemoryClassUserPreference,
+		Key:       "preference_memory",
+		Value:     payload,
+		Status:    runtime.MemoryEntryStatusActive,
+		Source:    "user_prompt",
+		Effect:    "user_teaching",
+		TrustTier: assessment.TrustTier,
+	}
+	if err := e.store.SetActiveMemoryEntry(entry); err != nil {
+		return err
+	}
+
+	task.Status = "completed"
+	task.StuckReason = ""
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	boundary := e.ensureEvidenceBoundary(task, nil)
+	if boundary != nil {
+		boundary.VerifiedFacts = appendUnique(boundary.VerifiedFacts, "Preference memory was saved by runtime.")
+		boundary.ExecutedSteps = appendUnique(boundary.ExecutedSteps, "memory_write verified: preference_memory updated")
+	}
+	e.emit("task.message_emitted", map[string]any{
+		"task_id": task.TaskID,
+		"message": "Got it. I will remember that.",
+		"phase":   "memory_write",
+	})
+	return nil
+}
+
+func (e *Engine) executeMemoryRead(task *runtime.TaskSnapshot, assessment *runtime.IntakeAssessment) error {
+	if task == nil || assessment == nil {
+		return errors.New("memory read unavailable")
+	}
+	value, err := e.store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
+	if err != nil {
+		return err
+	}
+	message := "I do not have any saved preferences yet."
+	if strings.TrimSpace(value) != "" {
+		message = "Here is what I remember: " + value
+	}
+
+	task.Status = "completed"
+	task.StuckReason = ""
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	boundary := e.ensureEvidenceBoundary(task, nil)
+	if boundary != nil {
+		boundary.VerifiedFacts = appendUnique(boundary.VerifiedFacts, "Memory was read by runtime.")
+		boundary.ExecutedSteps = appendUnique(boundary.ExecutedSteps, "memory_read verified: preference_memory fetched")
+	}
+
+	e.emit("task.message_emitted", map[string]any{
+		"task_id": task.TaskID,
+		"message": message,
+		"phase":   "memory_read",
+	})
+	return nil
+}
+
+func (e *Engine) composeMemoryContext() string {
+	value, _ := e.store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	ctx := "user_preferences:\n- " + value
+	if len(ctx) > 600 {
+		ctx = ctx[:600] + "..."
+	}
+	return ctx
+}
+
 func (e *Engine) memoryConflict(value string) bool {
 	if value == "" {
 		return false
 	}
-	existing := e.memoryStore["preference_memory"]
+	existing, _ := e.store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
 	if existing == "" {
 		return false
 	}

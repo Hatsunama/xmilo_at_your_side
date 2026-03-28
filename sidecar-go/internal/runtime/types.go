@@ -76,9 +76,44 @@ type IntakeAssessment struct {
 
 type MemoryIntent struct {
 	Class        string `json:"class"`
+	Key          string `json:"key,omitempty"`
+	Value        string `json:"value,omitempty"`
 	Source       string `json:"source"`
 	Effect       string `json:"effect"`
 	SafetyStatus string `json:"safety_status"`
+}
+
+type MemoryClass string
+
+const (
+	MemoryClassUserPreference     MemoryClass = "user_preference"
+	MemoryClassUserProfile        MemoryClass = "user_profile"
+	MemoryClassTaskContinuity     MemoryClass = "task_continuity"
+	MemoryClassApprovedSummary    MemoryClass = "approved_summary"
+	MemoryClassRuntimeObservation MemoryClass = "runtime_observation"
+	MemoryClassQuarantined        MemoryClass = "quarantined"
+)
+
+type MemoryEntryStatus string
+
+const (
+	MemoryEntryStatusActive     MemoryEntryStatus = "active"
+	MemoryEntryStatusSuperseded MemoryEntryStatus = "superseded"
+	MemoryEntryStatusQuarantined MemoryEntryStatus = "quarantined"
+)
+
+type MemoryEntry struct {
+	ID               int64             `json:"id"`
+	Class            MemoryClass        `json:"class"`
+	Key              string            `json:"key"`
+	Value            string            `json:"value"`
+	Status           MemoryEntryStatus  `json:"status"`
+	Source           string            `json:"source"`
+	Effect           string            `json:"effect"`
+	TrustTier        int               `json:"trust_tier"`
+	QuarantineReason string            `json:"quarantine_reason,omitempty"`
+	CreatedAt        string            `json:"created_at"`
+	UpdatedAt        string            `json:"updated_at"`
 }
 
 type VerificationStep struct {

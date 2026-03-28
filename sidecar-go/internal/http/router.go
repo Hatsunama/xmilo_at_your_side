@@ -270,6 +270,33 @@ func (a *App) handleAuthInvite(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	newJWT, newExpiry, err := a.relayClient.Refresh(r.Context())
 	if err != nil {
+		// If the stored JWT is invalid (e.g., after reinstall), bootstrap a fresh session
+		// instead of leaving the app stranded in a persistent 401 loop.
+		errText := err.Error()
+		if strings.Contains(errText, "401") && strings.Contains(strings.ToLower(errText), "invalid token") {
+			if bootErr := bootstrapRelaySession(a.cfg, a.store); bootErr == nil {
+				if storedJWT, _ := a.store.GetRuntimeConfig("relay_session_jwt"); storedJWT != "" {
+					expiresAt, _ := a.store.GetRuntimeConfig("relay_expires_at")
+					writeJSON(w, http.StatusOK, map[string]any{
+						"ok":                     true,
+						"device_user_id":         jwtStringClaim(storedJWT, "sub"),
+						"entitled":               jwtEntitledClaim(storedJWT),
+						"expires_at":             expiresAt,
+						"access_mode":            jwtStringClaim(storedJWT, "access_mode"),
+						"access_code_only":       jwtBoolClaim(storedJWT, "access_code_only"),
+						"trial_allowed":          jwtBoolClaim(storedJWT, "trial_allowed"),
+						"subscription_allowed":   jwtBoolClaim(storedJWT, "subscription_allowed"),
+						"access_code_grant_days": jwtIntClaim(storedJWT, "access_code_grant_days"),
+						"verified_email":         jwtStringClaim(storedJWT, "verified_email"),
+						"email_verified":         jwtBoolClaim(storedJWT, "email_verified"),
+						"two_factor_enabled":     jwtBoolClaim(storedJWT, "two_factor_enabled"),
+						"two_factor_ok":          jwtBoolClaim(storedJWT, "two_factor_ok"),
+						"website_handoff_ready":  jwtBoolClaim(storedJWT, "website_handoff_ready"),
+					})
+					return
+				}
+			}
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "entitled": false})
 		return
 	}
@@ -475,7 +502,11 @@ func (a *App) handleTaskStart(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, assessment, err := a.engine.StartTask(r.Context(), req.Prompt)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "intake_gate": assessment})
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":       err.Error(),
+			"error_code":  taskStartErrorCode(err, assessment),
+			"intake_gate": assessment,
+		})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": snap.TaskID, "immediate_state": snap, "intake_gate": assessment})
@@ -506,7 +537,11 @@ func (a *App) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 
 	snap, assessment, err := a.engine.StartTask(r.Context(), req.Prompt)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "intake_gate": assessment})
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":       err.Error(),
+			"error_code":  taskStartErrorCode(err, assessment),
+			"intake_gate": assessment,
+		})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
@@ -516,6 +551,20 @@ func (a *App) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 		"immediate_state": snap,
 		"intake_gate":     assessment,
 	})
+}
+
+func taskStartErrorCode(err error, assessment *runtime.IntakeAssessment) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	if strings.Contains(msg, "active task already running") {
+		return "ACTIVE_TASK_RUNNING"
+	}
+	if assessment != nil && strings.TrimSpace(assessment.ChosenClosedAction) != "" {
+		return "INTAKE_" + strings.TrimSpace(assessment.ChosenClosedAction)
+	}
+	return "TASK_START_FAILED"
 }
 
 func (a *App) handleTaskCurrent(w http.ResponseWriter, r *http.Request) {
