@@ -53,6 +53,9 @@ func (c *Client) Turn(ctx context.Context, req contracts.RelayTurnRequest) (cont
 		if err != nil {
 			return out, err
 		}
+		if jwt == "" {
+			return out, errors.New("entitlement_lost")
+		}
 
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/llm/turn", bytes.NewReader(body))
 		if err != nil {
