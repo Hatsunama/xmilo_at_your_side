@@ -28,3 +28,17 @@ sidecar-go/.miloclaw/
 # Editor/OS
 .DS_Store
 Thumbs.db
+
+lair-logcat.txt
+
+post-ebiten29-lair-logcat.txt
+
+post-instrumented-lair-logcat.txt
+
+post-patched-lair-logcat.txt
+
+post-resumegame-lair-logcat.txt
+
+replace-secrets.txt
+
+apps/expo-app/android/.gradle/
