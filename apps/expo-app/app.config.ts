@@ -27,7 +27,6 @@ const config: ExpoConfig = {
     permissions: [
       "INTERNET",
       "com.android.vending.BILLING",
-      "com.termux.permission.RUN_COMMAND",
       "POST_NOTIFICATIONS",
       "READ_MEDIA_IMAGES",
       "READ_EXTERNAL_STORAGE"

@@ -14,8 +14,9 @@
  */
 
 import { useRouter } from "expo-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  NativeModules,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -28,7 +29,8 @@ import {
 import { CastleView } from "../src/components/CastleModule";
 import { useApp } from "../src/state/AppContext";
 import { submitCommand, taskInterrupt, setContext, clearContext } from "../src/lib/bridge";
-import { LOCALHOST_TOKEN, SIDECAR_BASE_URL } from "../src/lib/config";
+import { SIDECAR_BASE_URL } from "../src/lib/config";
+import { resolveLocalhostBearerToken } from "../src/lib/xmiloRuntimeHost";
 
 // Derive the WebSocket URL from the HTTP base URL.
 // SIDECAR_BASE_URL is "http://127.0.0.1:42817" → "ws://127.0.0.1:42817/ws"
@@ -36,9 +38,6 @@ const WS_BASE_URL = SIDECAR_BASE_URL.replace("http://", "ws://").replace(
   "https://",
   "wss://"
 ) + "/ws";
-const WS_URL = LOCALHOST_TOKEN
-  ? `${WS_BASE_URL}?token=${encodeURIComponent(LOCALHOST_TOKEN)}`
-  : WS_BASE_URL;
 
 export default function WizardLairScreen() {
   const router = useRouter();
@@ -47,10 +46,50 @@ export default function WizardLairScreen() {
   const [busy, setBusy] = useState(false);
   const [inputVisible, setInputVisible] = useState(false);
   const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
+  const [wsURL, setWsURL] = useState<string | null>(null);
+  const [wsPrepError, setWsPrepError] = useState<string>("");
+  const [gesturePacket, setGesturePacket] = useState("");
   const promptLenRef = useRef(0);
+  const lastGesturePacketRef = useRef("");
+  const nativePresenterLaunchedRef = useRef(false);
+  const nativeCastleModule = NativeModules.CastleModule as { start?: (wsURL: string) => void } | undefined;
+  // Dedicated native presenter disabled: NativeCastleActivity launched via FLAG_ACTIVITY_NEW_TASK
+  // from a reactApplicationContext, which creates a separate Android task stack and breaks
+  // back navigation (launcher bounce, no HUD/controls). Route through CastleView/EbitenView instead.
+  const useDedicatedNativePresenter = false;
 
   // Chars added in a single onChangeText that signals a paste rather than typing.
   const PASTE_THRESHOLD = 800;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function prepWS() {
+      try {
+        const bearer = await resolveLocalhostBearerToken();
+        if (cancelled) return;
+        setWsURL(`${WS_BASE_URL}?token=${encodeURIComponent(bearer)}`);
+        setWsPrepError("");
+      } catch (e: any) {
+        if (cancelled) return;
+        setWsURL(null);
+        setWsPrepError(e?.message ?? "Localhost bearer token was not available.");
+      }
+    }
+
+    prepWS();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!useDedicatedNativePresenter || !wsURL || nativePresenterLaunchedRef.current) {
+      return;
+    }
+    nativePresenterLaunchedRef.current = true;
+    nativeCastleModule?.start?.(wsURL);
+  }, [nativeCastleModule, useDedicatedNativePresenter, wsURL]);
 
   async function handleTextChange(text: string) {
     const delta = text.length - promptLenRef.current;
@@ -98,6 +137,29 @@ export default function WizardLairScreen() {
     }
   }
 
+  function emitGesturePacket(kind: "start" | "move" | "end" | "cancel", nativeEvent: any) {
+    const touches = (nativeEvent?.touches ?? []).map((touch: any) => ({
+      identifier: touch.identifier,
+      x: touch.pageX ?? touch.locationX ?? 0,
+      y: touch.pageY ?? touch.locationY ?? 0,
+    }));
+    const changedTouches = (nativeEvent?.changedTouches ?? []).map((touch: any) => ({
+      identifier: touch.identifier,
+      x: touch.pageX ?? touch.locationX ?? 0,
+      y: touch.pageY ?? touch.locationY ?? 0,
+    }));
+    const packet = JSON.stringify({
+      kind,
+      timestamp: Date.now(),
+      touches,
+      changedTouches,
+    });
+    if (packet !== lastGesturePacketRef.current) {
+      lastGesturePacketRef.current = packet;
+      setGesturePacket(packet);
+    }
+  }
+
   const roomLabel = ROOM_LABELS[state.current_room_id ?? "main_hall"] ?? "Main Hall";
   const miloStateLabel = STATE_LABELS[state.milo_state ?? "idle"] ?? "Idle";
   const lastEvent = events.length > 0 ? events[events.length - 1] : null;
@@ -105,12 +167,34 @@ export default function WizardLairScreen() {
   return (
     <View style={styles.screen}>
       {/* Castle scene — fills entire screen */}
-      <CastleView
-        wsURL={WS_URL}
-        style={StyleSheet.absoluteFill}
-        roomLabel={roomLabel}
-        miloStateLabel={miloStateLabel}
-        nightlyRitual={nightlyRitual}
+      {useDedicatedNativePresenter ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none" />
+      ) : wsURL ? (
+        <CastleView
+          wsURL={wsURL}
+          gesturePacket={gesturePacket}
+          style={StyleSheet.absoluteFill}
+          roomLabel={roomLabel}
+          miloStateLabel={miloStateLabel}
+          nightlyRitual={nightlyRitual}
+        />
+      ) : (
+        <View style={[StyleSheet.absoluteFill, styles.wsPrep]}>
+          <Text style={styles.wsPrepTitle}>Preparing castle link…</Text>
+          <Text style={styles.wsPrepBody}>
+            {wsPrepError ? `Localhost bearer token not ready: ${wsPrepError}` : "Loading localhost bearer token."}
+          </Text>
+        </View>
+      )}
+
+      <View
+        style={styles.gestureSurface}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        onTouchStart={({ nativeEvent }) => emitGesturePacket("start", nativeEvent)}
+        onTouchMove={({ nativeEvent }) => emitGesturePacket("move", nativeEvent)}
+        onTouchEnd={({ nativeEvent }) => emitGesturePacket("end", nativeEvent)}
+        onTouchCancel={({ nativeEvent }) => emitGesturePacket("cancel", nativeEvent)}
       />
 
       {/* Top HUD — room + state indicators */}
@@ -303,6 +387,25 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#0D0A1A",
   },
+  wsPrep: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 22,
+    gap: 10,
+    backgroundColor: "#0D0A1A",
+  },
+  wsPrepTitle: {
+    color: "#EAF4FF",
+    fontSize: 18,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  wsPrepBody: {
+    color: "#9BB7D8",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 18,
+  },
   topHud: {
     position: "absolute",
     top: 52,
@@ -437,6 +540,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "rgba(200, 184, 255, 0.12)",
     zIndex: 20,
+  },
+  gestureSurface: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 140,
+    backgroundColor: "transparent",
+    zIndex: 5,
   },
   controlRow: {
     flexDirection: "row",

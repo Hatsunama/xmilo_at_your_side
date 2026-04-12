@@ -12,11 +12,8 @@
  * See castle-go/BUILD.md for the full build sequence.
  */
 
-import React, { useCallback, useRef } from "react";
+import React from "react";
 import {
-  NativeModules,
-  type LayoutChangeEvent,
-  Platform,
   requireNativeComponent,
   StyleSheet,
   Text,
@@ -30,43 +27,30 @@ import { getCastleRendererStatus } from "../lib/castleRenderer";
 import type { NightlyRitualState } from "../lib/maintenanceRitual";
 
 type EbitenViewProps = ViewProps & {
+  wsURL?: string;
+  gesturePacket?: string;
   style?: ViewStyle;
 };
 
 const EbitenView = requireNativeComponent<EbitenViewProps>("EbitenView");
 
 interface CastleViewProps {
-  /** xMilo Sidecar WebSocket URL. Always "ws://127.0.0.1:42817/ws" on device. */
+  /** xMilo Sidecar WebSocket URL (bearer-ready, tokenized when required). */
   wsURL: string;
+  gesturePacket?: string;
   style?: ViewStyle;
   roomLabel?: string;
   miloStateLabel?: string;
   nightlyRitual?: NightlyRitualState | null;
 }
 
-export const CastleView: React.FC<CastleViewProps> = ({ wsURL, style, roomLabel, miloStateLabel, nightlyRitual }) => {
-  const started = useRef(false);
+export const CastleView: React.FC<CastleViewProps> = ({ wsURL, gesturePacket, style, roomLabel, miloStateLabel, nightlyRitual }) => {
   const rendererStatus = getCastleRendererStatus();
 
-  const startNativeRenderer = useCallback(() => {
-    if (started.current || Platform.OS !== "android" || !rendererStatus.available) return;
-    started.current = true;
-
-    const { CastleModule } = NativeModules;
-    if (CastleModule?.start) {
-      CastleModule.start(wsURL);
-    }
-  }, [rendererStatus.available, wsURL]);
-
-  const handleLayout = useCallback(
-    (_event: LayoutChangeEvent) => {
-      startNativeRenderer();
-    },
-    [startNativeRenderer]
-  );
-
   if (rendererStatus.available) {
-    return <EbitenView style={style} onLayout={handleLayout} />;
+    // Pass wsURL as a native prop so the ViewManager can start the renderer
+    // before the SurfaceView fully attaches (and without using an unauthenticated fallback).
+    return <EbitenView wsURL={wsURL} gesturePacket={gesturePacket} style={style} />;
   }
 
   const ritualPalette = nightlyRitual ? RITUAL_PALETTES[nightlyRitual.status] : null;

@@ -1,21 +1,16 @@
 import type { EventEnvelope } from "../types/contracts";
 import { addArchiveRecord, initArchiveDb } from "./archiveDb";
-import { LOCALHOST_TOKEN, SIDECAR_BASE_URL } from "./config";
-
-const headers = () => ({
-  "Content-Type": "application/json",
-  Authorization: `Bearer ${LOCALHOST_TOKEN}`
-});
+import { SIDECAR_BASE_URL } from "./config";
+import { resolveLocalhostBearerToken } from "./xmiloRuntimeHost";
 
 async function request(path: string, init?: RequestInit) {
-  if (!LOCALHOST_TOKEN) {
-    throw new Error("Missing EXPO_PUBLIC_LOCALHOST_TOKEN");
-  }
+  const bearer = await resolveLocalhostBearerToken();
 
   const response = await fetch(`${SIDECAR_BASE_URL}${path}`, {
     ...init,
     headers: {
-      ...headers(),
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${bearer}`,
       ...(init?.headers ?? {})
     }
   });
@@ -221,10 +216,6 @@ export async function submitAIReport(payload: {
 // ─── WebSocket bridge ─────────────────────────────────────────────────────────
 
 export function connectBridge(onEvent: (event: EventEnvelope) => void) {
-  if (!LOCALHOST_TOKEN) {
-    return () => undefined;
-  }
-
   initArchiveDb().catch(() => null);
 
   let disposed = false;
@@ -232,43 +223,53 @@ export function connectBridge(onEvent: (event: EventEnvelope) => void) {
   let attempt = 0;
   const backoff = [1000, 2000, 5000, 10000];
 
-  const open = () => {
+  const open = async () => {
     if (disposed) return;
-    socket = new WebSocket(
-      `${SIDECAR_BASE_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(LOCALHOST_TOKEN)}`
-    );
+    try {
+      const bearer = await resolveLocalhostBearerToken();
+      if (disposed) return;
 
-    socket.onopen = () => {
-      attempt = 0;
-    };
+      socket = new WebSocket(
+        `${SIDECAR_BASE_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(bearer)}`
+      );
 
-    socket.onmessage = async (event) => {
-      const parsed = JSON.parse(event.data) as EventEnvelope;
-      onEvent(parsed);
+      socket.onopen = () => {
+        attempt = 0;
+      };
 
-      if (parsed.type === "archive.record_created") {
-        await addArchiveRecord({
-          task_id: parsed.payload.task_id,
-          title: parsed.payload.title,
-          description: parsed.payload.description,
-          created_at: parsed.payload.created_at
-        });
-      }
-    };
+      socket.onmessage = async (event) => {
+        const parsed = JSON.parse(event.data) as EventEnvelope;
+        onEvent(parsed);
 
-    socket.onclose = () => {
+        if (parsed.type === "archive.record_created") {
+          await addArchiveRecord({
+            task_id: parsed.payload.task_id,
+            title: parsed.payload.title,
+            description: parsed.payload.description,
+            created_at: parsed.payload.created_at
+          });
+        }
+      };
+
+      socket.onclose = () => {
+        if (disposed) return;
+        const delay = backoff[Math.min(attempt, backoff.length - 1)];
+        attempt += 1;
+        setTimeout(open, delay);
+      };
+
+      socket.onerror = () => {
+        socket?.close();
+      };
+    } catch {
       if (disposed) return;
       const delay = backoff[Math.min(attempt, backoff.length - 1)];
       attempt += 1;
       setTimeout(open, delay);
-    };
-
-    socket.onerror = () => {
-      socket?.close();
-    };
+    }
   };
 
-  open();
+  void open();
 
   return () => {
     disposed = true;

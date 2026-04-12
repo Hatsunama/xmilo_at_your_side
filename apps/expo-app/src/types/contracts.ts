@@ -28,6 +28,8 @@ export type RuntimeState = {
   active_task?: TaskSnapshot | null;
   queued_task?: TaskSnapshot | null;
   runtime_id: string;
+  pending_approval?: boolean | null;
+  resume_checkpoint?: string | null;
 };
 
 export type CueDescriptor = {

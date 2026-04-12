@@ -535,7 +535,7 @@ export default function SettingsScreen() {
             </Text>
           </View>
           <Text style={styles.toggleHint}>
-            Termux vocal and vibration cues are used for this ritual when the local runtime is awake, so the phone can nudge you even with the app in the background.
+            Runtime vocal and vibration cues are used for this ritual when the local runtime is awake, so the phone can nudge you even with the app in the background.
           </Text>
           <Text style={styles.toggleHint}>
             The app shell also mirrors this with local vibration, notices, and spoken cues when allowed, so the ritual still feels alive if the castle is open.

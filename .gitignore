@@ -1,8 +1,16 @@
 # Dependency dirs
 apps/expo-app/node_modules/
-apps/expo-app/android/
 apps/expo-app/ios/
 apps/expo-app/.expo/
+
+# Track Android sources, ignore only generated/cache outputs
+apps/expo-app/android/**/build/
+apps/expo-app/android/**/.gradle/
+apps/expo-app/android/**/.cxx/
+apps/expo-app/android/**/.externalNativeBuild/
+apps/expo-app/android/local.properties
+apps/expo-app/android/app/debug.keystore
+apps/expo-app/android/app/libs/
 
 # Build outputs
 dist/
