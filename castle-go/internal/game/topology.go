@@ -65,6 +65,7 @@ var sceneRoomMap = map[RoomID]string{
 	RoomWorkshop:    "war_room",
 	RoomObservatory: "crystal_orb",
 	RoomPotions:     "cauldron",
+	RoomMainHall:    "main_hall",
 }
 
 var roomTopologies = map[RoomID]RoomTopology{
