@@ -40,8 +40,6 @@ func Resolve(prompt, intentHint string) Route {
 
 	switch intent {
 	// Original rooms — behavior frozen
-	case "casual_conversation":
-		return Route{Intent: intent, RoomID: "main_hall", AnchorID: "main_hall_center"}
 	case "planning":
 		return Route{Intent: intent, RoomID: "war_room", AnchorID: "war_room_table"}
 	case "analysis":
