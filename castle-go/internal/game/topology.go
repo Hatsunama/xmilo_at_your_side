@@ -155,7 +155,6 @@ func DisplayRoomID(roomID string) string {
 	return roomID
 }
 
-func SceneRoomID(roomID string) string {
 	canonical := CanonicalRoomID(roomID)
 	if sceneID, ok := sceneRoomMap[canonical]; ok {
 		return sceneID
