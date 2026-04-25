@@ -3,17 +3,12 @@
  *
  * React Native wrapper for the Ebiten castle-go renderer.
  *
- * CURRENT STATE:
- * - Starts the native castle renderer when the Android classpath exposes
- *   the generated castle.aar package.
- * - Falls back honestly to the Expo placeholder when the native renderer
- *   is unavailable or intentionally bypassed.
- *
  * See castle-go/BUILD.md for the full build sequence.
  */
 
 import React from "react";
 import {
+  Platform,
   requireNativeComponent,
   StyleSheet,
   Text,
@@ -23,7 +18,6 @@ import {
   type ViewStyle,
 } from "react-native";
 
-import { getCastleRendererStatus } from "../lib/castleRenderer";
 import type { NightlyRitualState } from "../lib/maintenanceRitual";
 
 type EbitenViewProps = ViewProps & {
@@ -45,9 +39,7 @@ interface CastleViewProps {
 }
 
 export const CastleView: React.FC<CastleViewProps> = ({ wsURL, gesturePacket, style, roomLabel, miloStateLabel, nightlyRitual }) => {
-  const rendererStatus = getCastleRendererStatus();
-
-  if (rendererStatus.available) {
+  if (Platform.OS === "android") {
     // Pass wsURL as a native prop so the ViewManager can start the renderer
     // before the SurfaceView fully attaches (and without using an unauthenticated fallback).
     return <EbitenView wsURL={wsURL} gesturePacket={gesturePacket} style={style} />;
@@ -59,7 +51,7 @@ export const CastleView: React.FC<CastleViewProps> = ({ wsURL, gesturePacket, st
   const title = nightlyRitual ? nightlyRitual.chamber : "Milo's Wizard Lair";
   const subtitle = nightlyRitual
     ? `${nightlyRitual.visual}\n${nightlyRitual.vocalCue}`
-    : rendererStatus.degradation?.message ?? 'Castle renderer loading...\nBuild castle.aar to activate.';
+    : "Native castle rendering is currently Android-only, so xMilo is using the Expo fallback surface.";
 
   return (
     <View style={[styles.placeholder, ritualPalette?.background && { backgroundColor: ritualPalette.background }, style]}>
@@ -88,11 +80,9 @@ export const CastleView: React.FC<CastleViewProps> = ({ wsURL, gesturePacket, st
             </Text>
           </View>
         ) : null}
-        {!rendererStatus.available ? (
-          <View style={styles.fallbackPill}>
-            <Text style={styles.fallbackPillText}>Expo fallback active</Text>
-          </View>
-        ) : null}
+        <View style={styles.fallbackPill}>
+          <Text style={styles.fallbackPillText}>Expo fallback active</Text>
+        </View>
         <View style={styles.roomPill}>
           <Text style={styles.roomPillText}>⚗️  {chamberLabel}</Text>
         </View>

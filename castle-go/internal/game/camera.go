@@ -1,5 +1,7 @@
 package game
 
+import "github.com/hajimehoshi/ebiten/v2"
+
 // Camera handles 2:1 isometric projection.
 // Tile grid origin (0,0) maps to the top of the diamond on screen.
 // X increases right-and-down (east), Y increases left-and-down (south).
@@ -50,8 +52,6 @@ func NewCamera(screenW, screenH int) *Camera {
 func (c *Camera) TileToScreen(gx, gy, gz int) (float64, float64) {
 	px := float64((gx-gy)*c.TileW/2) + c.OffsetX
 	py := float64((gx+gy)*c.TileH/2) - float64(gz*c.TileH) + c.OffsetY
-	px = (px-c.OffsetX)*c.View.Zoom + c.OffsetX + c.View.PanX
-	py = (py-c.OffsetY)*c.View.Zoom + c.OffsetY + c.View.PanY
 	return px, py
 }
 
@@ -73,18 +73,12 @@ func (c *Camera) ZOrder(gx, gy, gz int) int {
 	return gx + gy + gz*1000
 }
 
-// MiloZOrder computes a continuous z-order from Milo's float screen position.
+// MiloZOrder computes a continuous z-order from Milo's projected room position.
 // Used for depth-sorting Milo against room props during movement.
-// Approximates grid position from screen coords for ordering purposes.
 func (c *Camera) MiloZOrderFromScreen(screenX, screenY float64) int {
-	// inverse projection approximation — exact enough for sorting
-	unzoomedX := ((screenX - c.View.PanX) - c.OffsetX) / c.View.Zoom
-	unzoomedY := ((screenY - c.View.PanY) - c.OffsetY) / c.View.Zoom
-	relX := unzoomedX / float64(c.TileW/2)
-	relY := unzoomedY / float64(c.TileH/2)
-	gx := (relX + relY) / 2
-	gy := (relY - relX) / 2
-	return int(gx+gy) * 1
+	// Projected Y carries the painter-order sum (gx + gy) for floor-level sprites.
+	relY := (screenY - c.OffsetY) / float64(c.TileH/2)
+	return int(relY)
 }
 
 func (c *Camera) PanBy(dx, dy float64) {
@@ -107,6 +101,74 @@ func (c *Camera) ZoomAround(factor, focusX, focusY float64) {
 	c.View.PanY = focusY - c.OffsetY - worldY*c.View.Zoom
 }
 
+func (c *Camera) ClampViewToProjectedRect(minX, minY, maxX, maxY, padX, padY float64) {
+	if c == nil || c.ScreenW <= 0 || c.ScreenH <= 0 {
+		return
+	}
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+
+	availableW := float64(c.ScreenW) - padX*2
+	availableH := float64(c.ScreenH) - padY*2
+	if availableW <= 0 || availableH <= 0 {
+		return
+	}
+
+	rectW := maxX - minX
+	rectH := maxY - minY
+	maxZoom := c.View.MaxZoom
+	if rectW > 0 {
+		maxZoom = clamp(maxZoom, c.View.MinZoom, availableW/rectW)
+	}
+	if rectH > 0 {
+		maxZoom = clamp(maxZoom, c.View.MinZoom, minFloat(maxZoom, availableH/rectH))
+	}
+	c.View.Zoom = clamp(c.View.Zoom, c.View.MinZoom, maxZoom)
+
+	screenMinX := (minX-c.OffsetX)*c.View.Zoom + c.OffsetX
+	screenMaxX := (maxX-c.OffsetX)*c.View.Zoom + c.OffsetX
+	screenMinY := (minY-c.OffsetY)*c.View.Zoom + c.OffsetY
+	screenMaxY := (maxY-c.OffsetY)*c.View.Zoom + c.OffsetY
+
+	minPanX := padX - screenMinX
+	maxPanX := float64(c.ScreenW) - padX - screenMaxX
+	minPanY := padY - screenMinY
+	maxPanY := float64(c.ScreenH) - padY - screenMaxY
+
+	if minPanX > maxPanX {
+		c.View.PanX = (minPanX + maxPanX) / 2
+	} else {
+		c.View.PanX = clamp(c.View.PanX, minPanX, maxPanX)
+	}
+	if minPanY > maxPanY {
+		c.View.PanY = (minPanY + maxPanY) / 2
+	} else {
+		c.View.PanY = clamp(c.View.PanY, minPanY, maxPanY)
+	}
+}
+
+func (c *Camera) ApplyView(geom *ebiten.GeoM) {
+	if c == nil || geom == nil {
+		return
+	}
+	geom.Translate(-c.OffsetX, -c.OffsetY)
+	geom.Scale(c.View.Zoom, c.View.Zoom)
+	geom.Translate(c.OffsetX+c.View.PanX, c.OffsetY+c.View.PanY)
+}
+
+func (c *Camera) ApplyToScreen(x, y float64) (float64, float64) {
+	if c == nil {
+		return x, y
+	}
+	x = (x-c.OffsetX)*c.View.Zoom + c.OffsetX + c.View.PanX
+	y = (y-c.OffsetY)*c.View.Zoom + c.OffsetY + c.View.PanY
+	return x, y
+}
+
 func (c *Camera) ResetView() {
 	c.View.PanX = 0
 	c.View.PanY = 0
@@ -121,6 +183,20 @@ func clamp(value, minValue, maxValue float64) float64 {
 		return maxValue
 	}
 	return value
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // anchorRegistry maps every anchor ID to its isometric grid coordinate.

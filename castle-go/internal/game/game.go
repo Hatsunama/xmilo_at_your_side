@@ -10,10 +10,12 @@ package game
 
 import (
 	"encoding/json"
-	"image/color"
 	"log"
+	"math"
+	"sort"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"xmilo/castle-go/internal/assets"
 	"xmilo/castle-go/internal/client"
 )
 
@@ -38,9 +40,25 @@ type Game struct {
 	screenW int
 	screenH int
 
-	initialized bool
+	initialized  bool
 	loggedLayout bool
 	loggedDraw   bool
+
+	cameraTouchCount int
+	cameraTouchLast  map[ebiten.TouchID]touchPoint
+	cameraPinchMidX  float64
+	cameraPinchMidY  float64
+	cameraPinchDist  float64
+
+	assetsRefreshed bool
+
+	diagFrame   int
+	diagPixels  []byte
+	probeLogged bool
+	layoutProbeCount int
+
+	mainHallFallbackChecked bool
+	mainHallFallbackApplied bool
 }
 
 func newGameWithChannel(ch chan client.RawEvent) *Game {
@@ -71,6 +89,18 @@ func NewOfflineGame() *Game {
 // Layout implements ebiten.Game. Called before the first Update/Draw.
 // Sets the logical screen size and initializes camera/scene/milo on first call.
 func (g *Game) Layout(outsideW, outsideH int) (int, int) {
+	g.layoutProbeCount++
+	if g.layoutProbeCount <= 5 {
+		log.Printf("%s layout_call=%d outside=%dx%d initialized=%t", goDrawBuildID, g.layoutProbeCount, outsideW, outsideH, g.initialized)
+	}
+	// Ebiten mobile can report a transient 0×0 (or 1×1) size during view attach/layout.
+	// If we accept it, we can initialize the renderer at an invisible size and stay black.
+	if outsideW < 2 || outsideH < 2 {
+		if g.screenW >= 2 && g.screenH >= 2 {
+			return g.screenW, g.screenH
+		}
+		return 1, 1
+	}
 	if !g.initialized || g.screenW != outsideW || g.screenH != outsideH {
 		g.screenW = outsideW
 		g.screenH = outsideH
@@ -96,6 +126,8 @@ func (g *Game) Update() error {
 		return nil
 	}
 
+	g.consumeCameraTouches()
+
 	// Drain all pending events — process everything that arrived since last tick
 drain:
 	for {
@@ -113,30 +145,199 @@ drain:
 	return nil
 }
 
+type touchPoint struct {
+	x float64
+	y float64
+}
+
+func (g *Game) consumeCameraTouches() {
+	if g.cam == nil {
+		return
+	}
+
+	clampMainHallView := func() {
+		if g.scene == nil || g.scene.activeID != "main_hall" {
+			return
+		}
+
+		leftX, leftY := g.cam.AnchorToScreen("main_hall_left")
+		rightX, rightY := g.cam.AnchorToScreen("main_hall_right")
+		_, frontY := g.cam.AnchorToScreen("main_hall_front")
+		doorX, doorY := g.cam.AnchorToScreen("main_hall_door")
+		throneX, throneY := g.cam.AnchorToScreen("main_hall_throne")
+		centerX, _ := g.cam.AnchorToScreen("main_hall_center")
+
+		minX := minFloat(leftX, doorX) - 160
+		maxX := maxFloat(rightX, throneX) + 160
+		minY := throneY - 180
+		maxY := maxFloat(frontY, maxFloat(leftY, maxFloat(rightY, doorY))) + 120
+
+		g.cam.ClampViewToProjectedRect(minX, minY, maxX, maxY, 36, 96)
+
+		// Keep the clamp centered on the hall if the safe region degenerates.
+		if minX >= maxX || minY >= maxY {
+			g.cam.ClampViewToProjectedRect(centerX-160, throneY-180, centerX+160, frontY+120, 36, 96)
+		}
+	}
+
+	touchIDs := ebiten.AppendTouchIDs(nil)
+	if len(touchIDs) == 0 {
+		g.cameraTouchCount = 0
+		g.cameraTouchLast = nil
+		g.cameraPinchMidX = 0
+		g.cameraPinchMidY = 0
+		g.cameraPinchDist = 0
+		return
+	}
+
+	sort.Slice(touchIDs, func(i, j int) bool { return touchIDs[i] < touchIDs[j] })
+
+	current := make(map[ebiten.TouchID]touchPoint, len(touchIDs))
+	for _, id := range touchIDs {
+		x, y := ebiten.TouchPosition(id)
+		current[id] = touchPoint{x: float64(x), y: float64(y)}
+	}
+
+	if g.cameraTouchCount != len(touchIDs) {
+		g.cameraTouchCount = len(touchIDs)
+		g.cameraTouchLast = current
+		g.cameraPinchMidX, g.cameraPinchMidY, g.cameraPinchDist = cameraTouchMetrics(touchIDs, current)
+		return
+	}
+
+	if len(touchIDs) == 1 {
+		id := touchIDs[0]
+		prev, ok := g.cameraTouchLast[id]
+		next := current[id]
+		if ok {
+			g.cam.PanBy(next.x-prev.x, next.y-prev.y)
+			clampMainHallView()
+		}
+		g.cameraTouchLast = current
+		return
+	}
+
+	midX, midY, dist := cameraTouchMetrics(touchIDs, current)
+	if g.cameraPinchDist > 0 && dist > 0 {
+		g.cam.ZoomAround(dist/g.cameraPinchDist, midX, midY)
+	}
+	g.cam.PanBy(midX-g.cameraPinchMidX, midY-g.cameraPinchMidY)
+	clampMainHallView()
+	g.cameraTouchLast = current
+	g.cameraPinchMidX = midX
+	g.cameraPinchMidY = midY
+	g.cameraPinchDist = dist
+}
+
+func cameraTouchMetrics(touchIDs []ebiten.TouchID, touches map[ebiten.TouchID]touchPoint) (float64, float64, float64) {
+	if len(touchIDs) == 0 {
+		return 0, 0, 0
+	}
+	if len(touchIDs) == 1 {
+		p := touches[touchIDs[0]]
+		return p.x, p.y, 0
+	}
+	first := touches[touchIDs[0]]
+	second := touches[touchIDs[1]]
+	midX := (first.x + second.x) / 2
+	midY := (first.y + second.y) / 2
+	dist := math.Hypot(second.x-first.x, second.y-first.y)
+	return midX, midY, dist
+}
+
 // Draw implements ebiten.Game. Called every frame (up to 60fps).
 func (g *Game) Draw(screen *ebiten.Image) {
 	if !g.initialized {
 		return
-	}
-	screen.Fill(color.RGBA{R: 255, G: 0, B: 255, A: 255})
-	if !g.loggedDraw {
-		roomID := ""
-		bgW, bgH := 0, 0
-		if g.scene != nil {
-			roomID = g.scene.activeID
-			if room, ok := g.scene.rooms[g.scene.activeID]; ok && room.background != nil {
-				bgW = room.background.Bounds().Dx()
-				bgH = room.background.Bounds().Dy()
-			}
-		}
-		log.Printf("game: first draw screen=%dx%d active=%s bg=%dx%d", screen.Bounds().Dx(), screen.Bounds().Dy(), roomID, bgW, bgH)
-		g.loggedDraw = true
 	}
 	// RoomScene.Draw takes a z-order value for Milo and a closure that draws him.
 	// This lets the scene interleave Milo correctly between props (painter's algorithm).
 	g.scene.Draw(screen, g.milo.ZOrder, func() {
 		g.milo.Draw(screen)
 	})
+}
+
+func (g *Game) maybeApplyMainHallProceduralFallback() {
+	if g.mainHallFallbackChecked || g.scene == nil {
+		return
+	}
+	if g.scene.activeID != "main_hall" {
+		g.mainHallFallbackChecked = true
+		return
+	}
+	room, ok := g.scene.rooms[g.scene.activeID]
+	if !ok || room == nil || room.background == nil {
+		g.mainHallFallbackChecked = true
+		return
+	}
+
+	bgW, bgH := room.background.Bounds().Dx(), room.background.Bounds().Dy()
+	if bgW <= 0 || bgH <= 0 {
+		g.mainHallFallbackChecked = true
+		return
+	}
+
+	pixels := make([]byte, 4*bgW*bgH)
+	room.background.ReadPixels(pixels)
+	cx, cy := bgW/2, bgH/2
+	index := 4 * (cy*bgW + cx)
+	red, green, blue, alpha := pixels[index], pixels[index+1], pixels[index+2], pixels[index+3]
+	luma := 0.2126*float64(red) + 0.7152*float64(green) + 0.0722*float64(blue)
+
+	// Bounded trigger: only fallback when main_hall center sample is effectively near-black.
+	if luma <= 20 && alpha > 0 {
+		room.background = assets.LoadRoomBackgroundProcedural("main_hall", bgW, bgH)
+		g.mainHallFallbackApplied = true
+		log.Printf("game: main_hall procedural fallback applied center_rgba=%d,%d,%d,%d luma=%.2f", red, green, blue, alpha, luma)
+	}
+
+	g.mainHallFallbackChecked = true
+}
+
+func (g *Game) logFirstFrameContentProbe(screen *ebiten.Image) {
+	if g.probeLogged || g.scene == nil || screen == nil {
+		return
+	}
+	room, ok := g.scene.rooms[g.scene.activeID]
+	if !ok || room == nil || room.background == nil {
+		log.Printf("probe: room/background missing active=%s", g.scene.activeID)
+		g.probeLogged = true
+		return
+	}
+
+	bgW, bgH := room.background.Bounds().Dx(), room.background.Bounds().Dy()
+	if bgW <= 0 || bgH <= 0 {
+		log.Printf("probe: background invalid size active=%s bg=%dx%d", g.scene.activeID, bgW, bgH)
+		g.probeLogged = true
+		return
+	}
+
+	// Sample the background texture directly.
+	bgPixels := make([]byte, 4*bgW*bgH)
+	room.background.ReadPixels(bgPixels)
+	bcx, bcy := bgW/2, bgH/2
+	bi := 4 * (bcy*bgW + bcx)
+	br, bgc, bb, ba := bgPixels[bi], bgPixels[bi+1], bgPixels[bi+2], bgPixels[bi+3]
+
+	// Sample the composed screen after scene draw.
+	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
+	screenPixels := make([]byte, 4*sw*sh)
+	screen.ReadPixels(screenPixels)
+	scx, scy := sw/2, sh/2
+	si := 4 * (scy*sw + scx)
+	sr, sg, sb, sa := screenPixels[si], screenPixels[si+1], screenPixels[si+2], screenPixels[si+3]
+
+	log.Printf(
+		"probe: active=%s state=%s cam_zoom=%.3f cam_pan=(%.1f,%.1f) bg_center_rgba=%d,%d,%d,%d screen_center_rgba=%d,%d,%d,%d",
+		g.scene.activeID,
+		g.currentState,
+		g.cam.View.Zoom,
+		g.cam.View.PanX,
+		g.cam.View.PanY,
+		br, bgc, bb, ba,
+		sr, sg, sb, sa,
+	)
+	g.probeLogged = true
 }
 
 // ApplyRawEvent routes a single event through the production renderer path.

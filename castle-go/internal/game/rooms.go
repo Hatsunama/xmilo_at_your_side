@@ -170,6 +170,7 @@ func (rs *RoomScene) Draw(screen *ebiten.Image, miloZ int, drawMilo func()) {
 	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
 	bgW, bgH := room.background.Bounds().Dx(), room.background.Bounds().Dy()
 	bgOp.GeoM.Scale(float64(sw)/float64(bgW), float64(sh)/float64(bgH))
+	rs.cam.ApplyView(&bgOp.GeoM)
 	screen.DrawImage(room.background, bgOp)
 	rs.drawRoomMoodOverlay(screen)
 	rs.drawRouteReveal(screen)
@@ -363,9 +364,11 @@ func (rs *RoomScene) drawRoomMoodOverlay(screen *ebiten.Image) {
 
 func (rs *RoomScene) drawProp(screen *ebiten.Image, prop *Prop) {
 	op := &ebiten.DrawImageOptions{}
-	x := prop.screenX - float64(prop.sprite.Bounds().Dx())/2
-	y := prop.screenY - float64(prop.sprite.Bounds().Dy())
+	scale := foregroundSpriteScale(screen)
+	x := -float64(prop.sprite.Bounds().Dx()) / 2
+	y := -float64(prop.sprite.Bounds().Dy())
 
+	op.GeoM.Translate(x, y)
 	switch prop.AmbientKey {
 	case "hearth_glow", "fire_glow":
 		pulse := 0.92 + float64((rs.tickCount%18))/100
@@ -379,12 +382,20 @@ func (rs *RoomScene) drawProp(screen *ebiten.Image, prop *Prop) {
 		pulse := 0.9 + float64((rs.tickCount%24))/80
 		op.ColorScale.Scale(float32(0.88+pulse/8), float32(0.95+pulse/12), float32(1.0), float32(0.92))
 		op.GeoM.Scale(pulse, pulse)
-		x -= (float64(prop.sprite.Bounds().Dx()) * (pulse - 1)) / 2
-		y -= (float64(prop.sprite.Bounds().Dy()) * (pulse - 1)) / 2
 	}
 
-	op.GeoM.Translate(x, y)
+	op.GeoM.Scale(scale, scale)
+	op.GeoM.Translate(prop.screenX, prop.screenY)
+	rs.cam.ApplyView(&op.GeoM)
+	println("PROP DRAW:", prop.screenX, prop.screenY)
 	screen.DrawImage(prop.sprite, op)
+}
+
+func foregroundSpriteScale(screen *ebiten.Image) float64 {
+	if screen == nil {
+		return 1
+	}
+	return clamp(minFloat(float64(screen.Bounds().Dx())/360.0, float64(screen.Bounds().Dy())/780.0), 1.0, 3.0)
 }
 
 func (rs *RoomScene) drawMovementIntent(screen *ebiten.Image) {
@@ -402,22 +413,9 @@ func (rs *RoomScene) drawMovementIntent(screen *ebiten.Image) {
 		highlight = color.RGBA{R: 151, G: 236, B: 187, A: alpha}
 	}
 
-	drawTintRect(
-		screen,
-		int(rs.moveIntent.targetX)-size,
-		int(rs.moveIntent.targetY)-size*2,
-		size*2,
-		size*2,
-		highlight,
-	)
-	drawTintRect(
-		screen,
-		int(rs.moveIntent.targetX)-3,
-		int(rs.moveIntent.targetY)-size*2+6,
-		6,
-		size*2-12,
-		color.RGBA{R: 244, G: 246, B: 255, A: alpha / 2},
-	)
+	targetX, targetY := rs.cam.ApplyToScreen(rs.moveIntent.targetX, rs.moveIntent.targetY)
+	drawTintRect(screen, int(targetX)-size, int(targetY)-size*2, size*2, size*2, highlight)
+	drawTintRect(screen, int(targetX)-3, int(targetY)-size*2+6, 6, size*2-12, color.RGBA{R: 244, G: 246, B: 255, A: alpha / 2})
 }
 
 // buildRooms constructs the current renderer-visible room set.

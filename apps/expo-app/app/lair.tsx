@@ -16,7 +16,6 @@
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-  NativeModules,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -41,7 +40,7 @@ const WS_BASE_URL = SIDECAR_BASE_URL.replace("http://", "ws://").replace(
 
 export default function WizardLairScreen() {
   const router = useRouter();
-  const { state, events, nightlyRitual, artPresentation } = useApp();
+  const { state, events, nightlyRitual } = useApp();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [inputVisible, setInputVisible] = useState(false);
@@ -51,12 +50,6 @@ export default function WizardLairScreen() {
   const [gesturePacket, setGesturePacket] = useState("");
   const promptLenRef = useRef(0);
   const lastGesturePacketRef = useRef("");
-  const nativePresenterLaunchedRef = useRef(false);
-  const nativeCastleModule = NativeModules.CastleModule as { start?: (wsURL: string) => void } | undefined;
-  // Dedicated native presenter disabled: NativeCastleActivity launched via FLAG_ACTIVITY_NEW_TASK
-  // from a reactApplicationContext, which creates a separate Android task stack and breaks
-  // back navigation (launcher bounce, no HUD/controls). Route through CastleView/EbitenView instead.
-  const useDedicatedNativePresenter = false;
 
   // Chars added in a single onChangeText that signals a paste rather than typing.
   const PASTE_THRESHOLD = 800;
@@ -82,14 +75,6 @@ export default function WizardLairScreen() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (!useDedicatedNativePresenter || !wsURL || nativePresenterLaunchedRef.current) {
-      return;
-    }
-    nativePresenterLaunchedRef.current = true;
-    nativeCastleModule?.start?.(wsURL);
-  }, [nativeCastleModule, useDedicatedNativePresenter, wsURL]);
 
   async function handleTextChange(text: string) {
     const delta = text.length - promptLenRef.current;
@@ -166,10 +151,7 @@ export default function WizardLairScreen() {
 
   return (
     <View style={styles.screen}>
-      {/* Castle scene — fills entire screen */}
-      {useDedicatedNativePresenter ? (
-        <View style={StyleSheet.absoluteFill} pointerEvents="none" />
-      ) : wsURL ? (
+      {wsURL ? (
         <CastleView
           wsURL={wsURL}
           gesturePacket={gesturePacket}
@@ -226,14 +208,6 @@ export default function WizardLairScreen() {
           <Text style={styles.ritualBannerTitle}>{nightlyRitual.title}</Text>
           <Text style={styles.ritualBannerBody}>{nightlyRitual.visual}</Text>
           <Text style={styles.ritualBannerCue}>{nightlyRitual.physicalCue}</Text>
-        </View>
-      ) : null}
-
-      {artPresentation.degradation_reason ? (
-        <View style={styles.degradationCard} pointerEvents="none">
-          <Text style={styles.degradationEyebrow}>Renderer Fallback</Text>
-          <Text style={styles.degradationTitle}>Expo presentation active</Text>
-          <Text style={styles.degradationBody}>{artPresentation.degradation_reason.message}</Text>
         </View>
       ) : null}
 
@@ -496,38 +470,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 6,
     fontStyle: "italic",
-  },
-  degradationCard: {
-    position: "absolute",
-    left: 16,
-    right: 16,
-    bottom: 162,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: "rgba(12, 18, 31, 0.82)",
-    borderWidth: 1,
-    borderColor: "rgba(148, 163, 184, 0.22)",
-    zIndex: 10,
-  },
-  degradationEyebrow: {
-    color: "#93C5FD",
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  degradationTitle: {
-    color: "#F8FAFC",
-    fontSize: 15,
-    fontWeight: "700",
-    marginTop: 4,
-  },
-  degradationBody: {
-    color: "#CBD5E1",
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 6,
   },
   bottomControls: {
     position: "absolute",

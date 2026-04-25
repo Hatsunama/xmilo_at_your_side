@@ -70,6 +70,12 @@ func LoadRoomBackground(roomID string) *ebiten.Image {
 	return loadOrPlaceholder(p, RoomBGW, RoomBGH, "rooms/"+roomID)
 }
 
+// LoadRoomBackgroundProcedural returns the deterministic procedural room background.
+// Used as a bounded runtime fallback when a room texture uploads/render as near-black on device.
+func LoadRoomBackgroundProcedural(roomID string, w, h int) *ebiten.Image {
+	return makeRoomPlaceholder(roomID, w, h)
+}
+
 // LoadPropSprite loads "sprites/props/{propKey}.png".
 func LoadPropSprite(propKey string) *ebiten.Image {
 	p := path.Join("sprites", "props", propKey+".png")
@@ -77,10 +83,25 @@ func LoadPropSprite(propKey string) *ebiten.Image {
 }
 
 func loadOrPlaceholder(filePath string, w, h int, colorKey string) *ebiten.Image {
+	println("ASSET LOAD TRY:", filePath)
+
 	data, err := fs.ReadFile(filePath)
+	if err != nil {
+		println("ASSET LOAD FAIL:", filePath, err.Error())
+	}
 	if err == nil {
 		img, _, err2 := image.Decode(bytes.NewReader(data))
 		if err2 == nil {
+			// On some Android GPU paths, room background PNGs can decode with valid bounds
+			// but upload/render effectively black. For rooms, force an explicit RGBA upload.
+			if len(filePath) >= len("rooms/") && filePath[:len("rooms/")] == "rooms/" {
+				b := img.Bounds()
+				rgbaImg := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+				draw.Draw(rgbaImg, rgbaImg.Bounds(), img, b.Min, draw.Src)
+				eimg := ebiten.NewImage(b.Dx(), b.Dy())
+				eimg.ReplacePixels(rgbaImg.Pix)
+				return eimg
+			}
 			return ebiten.NewImageFromImage(img)
 		}
 		log.Printf("assets: decode %s: %v", filePath, err2)
@@ -492,6 +513,21 @@ type roomColors struct {
 
 func roomPalette(roomID string) roomColors {
 	switch roomID {
+	case "main_hall":
+		// Main Hall is the default landing room and must stay visibly readable even when
+		// we are forced onto procedural fallback on-device. Keep this palette brighter
+		// and higher-contrast than the generic default.
+		return roomColors{
+			rgba(82, 80, 118, 255),  // bgTop
+			rgba(44, 42, 70, 255),   // bgBottom
+			rgba(126, 118, 168, 255), // floorTile
+			rgba(10, 10, 18, 86),    // vignette
+			rgba(12, 11, 18, 150),   // floorShadow
+			rgba(196, 184, 255, 108), // glow
+			rgba(112, 108, 156, 255), // arch
+			rgba(176, 160, 224, 255), // feature
+			rgba(30, 28, 48, 255),   // border
+		}
 	case "war_room":
 		return roomColors{rgba(52, 36, 43, 255), rgba(32, 25, 30, 255), rgba(93, 64, 61, 255), rgba(17, 12, 16, 120), rgba(18, 12, 14, 180), rgba(118, 79, 82, 90), rgba(83, 54, 59, 255), rgba(126, 88, 76, 255), rgba(27, 18, 21, 255)}
 	case "library":

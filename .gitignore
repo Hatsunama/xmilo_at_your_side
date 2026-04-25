@@ -64,3 +64,4 @@ post-resumegame-lair-logcat.txt
 replace-secrets.txt
 
 apps/expo-app/android/.gradle/
+.aider*

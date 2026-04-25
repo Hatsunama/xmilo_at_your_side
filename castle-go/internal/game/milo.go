@@ -20,6 +20,8 @@ const (
 // The animator never decides what state Milo should be in — it only executes
 // what it is told via SetState() and StartWalk().
 type MiloAnimator struct {
+	cam *Camera
+
 	// sprite sheets indexed by "state_facing", e.g. "idle_s", "walking_e"
 	sheets map[string]*ebiten.Image
 
@@ -58,6 +60,7 @@ type MiloAnimator struct {
 
 func NewMiloAnimator(cam *Camera) *MiloAnimator {
 	m := &MiloAnimator{
+		cam:             cam,
 		sheets:          make(map[string]*ebiten.Image),
 		state:           "idle",
 		facing:          "s",
@@ -195,8 +198,11 @@ func (m *MiloAnimator) Draw(screen *ebiten.Image) {
 	// Anchor is the bottom-center of the sprite (Milo's feet)
 	styleX, styleY, styleScale := idleStyleTransform(m.style, m.tickCount)
 	op.GeoM.Translate(-float64(assets.MiloFrameW)/2, -float64(assets.MiloFrameH))
-	op.GeoM.Scale(miloDrawScale*styleScale, miloDrawScale*styleScale)
+	scale := miloDrawScale * styleScale * foregroundSpriteScale(screen)
+	op.GeoM.Scale(scale, scale)
 	op.GeoM.Translate(m.screenX+styleX, m.screenY+styleY)
+	m.cam.ApplyView(&op.GeoM)
+	println("MILO DRAW:", m.screenX, m.screenY)
 	screen.DrawImage(frame, op)
 
 	// Thought bubble — simple white rectangle with text overlay

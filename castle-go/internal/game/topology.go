@@ -5,6 +5,7 @@ import "sort"
 type RoomID string
 
 const (
+  	RoomMainHall    RoomID = "main_hall"
 	RoomArchive     RoomID = "archive"
 	RoomTrophy      RoomID = "trophy_room"
 	RoomStudy       RoomID = "study"
@@ -156,6 +157,7 @@ func DisplayRoomID(roomID string) string {
 	return roomID
 }
 
+func SceneRoomID(roomID string) string {
 	canonical := CanonicalRoomID(roomID)
 	if sceneID, ok := sceneRoomMap[canonical]; ok {
 		return sceneID
