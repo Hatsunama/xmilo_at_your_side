@@ -1,0 +1,4 @@
+<resources>
+  <string name="app_name">xMilo</string>
+  <string name="xmiloclaw_accessibility_service_description">xMilo hidden runtime host accessibility bridge</string>
+</resources>
