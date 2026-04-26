@@ -2,6 +2,7 @@ package game
 
 import (
 	"image/color"
+	"log"
 	"sort"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -45,18 +46,63 @@ type Room struct {
 	props      []*Prop // sorted by ZOrder ascending for painter's algorithm
 }
 
-// RoomScene manages all nine rooms and renders the active one.
-type RoomScene struct {
-	rooms        map[string]*Room
-	activeID     string
-	cam          *Camera
-	tickCount    int
-	ritualStatus string
-	ritualPulse  int
-	miloState    string
-	moveIntent   *movementIntent
-	route        []RouteStep
+type RoomWorldLayout struct {
+	RoomID      RoomID
+	CenterX     float64
+	CenterY     float64
+	MinX        float64
+	MinY        float64
+	MaxX        float64
+	MaxY        float64
+	BackgroundX float64
+	BackgroundY float64
+	BackgroundW float64
+	BackgroundH float64
 }
+
+func (l RoomWorldLayout) Bounds() WorldBounds {
+	return WorldBounds{
+		MinX: l.MinX,
+		MinY: l.MinY,
+		MaxX: l.MaxX,
+		MaxY: l.MaxY,
+	}
+}
+
+func (l RoomWorldLayout) TileToWorld(cam *Camera, gx, gy, gz int) (float64, float64) {
+	if cam == nil {
+		return l.CenterX, l.CenterY
+	}
+	localX := float64((gx - gy) * cam.TileW / 2)
+	localY := float64((gx+gy)*cam.TileH/2) - float64(gz*cam.TileH)
+	return l.CenterX + localX, l.MinY + roomWorldTileOriginY + localY
+}
+
+// RoomScene manages renderer-visible rooms and renders the active room's live state.
+type RoomScene struct {
+	rooms               map[string]*Room
+	activeID            string
+	cam                 *Camera
+	tickCount           int
+	ritualStatus        string
+	ritualPulse         int
+	miloState           string
+	moveIntent          *movementIntent
+	route               []RouteStep
+	overviewProbeLogged int
+}
+
+const (
+	roomWorldSpacingX            = 960.0
+	roomWorldSpacingY            = 640.0
+	roomWorldW                   = 960.0
+	roomWorldH                   = 720.0
+	roomWorldTileOriginY         = 120.0
+	roomDetailZoomMultiplier     = 2.0
+	roomDetailBackgroundsEnabled = false
+	roomMoodOverlayEnabled       = false
+	routeRevealOverlayEnabled    = false
+)
 
 type movementIntent struct {
 	toRoom   string
@@ -156,7 +202,6 @@ func (rs *RoomScene) SetRitualState(status string) {
 	rs.ritualPulse = 0
 }
 
-// Draw renders the active room background and all its props in z-order.
 // Milo is NOT drawn here — he is drawn by the Game after receiving
 // a ZOrder value from the animator so he can be interleaved with props.
 func (rs *RoomScene) Draw(screen *ebiten.Image, miloZ int, drawMilo func()) {
@@ -165,13 +210,12 @@ func (rs *RoomScene) Draw(screen *ebiten.Image, miloZ int, drawMilo func()) {
 		return
 	}
 
-	// Background — fills the screen, drawn first (behind everything)
-	bgOp := &ebiten.DrawImageOptions{}
-	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
-	bgW, bgH := room.background.Bounds().Dx(), room.background.Bounds().Dy()
-	bgOp.GeoM.Scale(float64(sw)/float64(bgW), float64(sh)/float64(bgH))
-	rs.cam.ApplyView(&bgOp.GeoM)
-	screen.DrawImage(room.background, bgOp)
+	rs.drawWorldOverview(screen)
+	if rs.shouldDrawRoomDetail() {
+		for _, bgRoom := range rs.rooms {
+			rs.drawRoomBackground(screen, bgRoom)
+		}
+	}
 	rs.drawRoomMoodOverlay(screen)
 	rs.drawRouteReveal(screen)
 	rs.drawMovementIntent(screen)
@@ -202,7 +246,156 @@ func (rs *RoomScene) Draw(screen *ebiten.Image, miloZ int, drawMilo func()) {
 	}
 }
 
+func (rs *RoomScene) shouldDrawRoomDetail() bool {
+	if rs == nil || rs.cam == nil {
+		return false
+	}
+	if !roomDetailBackgroundsEnabled {
+		return false
+	}
+	return rs.cam.View.Zoom >= rs.cam.View.MinZoom*roomDetailZoomMultiplier
+}
+
+func (rs *RoomScene) drawWorldOverview(screen *ebiten.Image) {
+	layouts := RoomWorldLayouts()
+	rs.drawOverviewConnections(screen, layouts)
+	for roomID, layout := range layouts {
+		rs.drawOverviewRoomPlate(screen, roomID, layout)
+	}
+}
+
+func (rs *RoomScene) drawOverviewConnections(screen *ebiten.Image, layouts map[RoomID]RoomWorldLayout) {
+	seen := make(map[[2]RoomID]bool)
+	for roomID, topo := range roomTopologies {
+		from, ok := layouts[roomID]
+		if !ok {
+			continue
+		}
+		for _, neighbor := range topo.Neighbors {
+			to, ok := layouts[neighbor]
+			if !ok {
+				continue
+			}
+			pair := orderedRoomPair(roomID, neighbor)
+			if seen[pair] {
+				continue
+			}
+			seen[pair] = true
+			rs.drawOverviewConnection(screen, from, to)
+		}
+	}
+}
+
+func (rs *RoomScene) drawOverviewConnection(screen *ebiten.Image, from, to RoomWorldLayout) {
+	const bandW = 120
+	if absFloat(from.CenterX-to.CenterX) >= absFloat(from.CenterY-to.CenterY) {
+		x := minFloat(from.CenterX, to.CenterX)
+		y := (from.CenterY+to.CenterY)/2 - bandW/2
+		w := absFloat(from.CenterX - to.CenterX)
+		rs.drawWorldRect(screen, x, y, w, bandW, color.RGBA{R: 92, G: 78, B: 68, A: 220})
+		rs.drawWorldRect(screen, x, y+bandW*0.35, w, bandW*0.3, color.RGBA{R: 141, G: 118, B: 92, A: 190})
+		return
+	}
+	x := (from.CenterX+to.CenterX)/2 - bandW/2
+	y := minFloat(from.CenterY, to.CenterY)
+	h := absFloat(from.CenterY - to.CenterY)
+	rs.drawWorldRect(screen, x, y, bandW, h, color.RGBA{R: 92, G: 78, B: 68, A: 220})
+	rs.drawWorldRect(screen, x+bandW*0.35, y, bandW*0.3, h, color.RGBA{R: 141, G: 118, B: 92, A: 190})
+}
+
+func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, layout RoomWorldLayout) {
+	bounds := layout.Bounds()
+	base := color.RGBA{R: 62, G: 58, B: 70, A: 245}
+	inner := color.RGBA{R: 115, G: 101, B: 86, A: 235}
+	accent := color.RGBA{R: 174, G: 145, B: 96, A: 220}
+	if SceneRoomID(string(roomID)) == rs.activeID {
+		base = color.RGBA{R: 88, G: 74, B: 104, A: 255}
+		inner = color.RGBA{R: 150, G: 126, B: 103, A: 245}
+		accent = color.RGBA{R: 227, G: 190, B: 114, A: 230}
+	}
+	rs.logOverviewPlateProbe(screen, roomID, bounds, base)
+	rs.drawWorldRect(screen, bounds.MinX, bounds.MinY, bounds.Width(), bounds.Height(), base)
+	rs.drawWorldRect(screen, bounds.MinX+36, bounds.MinY+36, bounds.Width()-72, bounds.Height()-72, inner)
+	rs.drawWorldRect(screen, bounds.MinX+56, bounds.MinY+56, bounds.Width()-112, 32, accent)
+	rs.drawWorldRect(screen, bounds.MinX+56, bounds.MaxY-88, bounds.Width()-112, 28, color.RGBA{R: accent.R, G: accent.G, B: accent.B, A: accent.A / 2})
+}
+
+func (rs *RoomScene) drawWorldRect(screen *ebiten.Image, x, y, w, h float64, c color.RGBA) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	ensureDrawPrimitives()
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Scale(w, h)
+	op.GeoM.Translate(x, y)
+	rs.cam.ApplyView(&op.GeoM)
+	op.ColorScale.Scale(float32(c.R)/255, float32(c.G)/255, float32(c.B)/255, float32(c.A)/255)
+	screen.DrawImage(colorWhite, op)
+}
+
+func (rs *RoomScene) logOverviewPlateProbe(screen *ebiten.Image, roomID RoomID, bounds WorldBounds, c color.RGBA) {
+	if rs == nil || rs.cam == nil || screen == nil || rs.overviewProbeLogged >= 8 {
+		return
+	}
+	screenBounds := screen.Bounds()
+	log.Printf(
+		"XMILO_OVERVIEW_BASIC_PROOF room=%s screen=%dx%d zoom=%.4f minZoom=%.4f maxZoom=%.4f pan=(%.2f,%.2f) world=(%.2f,%.2f)-(%.2f,%.2f) alpha=%d",
+		roomID,
+		screenBounds.Dx(),
+		screenBounds.Dy(),
+		rs.cam.View.Zoom,
+		rs.cam.View.MinZoom,
+		rs.cam.View.MaxZoom,
+		rs.cam.View.PanX,
+		rs.cam.View.PanY,
+		bounds.MinX,
+		bounds.MinY,
+		bounds.MaxX,
+		bounds.MaxY,
+		c.A,
+	)
+	rs.overviewProbeLogged++
+}
+
+func orderedRoomPair(a, b RoomID) [2]RoomID {
+	if string(a) <= string(b) {
+		return [2]RoomID{a, b}
+	}
+	return [2]RoomID{b, a}
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func (rs *RoomScene) drawRoomBackground(screen *ebiten.Image, room *Room) {
+	if room == nil || room.background == nil {
+		return
+	}
+	layout, ok := RoomWorldLayoutFor(room.ID)
+	if !ok {
+		return
+	}
+
+	bgW, bgH := room.background.Bounds().Dx(), room.background.Bounds().Dy()
+	if bgW <= 0 || bgH <= 0 {
+		return
+	}
+
+	bgOp := &ebiten.DrawImageOptions{}
+	bgOp.GeoM.Scale(layout.BackgroundW/float64(bgW), layout.BackgroundH/float64(bgH))
+	bgOp.GeoM.Translate(layout.BackgroundX, layout.BackgroundY)
+	rs.cam.ApplyView(&bgOp.GeoM)
+	screen.DrawImage(room.background, bgOp)
+}
+
 func (rs *RoomScene) drawRouteReveal(screen *ebiten.Image) {
+	if !routeRevealOverlayEnabled {
+		return
+	}
 	if len(rs.route) == 0 {
 		return
 	}
@@ -316,13 +509,16 @@ func (rs *RoomScene) drawRitualOverlay(screen *ebiten.Image) {
 	pulseH := 80 + (rs.ritualPulse % 90)
 	drawTintRect(screen, sw/2-pulseW/2, sh/5, pulseW, pulseH, accent)
 	drawTintRect(screen, sw/2-18, sh/5+18, 36, 36, accent)
-	if rs.activeID == "archive" || rs.activeID == "crystal_orb" {
+	if rs.activeID == "archive" || rs.activeID == "observatory" {
 		drawTintRect(screen, sw/2-54, sh/2-8, 108, 74, color.RGBA{R: accent.R, G: accent.G, B: accent.B, A: accent.A / 2})
 		drawTintRect(screen, sw/2-18, sh/2+12, 36, 36, color.RGBA{R: 236, G: 244, B: 255, A: accent.A / 2})
 	}
 }
 
 func (rs *RoomScene) drawRoomMoodOverlay(screen *ebiten.Image) {
+	if !roomMoodOverlayEnabled {
+		return
+	}
 	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
 
 	switch rs.activeID {
@@ -346,14 +542,14 @@ func (rs *RoomScene) drawRoomMoodOverlay(screen *ebiten.Image) {
 			pulse := uint8(20 + (rs.tickCount % 30))
 			drawTintRect(screen, sw/2-26, 146, 52, 52, color.RGBA{R: 196, G: 225, B: 255, A: pulse})
 		}
-	case "crystal_orb":
+	case "observatory":
 		if rs.miloState == "working" || rs.ritualStatus == "started" {
 			drawTintRect(screen, sw/2-96, sh/3-12, 192, 128, color.RGBA{R: 102, G: 192, B: 255, A: 30})
 			drawTintRect(screen, sw/2-42, sh/2+66, 84, 148, color.RGBA{R: 40, G: 90, B: 124, A: 18})
 			pulse := uint8(18 + (rs.tickCount % 42))
 			drawTintRect(screen, sw/2-32, 126, 64, 64, color.RGBA{R: 171, G: 230, B: 255, A: pulse})
 		}
-	case "library":
+	case "study":
 		drawTintRect(screen, sw/2-62, sh/2+26, 124, 160, color.RGBA{R: 78, G: 64, B: 36, A: 16})
 		if rs.miloState == "working" {
 			drawTintRect(screen, sw/2-120, sh/3, 240, 110, color.RGBA{R: 191, G: 162, B: 103, A: 24})
@@ -368,7 +564,6 @@ func (rs *RoomScene) drawProp(screen *ebiten.Image, prop *Prop) {
 	x := -float64(prop.sprite.Bounds().Dx()) / 2
 	y := -float64(prop.sprite.Bounds().Dy())
 
-	op.GeoM.Translate(x, y)
 	switch prop.AmbientKey {
 	case "hearth_glow", "fire_glow":
 		pulse := 0.92 + float64((rs.tickCount%18))/100
@@ -382,8 +577,11 @@ func (rs *RoomScene) drawProp(screen *ebiten.Image, prop *Prop) {
 		pulse := 0.9 + float64((rs.tickCount%24))/80
 		op.ColorScale.Scale(float32(0.88+pulse/8), float32(0.95+pulse/12), float32(1.0), float32(0.92))
 		op.GeoM.Scale(pulse, pulse)
+		x -= (float64(prop.sprite.Bounds().Dx()) * (pulse - 1)) / 2
+		y -= (float64(prop.sprite.Bounds().Dy()) * (pulse - 1)) / 2
 	}
 
+	op.GeoM.Translate(x, y)
 	op.GeoM.Scale(scale, scale)
 	op.GeoM.Translate(prop.screenX, prop.screenY)
 	rs.cam.ApplyView(&op.GeoM)
@@ -396,6 +594,63 @@ func foregroundSpriteScale(screen *ebiten.Image) float64 {
 		return 1
 	}
 	return clamp(minFloat(float64(screen.Bounds().Dx())/360.0, float64(screen.Bounds().Dy())/780.0), 1.0, 3.0)
+}
+
+func CastleWorldBounds(cam *Camera) WorldBounds {
+	var bounds WorldBounds
+	hasBounds := false
+	for _, layout := range RoomWorldLayouts() {
+		roomBounds := layout.Bounds()
+		if !hasBounds {
+			bounds = roomBounds
+			hasBounds = true
+			continue
+		}
+		bounds.MinX = minFloat(bounds.MinX, roomBounds.MinX)
+		bounds.MinY = minFloat(bounds.MinY, roomBounds.MinY)
+		bounds.MaxX = maxFloat(bounds.MaxX, roomBounds.MaxX)
+		bounds.MaxY = maxFloat(bounds.MaxY, roomBounds.MaxY)
+	}
+
+	if !hasBounds {
+		return WorldBounds{}
+	}
+	return bounds
+}
+
+func RoomWorldLayouts() map[RoomID]RoomWorldLayout {
+	layouts := make(map[RoomID]RoomWorldLayout, len(roomTopologies))
+	for roomID, topo := range roomTopologies {
+		layouts[roomID] = newRoomWorldLayout(roomID, topo)
+	}
+	return layouts
+}
+
+func RoomWorldLayoutFor(roomID string) (RoomWorldLayout, bool) {
+	canonical := CanonicalRoomID(roomID)
+	topo, ok := roomTopologies[canonical]
+	if !ok {
+		return RoomWorldLayout{}, false
+	}
+	return newRoomWorldLayout(canonical, topo), true
+}
+
+func newRoomWorldLayout(roomID RoomID, topo RoomTopology) RoomWorldLayout {
+	centerX := float64(topo.MapX) * roomWorldSpacingX
+	centerY := float64(topo.MapY) * roomWorldSpacingY
+	return RoomWorldLayout{
+		RoomID:      roomID,
+		CenterX:     centerX,
+		CenterY:     centerY,
+		MinX:        centerX - roomWorldW/2,
+		MinY:        centerY - roomWorldH/2,
+		MaxX:        centerX + roomWorldW/2,
+		MaxY:        centerY + roomWorldH/2,
+		BackgroundX: centerX - roomWorldW/2,
+		BackgroundY: centerY - roomWorldH/2,
+		BackgroundW: roomWorldW,
+		BackgroundH: roomWorldH,
+	}
 }
 
 func (rs *RoomScene) drawMovementIntent(screen *ebiten.Image) {
@@ -418,9 +673,6 @@ func (rs *RoomScene) drawMovementIntent(screen *ebiten.Image) {
 	drawTintRect(screen, int(targetX)-3, int(targetY)-size*2+6, 6, size*2-12, color.RGBA{R: 244, G: 246, B: 255, A: alpha / 2})
 }
 
-// buildRooms constructs the current renderer-visible room set.
-// Canon room names are handled through topology aliases so the scene can stay
-// future-ready while launch art still uses a bounded subset of room assets.
 func (rs *RoomScene) buildRooms() {
 	rooms := []struct {
 		id    string
@@ -436,7 +688,7 @@ func (rs *RoomScene) buildRooms() {
 			},
 		},
 		{
-			id: "war_room",
+			id: "workshop",
 			props: []propDef{
 				{key: "strategy_table", gx: 8, gy: 6, gz: 0, ambient: ""},
 				{key: "map_wall", gx: 13, gy: 4, gz: 0, ambient: ""},
@@ -445,7 +697,7 @@ func (rs *RoomScene) buildRooms() {
 			},
 		},
 		{
-			id: "library",
+			id: "study",
 			props: []propDef{
 				{key: "reading_desk", gx: 6, gy: 10, gz: 0, ambient: ""},
 				{key: "bookshelf_east", gx: 14, gy: 6, gz: 0, ambient: ""},
@@ -454,24 +706,7 @@ func (rs *RoomScene) buildRooms() {
 			},
 		},
 		{
-			id: "training_room",
-			props: []propDef{
-				{key: "training_dummy", gx: 11, gy: 6, gz: 0, ambient: ""},
-				{key: "weapon_rack", gx: 4, gy: 5, gz: 0, ambient: ""},
-				{key: "training_mat", gx: 8, gy: 8, gz: 0, ambient: ""},
-			},
-		},
-		{
-			id: "spellbook",
-			props: []propDef{
-				{key: "spellbook_stand", gx: 7, gy: 8, gz: 0, ambient: "page_turn"},
-				{key: "scroll_shelf", gx: 5, gy: 5, gz: 0, ambient: ""},
-				{key: "inkwell", gx: 9, gy: 9, gz: 0, ambient: ""},
-				{key: "candle_cluster", gx: 11, gy: 6, gz: 0, ambient: "candle_flicker"},
-			},
-		},
-		{
-			id: "cauldron",
+			id: "potions_room",
 			props: []propDef{
 				{key: "cauldron", gx: 8, gy: 9, gz: 0, ambient: "cauldron_bubble"},
 				{key: "ingredient_shelf", gx: 5, gy: 12, gz: 0, ambient: ""},
@@ -480,7 +715,7 @@ func (rs *RoomScene) buildRooms() {
 			},
 		},
 		{
-			id: "crystal_orb",
+			id: "observatory",
 			props: []propDef{
 				{key: "orb_plinth", gx: 8, gy: 7, gz: 0, ambient: ""},
 				{key: "crystal_orb", gx: 8, gy: 7, gz: 1, ambient: "orb_pulse"},
@@ -489,16 +724,7 @@ func (rs *RoomScene) buildRooms() {
 			},
 		},
 		{
-			id: "baby_dragon",
-			props: []propDef{
-				{key: "dragon_perch", gx: 10, gy: 6, gz: 2, ambient: ""},
-				{key: "dragon", gx: 10, gy: 6, gz: 3, ambient: "dragon_yawn"},
-				{key: "toy_pile", gx: 6, gy: 10, gz: 0, ambient: ""},
-				{key: "gem_hoard", gx: 13, gy: 8, gz: 0, ambient: "gem_sparkle"},
-			},
-		},
-		{
-			id: "trophy",
+			id: "trophy_room",
 			props: []propDef{
 				{key: "trophy_case", gx: 8, gy: 7, gz: 0, ambient: "trophy_glow"},
 				{key: "trophy_pedestal", gx: 11, gy: 5, gz: 1, ambient: ""},
@@ -515,15 +741,23 @@ func (rs *RoomScene) buildRooms() {
 				{key: "memory_crystal", gx: 8, gy: 5, gz: 1, ambient: "memory_pulse"},
 			},
 		},
+		{
+			id:    "threshold",
+			props: nil,
+		},
 	}
 
 	for _, rd := range rooms {
+		layout, ok := RoomWorldLayoutFor(rd.id)
+		if !ok {
+			continue
+		}
 		room := &Room{
 			ID:         rd.id,
 			background: assets.LoadRoomBackground(rd.id),
 		}
 		for _, pd := range rd.props {
-			sx, sy := rs.cam.TileToScreen(pd.gx, pd.gy, pd.gz)
+			sx, sy := layout.TileToWorld(rs.cam, pd.gx, pd.gy, pd.gz)
 			prop := &Prop{
 				SpriteKey:  pd.key,
 				GridX:      pd.gx,

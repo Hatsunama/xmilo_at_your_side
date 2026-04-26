@@ -29,6 +29,37 @@ type CameraViewState struct {
 	MaxZoom float64
 }
 
+type WorldBounds struct {
+	MinX float64
+	MinY float64
+	MaxX float64
+	MaxY float64
+}
+
+func (b WorldBounds) Normalized() WorldBounds {
+	if b.MinX > b.MaxX {
+		b.MinX, b.MaxX = b.MaxX, b.MinX
+	}
+	if b.MinY > b.MaxY {
+		b.MinY, b.MaxY = b.MaxY, b.MinY
+	}
+	return b
+}
+
+func (b WorldBounds) Width() float64 {
+	b = b.Normalized()
+	return b.MaxX - b.MinX
+}
+
+func (b WorldBounds) Height() float64 {
+	b = b.Normalized()
+	return b.MaxY - b.MinY
+}
+
+func (b WorldBounds) Valid() bool {
+	return b.Width() > 0 && b.Height() > 0
+}
+
 func NewCamera(screenW, screenH int) *Camera {
 	tileW := 128
 	return &Camera{
@@ -99,6 +130,80 @@ func (c *Camera) ZoomAround(factor, focusX, focusY float64) {
 	c.View.Zoom = nextZoom
 	c.View.PanX = focusX - c.OffsetX - worldX*c.View.Zoom
 	c.View.PanY = focusY - c.OffsetY - worldY*c.View.Zoom
+}
+
+func (c *Camera) FitZoomForBounds(bounds WorldBounds, padX, padY float64) float64 {
+	if c == nil || c.ScreenW <= 0 || c.ScreenH <= 0 {
+		return 1
+	}
+	bounds = bounds.Normalized()
+	if !bounds.Valid() {
+		return c.View.Zoom
+	}
+
+	availableW := float64(c.ScreenW) - padX*2
+	availableH := float64(c.ScreenH) - padY*2
+	if availableW <= 0 || availableH <= 0 {
+		return c.View.Zoom
+	}
+
+	return clamp(minFloat(availableW/bounds.Width(), availableH/bounds.Height()), 0.1, 3.0)
+}
+
+func (c *Camera) FitToBounds(bounds WorldBounds, padX, padY float64) {
+	if c == nil || c.ScreenW <= 0 || c.ScreenH <= 0 {
+		return
+	}
+	bounds = bounds.Normalized()
+	if !bounds.Valid() {
+		return
+	}
+
+	fitZoom := c.FitZoomForBounds(bounds, padX, padY)
+	c.View.MinZoom = fitZoom
+	c.View.MaxZoom = clamp(fitZoom*3.0, 1.25, 3.0)
+	c.View.Zoom = fitZoom
+
+	worldCenterX := (bounds.MinX + bounds.MaxX) / 2
+	worldCenterY := (bounds.MinY + bounds.MaxY) / 2
+	screenCenterX := float64(c.ScreenW) / 2
+	screenCenterY := float64(c.ScreenH) / 2
+
+	c.View.PanX = screenCenterX - c.OffsetX - (worldCenterX-c.OffsetX)*c.View.Zoom
+	c.View.PanY = screenCenterY - c.OffsetY - (worldCenterY-c.OffsetY)*c.View.Zoom
+	c.ClampToBounds(bounds, padX, padY)
+}
+
+func (c *Camera) ClampToBounds(bounds WorldBounds, padX, padY float64) {
+	if c == nil || c.ScreenW <= 0 || c.ScreenH <= 0 {
+		return
+	}
+	bounds = bounds.Normalized()
+	if !bounds.Valid() {
+		return
+	}
+
+	noPanMinX := (bounds.MinX-c.OffsetX)*c.View.Zoom + c.OffsetX
+	noPanMaxX := (bounds.MaxX-c.OffsetX)*c.View.Zoom + c.OffsetX
+	noPanMinY := (bounds.MinY-c.OffsetY)*c.View.Zoom + c.OffsetY
+	noPanMaxY := (bounds.MaxY-c.OffsetY)*c.View.Zoom + c.OffsetY
+
+	availableW := float64(c.ScreenW) - padX*2
+	availableH := float64(c.ScreenH) - padY*2
+	if noPanMaxX-noPanMinX <= availableW {
+		c.View.PanX = float64(c.ScreenW)/2 - (noPanMinX+noPanMaxX)/2
+	} else {
+		minPanX := float64(c.ScreenW) - padX - noPanMaxX
+		maxPanX := padX - noPanMinX
+		c.View.PanX = clamp(c.View.PanX, minPanX, maxPanX)
+	}
+	if noPanMaxY-noPanMinY <= availableH {
+		c.View.PanY = float64(c.ScreenH)/2 - (noPanMinY+noPanMaxY)/2
+	} else {
+		minPanY := float64(c.ScreenH) - padY - noPanMaxY
+		maxPanY := padY - noPanMinY
+		c.View.PanY = clamp(c.View.PanY, minPanY, maxPanY)
+	}
 }
 
 func (c *Camera) ClampViewToProjectedRect(minX, minY, maxX, maxY, padX, padY float64) {
@@ -200,7 +305,6 @@ func maxFloat(a, b float64) float64 {
 }
 
 // anchorRegistry maps every anchor ID to its isometric grid coordinate.
-// All nine Wizard Lair rooms represented. Extends as new rooms are added.
 // X/Y are tile coordinates; Z is elevation (0 = floor level).
 var anchorRegistry = map[string]AnchorCoord{
 	// Main Hall — the default room, where Milo returns after every task
@@ -211,40 +315,28 @@ var anchorRegistry = map[string]AnchorCoord{
 	"main_hall_right":  {X: 10, Y: 8, Z: 0},
 	"main_hall_front":  {X: 8, Y: 10, Z: 0},
 
-	// War Room — planning / strategy tasks
-	"war_room_table":     {X: 8, Y: 6, Z: 0},
-	"war_room_map_wall":  {X: 13, Y: 4, Z: 0},
-	"war_room_corner":    {X: 5, Y: 6, Z: 0},
-	"war_room_toolbench": {X: 11, Y: 7, Z: 0},
-
-	// Library — analysis / reading / summarizing tasks
+	// Legacy compatibility anchors retained for older sidecar room names.
+	"war_room_table":      {X: 8, Y: 6, Z: 0},
+	"war_room_map_wall":   {X: 13, Y: 4, Z: 0},
+	"war_room_corner":     {X: 5, Y: 6, Z: 0},
+	"war_room_toolbench":  {X: 11, Y: 7, Z: 0},
 	"library_desk":        {X: 6, Y: 10, Z: 0},
 	"library_shelf_east":  {X: 14, Y: 6, Z: 0},
 	"library_shelf_north": {X: 6, Y: 3, Z: 0},
 	"library_window":      {X: 10, Y: 5, Z: 0},
-
-	// Training Room — practice / learning tasks
-	"training_circle": {X: 8, Y: 8, Z: 0},
-	"training_dummy":  {X: 11, Y: 6, Z: 0},
-
-	// Spellbook Room — spell research, creative tasks
-	"spellbook_reading": {X: 7, Y: 8, Z: 0},
-	"spellbook_shelf":   {X: 5, Y: 5, Z: 0},
-
-	// Cauldron Room — processing, transformation tasks
-	"cauldron_stir":   {X: 8, Y: 9, Z: 0},
-	"cauldron_shelf":  {X: 5, Y: 12, Z: 0},
-	"cauldron_table":  {X: 8, Y: 11, Z: 0},
-
-	// Crystal Orb Room — prediction, analysis, vision tasks
-	"crystal_orb_stand":  {X: 8, Y: 7, Z: 1}, // orb on a plinth
-	"crystal_orb_watch":  {X: 10, Y: 9, Z: 0},
-	"crystal_orb_rim":    {X: 6, Y: 8, Z: 0},
-	"crystal_orb_window": {X: 12, Y: 5, Z: 0},
-
-	// Baby Dragon Room — companion, warmth, casual conversation
-	"dragon_perch":    {X: 10, Y: 6, Z: 3}, // dragon on high perch
-	"dragon_play_mat": {X: 7, Y: 9, Z: 0},
+	"training_circle":     {X: 8, Y: 8, Z: 0},
+	"training_dummy":      {X: 11, Y: 6, Z: 0},
+	"spellbook_reading":   {X: 7, Y: 8, Z: 0},
+	"spellbook_shelf":     {X: 5, Y: 5, Z: 0},
+	"cauldron_stir":       {X: 8, Y: 9, Z: 0},
+	"cauldron_shelf":      {X: 5, Y: 12, Z: 0},
+	"cauldron_table":      {X: 8, Y: 11, Z: 0},
+	"crystal_orb_stand":   {X: 8, Y: 7, Z: 1}, // orb on a plinth
+	"crystal_orb_watch":   {X: 10, Y: 9, Z: 0},
+	"crystal_orb_rim":     {X: 6, Y: 8, Z: 0},
+	"crystal_orb_window":  {X: 12, Y: 5, Z: 0},
+	"dragon_perch":        {X: 10, Y: 6, Z: 3}, // dragon on high perch
+	"dragon_play_mat":     {X: 7, Y: 9, Z: 0},
 
 	// Trophy Room — completed task celebration
 	"trophy_display":  {X: 8, Y: 7, Z: 0},

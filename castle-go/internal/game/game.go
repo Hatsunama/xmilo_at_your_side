@@ -4,8 +4,6 @@
 //   - Milo's visual state (MiloAnimator)
 //   - Room scene rendering (RoomScene)
 //   - Isometric camera projection (Camera)
-//
-// All spatial decisions come from the sidecar. This file only executes them visually.
 package game
 
 import (
@@ -52,9 +50,9 @@ type Game struct {
 
 	assetsRefreshed bool
 
-	diagFrame   int
-	diagPixels  []byte
-	probeLogged bool
+	diagFrame        int
+	diagPixels       []byte
+	probeLogged      bool
 	layoutProbeCount int
 
 	mainHallFallbackChecked bool
@@ -111,12 +109,54 @@ func (g *Game) Layout(outsideW, outsideH int) (int, int) {
 		g.scene.SetActiveRoom(g.currentRoomID)
 		g.scene.SetMiloState(g.currentState)
 		g.scene.SetRoute(nil)
+		g.initializeCameraView()
 		g.initialized = true
 		log.Printf("game: layout initialized outside=%dx%d room=%s state=%s", outsideW, outsideH, g.currentRoomID, g.currentState)
 		g.loggedLayout = true
 		g.loggedDraw = false
 	}
 	return outsideW, outsideH
+}
+
+func (g *Game) cameraWorldBounds() WorldBounds {
+	return CastleWorldBounds(g.cam)
+}
+
+func (g *Game) initializeCameraView() {
+	if g.cam == nil {
+		return
+	}
+	worldBounds := g.cameraWorldBounds()
+	g.cam.FitToBounds(worldBounds, 36, 96)
+
+	mainHallLayout, ok := RoomWorldLayoutFor("main_hall")
+	if !ok {
+		return
+	}
+	mainHallBounds := mainHallLayout.Bounds().Normalized()
+	if !mainHallBounds.Valid() {
+		return
+	}
+
+	targetRoomWidth := float64(g.cam.ScreenW) * 0.70
+	roomZoom := clamp(targetRoomWidth/mainHallBounds.Width(), g.cam.View.MinZoom, g.cam.View.MaxZoom)
+	g.cam.View.Zoom = roomZoom
+
+	mainHallCenterX := (mainHallBounds.MinX + mainHallBounds.MaxX) / 2
+	mainHallCenterY := (mainHallBounds.MinY + mainHallBounds.MaxY) / 2
+	screenCenterX := float64(g.cam.ScreenW) / 2
+	screenCenterY := float64(g.cam.ScreenH) / 2
+
+	g.cam.View.PanX = screenCenterX - g.cam.OffsetX - (mainHallCenterX-g.cam.OffsetX)*g.cam.View.Zoom
+	g.cam.View.PanY = screenCenterY - g.cam.OffsetY - (mainHallCenterY-g.cam.OffsetY)*g.cam.View.Zoom
+	g.cam.ClampToBounds(worldBounds, 36, 96)
+}
+
+func (g *Game) clampCameraToWorld() {
+	if g.cam == nil {
+		return
+	}
+	g.cam.ClampToBounds(g.cameraWorldBounds(), 36, 96)
 }
 
 // Update implements ebiten.Game. Called 60 times per second.
@@ -155,31 +195,6 @@ func (g *Game) consumeCameraTouches() {
 		return
 	}
 
-	clampMainHallView := func() {
-		if g.scene == nil || g.scene.activeID != "main_hall" {
-			return
-		}
-
-		leftX, leftY := g.cam.AnchorToScreen("main_hall_left")
-		rightX, rightY := g.cam.AnchorToScreen("main_hall_right")
-		_, frontY := g.cam.AnchorToScreen("main_hall_front")
-		doorX, doorY := g.cam.AnchorToScreen("main_hall_door")
-		throneX, throneY := g.cam.AnchorToScreen("main_hall_throne")
-		centerX, _ := g.cam.AnchorToScreen("main_hall_center")
-
-		minX := minFloat(leftX, doorX) - 160
-		maxX := maxFloat(rightX, throneX) + 160
-		minY := throneY - 180
-		maxY := maxFloat(frontY, maxFloat(leftY, maxFloat(rightY, doorY))) + 120
-
-		g.cam.ClampViewToProjectedRect(minX, minY, maxX, maxY, 36, 96)
-
-		// Keep the clamp centered on the hall if the safe region degenerates.
-		if minX >= maxX || minY >= maxY {
-			g.cam.ClampViewToProjectedRect(centerX-160, throneY-180, centerX+160, frontY+120, 36, 96)
-		}
-	}
-
 	touchIDs := ebiten.AppendTouchIDs(nil)
 	if len(touchIDs) == 0 {
 		g.cameraTouchCount = 0
@@ -211,7 +226,7 @@ func (g *Game) consumeCameraTouches() {
 		next := current[id]
 		if ok {
 			g.cam.PanBy(next.x-prev.x, next.y-prev.y)
-			clampMainHallView()
+			g.clampCameraToWorld()
 		}
 		g.cameraTouchLast = current
 		return
@@ -222,7 +237,7 @@ func (g *Game) consumeCameraTouches() {
 		g.cam.ZoomAround(dist/g.cameraPinchDist, midX, midY)
 	}
 	g.cam.PanBy(midX-g.cameraPinchMidX, midY-g.cameraPinchMidY)
-	clampMainHallView()
+	g.clampCameraToWorld()
 	g.cameraTouchLast = current
 	g.cameraPinchMidX = midX
 	g.cameraPinchMidY = midY
@@ -378,7 +393,7 @@ func (g *Game) handleEvent(ev client.RawEvent) {
 		g.currentRoute = RouteBetweenVariant(g.currentRoomID, p.ToRoom, variant)
 		g.scene.SetRoute(g.currentRoute)
 
-	// "milo.room_changed" — Milo has arrived. Switch the active room background.
+	// "milo.room_changed" — Milo has arrived. Update the active room state.
 	case "milo.room_changed":
 		var p RoomChanged
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {

@@ -5,7 +5,7 @@ import "sort"
 type RoomID string
 
 const (
-  	RoomMainHall    RoomID = "main_hall"
+	RoomMainHall    RoomID = "main_hall"
 	RoomArchive     RoomID = "archive"
 	RoomTrophy      RoomID = "trophy_room"
 	RoomStudy       RoomID = "study"
@@ -61,15 +61,26 @@ var roomAliasMap = map[string]RoomID{
 
 var sceneRoomMap = map[RoomID]string{
 	RoomArchive:     "archive",
-	RoomTrophy:      "trophy",
-	RoomStudy:       "library",
-	RoomWorkshop:    "war_room",
-	RoomObservatory: "crystal_orb",
-	RoomPotions:     "cauldron",
+	RoomTrophy:      "trophy_room",
+	RoomStudy:       "study",
+	RoomWorkshop:    "workshop",
+	RoomObservatory: "observatory",
+	RoomPotions:     "potions_room",
+	RoomThreshold:   "threshold",
 	RoomMainHall:    "main_hall",
 }
 
 var roomTopologies = map[RoomID]RoomTopology{
+	RoomMainHall: {
+		Canonical:   RoomMainHall,
+		DisplayName: "Main Hall",
+		Cluster:     "home",
+		LaunchLive:  false,
+		SafeIdle:    true,
+		Neighbors:   nil,
+		MapX:        0,
+		MapY:        0,
+	},
 	RoomArchive: {
 		Canonical:   RoomArchive,
 		DisplayName: "Archive",

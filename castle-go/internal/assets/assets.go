@@ -35,15 +35,22 @@ var placeholderColors = map[string]color.RGBA{
 	"sprites/milo/stirring": {R: 180, G: 60, B: 180, A: 255},  // magenta — cauldron
 	"sprites/milo/gazing":   {R: 60, G: 180, B: 200, A: 255},  // cyan — orb gaze
 	"rooms/main_hall":       {R: 60, G: 60, B: 80, A: 255},
-	"rooms/war_room":        {R: 80, G: 50, B: 50, A: 255},
-	"rooms/library":         {R: 60, G: 70, B: 50, A: 255},
-	"rooms/training_room":   {R: 50, G: 60, B: 80, A: 255},
-	"rooms/spellbook":       {R: 70, G: 50, B: 80, A: 255},
-	"rooms/cauldron":        {R: 50, G: 70, B: 50, A: 255},
-	"rooms/crystal_orb":     {R: 40, G: 60, B: 90, A: 255},
-	"rooms/baby_dragon":     {R: 80, G: 60, B: 40, A: 255},
-	"rooms/trophy":          {R: 80, G: 70, B: 30, A: 255},
 	"rooms/archive":         {R: 50, G: 50, B: 60, A: 255},
+	"rooms/trophy_room":     {R: 86, G: 72, B: 30, A: 255},
+	"rooms/study":           {R: 54, G: 64, B: 48, A: 255},
+	"rooms/workshop":        {R: 70, G: 52, B: 40, A: 255},
+	"rooms/observatory":     {R: 32, G: 48, B: 86, A: 255},
+	"rooms/potions_room":    {R: 38, G: 72, B: 50, A: 255},
+	"rooms/threshold":       {R: 52, G: 46, B: 72, A: 255},
+	// Legacy room IDs retained as compatibility fallback aliases.
+	"rooms/war_room":      {R: 70, G: 52, B: 40, A: 255},
+	"rooms/library":       {R: 54, G: 64, B: 48, A: 255},
+	"rooms/cauldron":      {R: 38, G: 72, B: 50, A: 255},
+	"rooms/crystal_orb":   {R: 32, G: 48, B: 86, A: 255},
+	"rooms/trophy":        {R: 86, G: 72, B: 30, A: 255},
+	"rooms/training_room": {R: 50, G: 60, B: 80, A: 255},
+	"rooms/spellbook":     {R: 70, G: 50, B: 80, A: 255},
+	"rooms/baby_dragon":   {R: 80, G: 60, B: 40, A: 255},
 }
 
 const (
@@ -234,17 +241,17 @@ func drawChamberFeature(img *image.RGBA, roomID string, palette roomColors, w, h
 		fillRect(img, w-166, h/2+18, 112, 182, darken(palette.arch, 0.05))
 		fillRect(img, w/2-60, h/2+26, 120, 74, lighten(palette.glow, 0.28))
 		drawDiamond(img, w/2, 158, 34, 34, color.RGBA{R: 196, G: 225, B: 255, A: 168})
-	case "crystal_orb":
+	case "observatory", "crystal_orb":
 		fillRect(img, w/2-98, 72, 196, 172, palette.glow)
 		drawDiamond(img, w/2, 170, 78, 78, lighten(palette.feature, 0.22))
 		fillRect(img, w/2-56, 220, 112, 96, darken(palette.feature, 0.18))
 		drawTintGlow(img, w/2-82, 100, 164, 148, color.RGBA{R: 143, G: 221, B: 255, A: 80})
-	case "library":
+	case "study", "library":
 		fillRect(img, 58, 92, 130, 210, darken(palette.arch, 0.08))
 		fillRect(img, w-188, 92, 130, 210, darken(palette.arch, 0.08))
 		fillRect(img, w/2-112, h/2-6, 224, 112, palette.feature)
 		fillRect(img, w/2-62, h/2+16, 124, 72, lighten(palette.feature, 0.12))
-	case "war_room":
+	case "workshop", "war_room":
 		fillRect(img, w/2-150, h/2-8, 300, 116, palette.feature)
 		fillRect(img, w/2-54, 84, 108, 128, palette.glow)
 	default:
@@ -416,7 +423,7 @@ func parseMiloKey(key string) (state, facing string) {
 }
 
 func drawWallWindows(img *image.RGBA, roomID string, palette roomColors, w, h int) {
-	if roomID == "archive" || roomID == "library" {
+	if roomID == "archive" || roomID == "study" || roomID == "library" {
 		return
 	}
 	windowColor := lighten(palette.glow, 0.22)
@@ -431,13 +438,13 @@ func drawRoomRunner(img *image.RGBA, roomID string, palette roomColors, w, h int
 	case "main_hall":
 		fillRect(img, w/2-54, h/2+102, 108, h/2-118, darken(palette.feature, 0.34))
 		fillRect(img, w/2-34, h/2+102, 68, h/2-118, lighten(palette.feature, 0.04))
-	case "library":
+	case "study", "library":
 		fillRect(img, w/2-70, h/2+94, 140, h/2-118, darken(palette.feature, 0.3))
 		fillRect(img, w/2-48, h/2+94, 96, h/2-118, lighten(palette.feature, 0.02))
 	case "archive":
 		fillRect(img, w/2-62, h/2+102, 124, h/2-126, darken(palette.feature, 0.24))
 		fillRect(img, w/2-40, h/2+102, 80, h/2-126, lighten(palette.feature, 0.08))
-	case "crystal_orb":
+	case "observatory", "crystal_orb":
 		fillRect(img, w/2-48, h/2+102, 96, h/2-126, darken(palette.feature, 0.24))
 	}
 }
@@ -518,34 +525,36 @@ func roomPalette(roomID string) roomColors {
 		// we are forced onto procedural fallback on-device. Keep this palette brighter
 		// and higher-contrast than the generic default.
 		return roomColors{
-			rgba(82, 80, 118, 255),  // bgTop
-			rgba(44, 42, 70, 255),   // bgBottom
+			rgba(82, 80, 118, 255),   // bgTop
+			rgba(44, 42, 70, 255),    // bgBottom
 			rgba(126, 118, 168, 255), // floorTile
-			rgba(10, 10, 18, 86),    // vignette
-			rgba(12, 11, 18, 150),   // floorShadow
+			rgba(10, 10, 18, 86),     // vignette
+			rgba(12, 11, 18, 150),    // floorShadow
 			rgba(196, 184, 255, 108), // glow
 			rgba(112, 108, 156, 255), // arch
 			rgba(176, 160, 224, 255), // feature
-			rgba(30, 28, 48, 255),   // border
+			rgba(30, 28, 48, 255),    // border
 		}
-	case "war_room":
+	case "workshop", "war_room":
 		return roomColors{rgba(52, 36, 43, 255), rgba(32, 25, 30, 255), rgba(93, 64, 61, 255), rgba(17, 12, 16, 120), rgba(18, 12, 14, 180), rgba(118, 79, 82, 90), rgba(83, 54, 59, 255), rgba(126, 88, 76, 255), rgba(27, 18, 21, 255)}
-	case "library":
+	case "study", "library":
 		return roomColors{rgba(47, 56, 43, 255), rgba(27, 33, 29, 255), rgba(79, 90, 67, 255), rgba(14, 16, 12, 110), rgba(17, 18, 13, 180), rgba(145, 118, 84, 80), rgba(71, 78, 54, 255), rgba(114, 89, 58, 255), rgba(21, 25, 19, 255)}
 	case "training_room":
 		return roomColors{rgba(40, 49, 68, 255), rgba(24, 29, 43, 255), rgba(68, 82, 103, 255), rgba(12, 15, 24, 110), rgba(14, 16, 22, 180), rgba(102, 146, 190, 70), rgba(50, 59, 79, 255), rgba(91, 109, 141, 255), rgba(18, 22, 31, 255)}
 	case "spellbook":
 		return roomColors{rgba(56, 39, 72, 255), rgba(31, 21, 42, 255), rgba(88, 64, 112, 255), rgba(14, 10, 20, 120), rgba(16, 11, 22, 180), rgba(161, 113, 217, 80), rgba(78, 56, 106, 255), rgba(121, 85, 152, 255), rgba(22, 16, 30, 255)}
-	case "cauldron":
+	case "potions_room", "cauldron":
 		return roomColors{rgba(32, 58, 46, 255), rgba(16, 31, 24, 255), rgba(57, 95, 72, 255), rgba(9, 16, 12, 120), rgba(10, 17, 13, 180), rgba(84, 188, 121, 74), rgba(46, 76, 62, 255), rgba(86, 128, 89, 255), rgba(15, 24, 19, 255)}
-	case "crystal_orb":
+	case "observatory", "crystal_orb":
 		return roomColors{rgba(24, 43, 79, 255), rgba(12, 19, 39, 255), rgba(48, 76, 116, 255), rgba(7, 10, 19, 120), rgba(9, 11, 20, 180), rgba(98, 168, 255, 84), rgba(35, 56, 91, 255), rgba(78, 109, 161, 255), rgba(13, 21, 39, 255)}
 	case "baby_dragon":
 		return roomColors{rgba(74, 48, 27, 255), rgba(43, 27, 16, 255), rgba(117, 84, 46, 255), rgba(20, 11, 7, 110), rgba(22, 14, 7, 180), rgba(220, 153, 96, 80), rgba(99, 65, 37, 255), rgba(166, 108, 57, 255), rgba(31, 19, 12, 255)}
-	case "trophy":
+	case "trophy_room", "trophy":
 		return roomColors{rgba(79, 65, 23, 255), rgba(46, 34, 14, 255), rgba(125, 104, 44, 255), rgba(20, 15, 8, 110), rgba(22, 16, 8, 180), rgba(238, 213, 125, 82), rgba(103, 84, 31, 255), rgba(186, 158, 69, 255), rgba(31, 24, 11, 255)}
 	case "archive":
 		return roomColors{rgba(42, 47, 64, 255), rgba(24, 27, 39, 255), rgba(69, 78, 101, 255), rgba(12, 13, 22, 118), rgba(13, 14, 24, 180), rgba(132, 182, 255, 68), rgba(58, 63, 82, 255), rgba(110, 121, 152, 255), rgba(18, 21, 30, 255)}
+	case "threshold":
+		return roomColors{rgba(42, 36, 58, 255), rgba(24, 20, 36, 255), rgba(76, 66, 98, 255), rgba(12, 10, 20, 118), rgba(13, 11, 24, 180), rgba(160, 130, 232, 74), rgba(62, 54, 86, 255), rgba(106, 92, 148, 255), rgba(18, 16, 30, 255)}
 	default:
 		return roomColors{rgba(44, 48, 66, 255), rgba(24, 27, 40, 255), rgba(73, 80, 104, 255), rgba(12, 13, 23, 112), rgba(14, 15, 26, 180), rgba(152, 126, 232, 74), rgba(59, 64, 86, 255), rgba(109, 98, 156, 255), rgba(19, 22, 33, 255)}
 	}
@@ -651,7 +660,7 @@ func rgba(r, g, b, a uint8) color.RGBA {
 func AssetManifest() []string {
 	states := []string{"idle", "walking", "talking", "thinking", "sleeping", "working", "reading", "stirring", "gazing"}
 	facings := []string{"n", "s", "e", "w"}
-	rooms := []string{"main_hall", "war_room", "library", "training_room", "spellbook", "cauldron", "crystal_orb", "baby_dragon", "trophy", "archive"}
+	rooms := []string{"main_hall", "archive", "trophy_room", "study", "workshop", "observatory", "potions_room", "threshold"}
 	var paths []string
 	for _, s := range states {
 		for _, f := range facings {

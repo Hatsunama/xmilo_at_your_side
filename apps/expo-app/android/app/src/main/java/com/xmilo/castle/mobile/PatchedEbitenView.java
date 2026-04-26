@@ -251,7 +251,10 @@ public class PatchedEbitenView extends EbitenView {
         if (child != null) {
             child.layout(0, 0, w, h);
         }
-        Ebitenmobileview.layout(w, h);
+        double scale = Ebitenmobileview.deviceScale();
+        double widthInDp = w / scale;
+        double heightInDp = h / scale;
+        Ebitenmobileview.layout(widthInDp, heightInDp);
 
         if (w != lastW || h != lastH) {
             lastW = w;

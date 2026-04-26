@@ -1,0 +1,1625 @@
+XMILO MASTER PHASE LIST (SOURCE OF TRUTH)
+Last updated: 2026-03-24
+Owner: MAIN HUB (this chat)
+
+Hard rules:
+- Main hub is final authority for scope, phase ordering, blocker decisions, and cross-lane integration.
+- Side bots execute within lane only and do not widen scope.
+- Do not solve code/state enforcement with prompt-only fixes.
+- Testing grounds minimizes live LLM tokens (baseline-first, caching, no reruns for report regeneration).
+- Naming ownership rule:
+  - Anything that is ours must carry an xMilo-owned name.
+  - Do not ship, present, install, or rely on third-party-branded internal names for xMilo-owned binaries, services, screens, scripts, folders, or user-facing runtime artifacts.
+  - Temporary legacy names must be treated as rename debt and scheduled out before release/public distribution.
+- Canonical naming matrix:
+  - Public product name: `xMilo`
+    - Use `xMilo` for app UI, Play/store copy, website/support/privacy surfaces, user messaging, screenshots, reviewer materials, and default product references.
+  - Internal governed subsystem name: `xMiloClaw`
+    - Use `xMiloClaw` only when precisely naming the xMilo-owned governed skills/runtime/conversion subsystem in code, internal specs, diagnostics, research, or migration material.
+    - `xMiloClaw` must not replace `xMilo` as the public product name.
+  - Upstream external source name: `OpenClaw`
+    - Use `OpenClaw` only when explicitly referring to the upstream external ecosystem or quoted provenance.
+  - Forbidden as current public/product/runtime names:
+    - `PicoClaw`
+    - `picoClaw`
+    - `picoclaw`
+    - `OpenClaw` when referring to our shipped product or xMilo-owned runtime
+  - Legacy-name allowance:
+    - Legacy `PicoClaw` / `picoClaw` / `picoclaw` references may appear only in quoted historical artifacts, migration notes, rename-debt trackers, or compatibility maps until removed.
+- Art lane screenshot gate is mandatory definition-of-done:
+  - At the end of EVERY art phase, capture Milo screenshots for EVERY required room before moving forward.
+  - Save screenshots to `xMilo/artifacts/phase_screens/phase_##/` (or canonical equivalent) and write `manifest.txt` in the same phase folder.
+  - Required filename format: `phase_##__room_name__state.png` (with stable `__01` suffix for multiple captures).
+  - Verify all required files exist, are non-empty, and represent the current phase (not reused).
+  - If any room is inaccessible/broken, capture failure state, log blocker in manifest, and STOP phase progression.
+  - A phase cannot be marked complete unless the manifest proves all required room captures were saved successfully.
+
+Repos / lanes:
+- Production/runtime: C:\xMilo\xmilo_at_your_side
+- Testing grounds:   C:\\xMilo\\xmilo_at_your_side\\legacy_from_xMilo_v14_fix\\xmilo-testing-grounds
+- Website/payment:   C:\\xMilo\\xmilo_at_your_side\\__website_access_code_system (parked)
+- UX research lane: research-only until hub approves implementation; no speculative code changes
+- Current lane ownership lock:
+  - Main Hub
+    - owns source-of-truth wording, authority docs, phase ordering, blocker arbitration, and cross-lane integration
+  - Milo Mind lane
+    - owns `sidecar-go/`, `relay-go/`, runtime control logic, auth/entitlement refresh logic, memory governance, continuity, and runtime-side contracts
+  - Main App Builder lane
+    - owns `apps/expo-app/`, app-shell/on-device UX truth, phone-truth validation, and app-side rendering of approved runtime state
+  - Testing Grounds lane
+    - owns `C:\\xMilo\\xmilo_at_your_side\\legacy_from_xMilo_v14_fix\\xmilo-testing-grounds`, eval harnesses, fixtures, batteries, review anchors, and regression artifacts
+  - Art lane
+    - owns `castle-go/` and required screenshot/manifest proof
+  - UX Research lane
+    - owns research findings and implementation planning only; no speculative repo code changes
+  - Website lane
+    - owns `C:\\xMilo\\xmilo_at_your_side\\__website_access_code_system` public commerce/account/support surfaces only while parked
+- No lane may claim another lane's writable scope unless Main Hub explicitly reassigns it.
+- Verified narrow blockers must be resolved by Main Hub using `INTEGRATION_AUTHORITY.md` — `Minimal Permission Grant Rule`.
+- Active source-of-truth lookup lock:
+  - `LOCKED CANON`: `C:\xMilo\Source_Of_Truth_And_Phase_List_Master\` is the active canonical authority root.
+  - `LOCKED CANON`: first-pass active authority lookup starts at `C:\xMilo\Source_Of_Truth_And_Phase_List_Master\`.
+  - `LOCKED CANON`: the dedicated startup/setup authority file is `C:\xMilo\Source_Of_Truth_And_Phase_List_Master\XMILO_STARTUP_AND_SETUP_FLOW__SOURCE_OF_TRUTH.txt`.
+  - `LOCKED CANON`: older root-file locations outside `C:\xMilo\Source_Of_Truth_And_Phase_List_Master\` are archived / not active authority.
+  - `LOCKED CANON`: `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\source_of_truth\` remains a mirror/helper pack only and must not override the moved canonical copy.
+  - `LOCKED CANON`: future startup/setup flow updates must be written to the moved canonical authority copy first and then mirrored deliberately.
+
+PHASE 1C: Canonical Registry + Authority Packaging Compatibility Lock
+- Compatibility / non-override rule:
+  - LOCKED CANON: this block is a compatibility and clarification layer for unresolved architecture edges.
+  - LOCKED CANON: this block does not silently replace prior source-of-truth unless Main Hub explicitly states a supersession.
+  - LOCKED CANON: existing directives remain in force unless directly contradicted and explicitly retired by Main Hub.
+  - LOCKED CANON: canonical source-of-truth remains the controlling authority.
+  - LOCKED CANON: thin registries/indexes are lookup layers, not independent policy authors.
+  - LOCKED CANON: deeper authority files continue to define scope and meaning unless Main Hub explicitly consolidates or supersedes them.
+  - LOCKED CANON: no lane may use this block to widen writable scope, reinterpret ownership, or bypass existing lane boundaries.
+- Decision status rule:
+  - LOCKED CANON: every decision produced by this block must be explicitly classified as `LOCKED CANON`, `PROVISIONAL UNTIL VERIFIED`, or `REJECTED / NOT ADOPTED`.
+  - LOCKED CANON: no unresolved item may remain implied or unstated.
+  - LOCKED CANON: every provisional item must name the owner responsible for verification and the condition required to convert it to locked canon.
+  - LOCKED CANON: rejected items must be explicitly rejected rather than silently omitted.
+- Patch 1 — xMiloClaw canonical skill registry architecture:
+  - LOCKED CANON: the canonical xMiloClaw skill registry source of truth is `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\SKILL_REGISTRY.md`.
+  - LOCKED CANON: the skill registry is index-only and may contain metadata, activation state, implementation references, validation state, and approval state only.
+  - LOCKED CANON: the skill registry must not contain executable logic, giant prompt blobs as the canonical resolver, or ad hoc runtime-only registrations with no canonical registry entry.
+  - LOCKED CANON: real skill implementation lives in separate prompt-pack files, declarative skill-spec files interpreted by shipped runtime code, or server-side Go/runtime registrations behind approved typed contracts.
+  - LOCKED CANON: required per-skill metadata contract is:
+    - `skill_id`
+    - `display_name`
+    - `registry_status`
+    - `implementation_kind`
+    - `implementation_ref`
+    - `source_origin`
+    - `approval_state`
+    - `validation_state`
+    - `owner_lane`
+    - `size_class`
+    - `version`
+    - `notes`
+  - LOCKED CANON: external/community-added skills enter through candidate status first, must pass import validation/basic safety screening, and may not become active until explicitly approved.
+  - LOCKED CANON: skill resolution is registry-driven at runtime only against approved entries and approved implementation kinds; Play-unsafe dynamic code loading remains disallowed.
+  - LOCKED CANON: malformed, missing, disabled, oversized, or validation-failed skill entries must fail closed:
+    - do not activate
+    - do not crash runtime resolution
+    - surface `disabled`, `invalid`, or `review_required` state in the relevant admin/import UI
+  - LOCKED CANON: registry layer edit authority belongs to Main Hub.
+  - LOCKED CANON: Research Lane and Conversion Lane may contribute candidate skills and candidate metadata, but may not canonize active registry entries without Main Hub approval.
+  - REJECTED / NOT ADOPTED: using mixed metadata/logic markdown blobs, giant prompt files, or freeform runtime registrations as the canonical resolver model.
+  - PROVISIONAL UNTIL VERIFIED: initial per-skill population of `SKILL_REGISTRY.md` is incomplete.
+    - owner: Conversion Lane
+    - conversion condition: approved starter/candidate skills are entered with full metadata and implementation references under Main Hub review
+- Patch 2 — canonical lane registry lookup layer:
+  - LOCKED CANON: the canonical fast lane lookup file is `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\LANE_REGISTRY.md`.
+  - LOCKED CANON: resolve lane assignment from `LANE_REGISTRY.md` first.
+  - LOCKED CANON: use deeper authority/source-of-truth files only for expanded scope detail, not as a replacement for first-pass lane lookup.
+  - LOCKED CANON: never guess lane identity from task wording alone.
+  - LOCKED CANON: if routing remains ambiguous after registry lookup, escalate to Main Hub decision rather than free-assigning ownership.
+  - LOCKED CANON: Main Hub owns lane registry updates and lane metadata canonization.
+  - LOCKED CANON: lane numbers 1-9 are canonized in `LANE_REGISTRY.md` as the current official lookup set.
+  - LOCKED CANON: future lanes may be added only by explicit Main Hub decision, and `LANE_REGISTRY.md` must be updated in the same change set that creates or canonizes the new lane.
+  - LOCKED CANON: if a future lane overlaps an existing lane's writable scope, Main Hub must resolve the boundary before the lane becomes active.
+  - LOCKED CANON: no lane is canonically active until it appears in `LANE_REGISTRY.md` or Main Hub explicitly marks it provisional.
+  - PROVISIONAL UNTIL VERIFIED: `Lane 10 = Release Signing and Play Distribution Lane` remains provisional as a dedicated lane.
+    - owner: Main Hub
+    - conversion condition: Main Hub explicitly activates the lane, locks its writable scope, and updates `LANE_REGISTRY.md`
+  - REJECTED / NOT ADOPTED: renaming `Lane 7` to `Design Lane` at this time.
+  - LOCKED CANON: `Lane 7` remains `UX Research Lane` unless Main Hub explicitly supersedes that name later.
+- Patch 3 — authority-file bootstrap / injection size safety policy:
+  - LOCKED CANON: authority-critical files must be structured for reliable loading; silent truncation or partial authority load is not acceptable normal behavior.
+  - LOCKED CANON: thin registries/indexes are preferred over oversized monolithic authority documents for bootstrap lookup.
+  - LOCKED CANON: selective retrieval is preferred over loading the full authority stack by default.
+  - LOCKED CANON: the only authority files eligible for default bootstrap-loading are:
+    - `C:\xMilo\XMILO_MASTER_PHASE_LIST_2026-03-24.txt`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\IDENTITY.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\SOUL.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\SECURITY.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\TOOLS.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\USER.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\HEARTBEAT.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\MEMORY.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\AGENTS.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\INTEGRATION_AUTHORITY.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\LANE_REGISTRY.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\SKILL_REGISTRY.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\BOOTSTRAP.md`
+    - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\PACKAGE_MANIFEST.md`
+  - LOCKED CANON: deeper specs and large context files remain on-demand only unless Main Hub explicitly promotes them:
+    - `specs/`
+    - `research/`
+    - `tasks/`
+    - `logs/`
+    - `state/`
+    - test batteries
+    - eval artifacts
+    - longform phase-specific support docs
+  - LOCKED CANON: registry/index files must remain intentionally small and fast to scan.
+  - LOCKED CANON: if a bootstrap-targeted file risks oversize, partial load, or truncation, tooling/runtime must warn and that file must be split into a thin index/manifest plus on-demand companion before it remains bootstrap-eligible.
+  - LOCKED CANON: Main Hub approves split, replacement, or deprecation of authority files that affect canon loading behavior.
+  - PROVISIONAL UNTIL VERIFIED: the exact numeric maximum recommended size for a single bootstrap-loaded authority file is not yet locked.
+    - owner: Main Hub
+    - conversion condition: verify actual bootstrap/runtime loading behavior against the current xMilo/OpenClaw config and record the measured safe ceiling
+  - PROVISIONAL UNTIL VERIFIED: the exact warning threshold and hard rejection threshold for bootstrap-targeted authority files are not yet locked.
+    - owner: Main Hub
+    - conversion condition: same measured loading evidence as above
+  - REJECTED / NOT ADOPTED: treating silent partial authority load, silent truncation, or oversized monolithic bootstrap blobs as acceptable normal behavior.
+
+PHASE 1D: Governed Memory / Authority Retrieval-Search Lock
+- Compatibility / non-override rule:
+  - LOCKED CANON: Markdown source-of-truth files remain canonical human-readable authority.
+  - LOCKED CANON: retrieval/search infrastructure does not replace Markdown canon and may not become independent policy authority.
+  - LOCKED CANON: existing memory-governance rules remain in force unless Main Hub explicitly retires or supersedes them.
+  - LOCKED CANON: if older wording implies broad prompt stuffing, giant-file loading, or unclear retrieval behavior, resolve that wording explicitly rather than leaving silent tension.
+- Canonical priority rule:
+  - LOCKED CANON: authority resolution order is:
+    - 1) source-of-truth authority docs
+    - 2) Main Hub canon decisions
+    - 3) verified runtime/config/state
+    - 4) governed retrieval/search over approved files
+    - 5) analysis derived from those layers
+- Retrieval/search architecture rule:
+  - LOCKED CANON: governed retrieval/search over approved memory/authority paths is runtime infrastructure, not a policy author.
+  - LOCKED CANON: retrieval/search may only retrieve the minimum relevant approved material needed for the current task.
+  - LOCKED CANON: retrieval/search must preserve provenance, type, trust boundaries, and authority order.
+  - LOCKED CANON: retrieval/search must not promote external content into durable policy or canon by implication.
+  - LOCKED CANON: suspicious or quarantined memory/content must remain suppressible and must not be silently promoted by retrieval.
+  - LOCKED CANON: retrieval failure must fail conservatively rather than pretending success.
+- Backend naming rule:
+  - LOCKED CANON: source-of-truth locks the retrieval/search behavior and architecture even if the exact backend implementation remains unverified.
+  - PROVISIONAL UNTIL VERIFIED: the exact retrieval/search backend implementation name (`QMD` or equivalent), config path, indexing defaults, and fallback chain are not yet locked.
+    - owner: Milo Mind lane
+    - conversion condition: the current build contains verified runtime/config evidence for the selected backend and the integration/runtime authority files are updated with that implementation detail
+- File-structure direction:
+  - LOCKED CANON: searchable subfiles are allowed and preferred when large monolithic files would threaten load reliability, clarity, or prompt budget.
+  - LOCKED CANON: thin registry/index/manifest files may point to deeper files; they do not replace deeper authority meaning.
+  - LOCKED CANON: memory/history/supporting content may be split into governed subfiles where useful.
+  - REJECTED / NOT ADOPTED: giant single-file memory loading as the intended long-term runtime model.
+- Conflict-resolution lock:
+  - LOCKED CANON: bootstrap-safe thin files may be loaded directly at startup when they are intentionally small and policy-critical.
+  - LOCKED CANON: deeper memory/authority files are on-demand/search-retrieved by relevance, not loaded wholesale by default.
+  - LOCKED CANON: `MEMORY.md` remains canonical memory policy; retrieval/index infrastructure belongs in integration/runtime authority, not inside `MEMORY.md` as if content and retrieval infrastructure were the same layer.
+
+PHASE 1E: Authority Status Normalization Lock
+- LOCKED CANON: `C:\xMilo\xmilo_wt_lane1_authority\docs\authority\xMilo_v1\PHASE_PLAN_MASTER.md` is an active mirror/sub-source, not co-equal canon.
+- LOCKED CANON: if `PHASE_PLAN_MASTER.md` and `XMILO_MASTER_PHASE_LIST_2026-03-24.txt` ever diverge, the master phase list controls unless Main Hub explicitly states otherwise.
+- LOCKED CANON: `C:\xMilo\XMILO_UX_RESEARCH_LANE_DIRECTIVE_2026-03-24.txt` is a supporting-only lane directive for Lane 7 guidance.
+- LOCKED CANON: the UX research lane directive is not part of the core cross-lane canon chain and may not override master/source-of-truth decisions.
+- LOCKED CANON: within `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\`, the status of authority-like subfolders is:
+  - `memory/` = supporting/on-demand authority layer
+  - `specs/` = supporting/on-demand authority layer
+  - `tasks/` = operational/supporting layer
+  - `state/` = operational/supporting layer
+  - `logs/` = operational/supporting layer
+  - `scripts/` = operational/supporting or retired-evidence layer
+- LOCKED CANON: those subfolders are not co-equal canon with the master source-of-truth or bootstrap-safe thin authority files.
+- LOCKED CANON: archived, backup, cloned, and lane-worktree copies of authority-like files are `ARCHIVED / NOT ACTIVE AUTHORITY` unless Main Hub explicitly selects them for active use.
+- LOCKED CANON: matching filenames alone do not make a worktree or backup copy active authority.
+
+PHASE 1F: Main Hub Response Contract Lock
+- Compatibility / non-override rule:
+  - LOCKED CANON: `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\MAIN_HUB_RESPONSE_CONTRACT.md` is a thin response-shape contract only.
+  - LOCKED CANON: the response contract does not replace lane directives, does not widen lane scope, and does not create a new shadow authority layer.
+  - LOCKED CANON: if a lane-specific directive or Main Hub assignment defines a stricter output requirement, the stricter rule still wins unless Main Hub explicitly supersedes it.
+- Response-shape rule:
+  - LOCKED CANON: lane responses to Main Hub assignments, blockers, handoffs, proof requests, and closure checks must follow `MAIN_HUB_RESPONSE_CONTRACT.md`.
+  - LOCKED CANON: lanes should not send routine progress chatter unless Main Hub explicitly requested interim updates or a true blocker, canon conflict, or immediate safety/release-risk escalation is discovered.
+  - LOCKED CANON: blocker messages must be narrow, truthful, and artifact-specific.
+  - LOCKED CANON: cross-lane proof handoffs must be reusable and explicit enough that Main Hub does not need to manually re-translate a compliant packet.
+  - LOCKED CANON: partial work must not be framed as completion when required proof is still missing.
+
+PHASE 1: Hub Lock
+- Lock lane ownership and writable scopes.
+- Lock "no freeform drift" rule and "hub answers ahead of time" rule.
+- Lock token-min policy for live calls.
+
+PHASE 1A: Milo Mind Governed Self-Evolution Lock
+- Ouroboros may be used as inspiration only, not imported wholesale.
+- Adopt:
+  - persistent identity continuity
+  - structured opportunity queue
+  - bounded proposal generation
+  - review before promotion
+  - rollback-aware iteration
+  - lineage/history of accepted improvements
+- Reject:
+  - autonomous goal formation
+  - unconstrained self-rewriting production code
+  - hidden background evolution loops
+  - self-committing / self-deploying runtime behavior
+  - policy/canon/safety mutation by self-editing
+- xMilo-compatible self-evolution definition:
+  - Milo may detect weaknesses, generate bounded improvement proposals, evaluate them in sandbox, and request promotion through governed approval paths.
+  - Milo may not widen scope, invent goals, or silently alter protected behavior.
+- Protected surfaces for this phase:
+  - canon
+  - authority order
+  - safety policy
+  - payment/entitlement
+  - trust/consent flows
+  - secrets / credentials
+  - Play/legal/privacy declarations
+- Required implementation artifacts:
+  - opportunity schema
+  - proposal schema
+  - evaluation schema
+  - lineage schema
+  - rollback path
+  - review gate
+- Required behavior:
+  - sandbox-only apply for low-risk reversible single-lane changes
+  - production promotion never autonomous
+  - review must check authority, safety, evidence, and regression against accepted reference sets
+- Locked prompt/spec:
+  - `C:\xMilo\xmilo_at_your_side\docs\authority\xMilo_v1\specs\MILO_MIND_GOVERNED_SELF_EVOLUTION_PROMPT.md`
+
+PHASE 1B: Topic-Aware Conversation Lanes (PLANNING LOCK)
+- Core definition / purpose:
+  - Topic-aware conversation lanes are continuity containers for user-facing conversation context.
+  - Their purpose is to preserve clarity and continuity across meaningfully different user topics without turning xMilo into a chat-thread maze.
+
+- User topic lane vs internal lane rule:
+  - Topic-aware conversation lanes are user-facing or user-context continuity containers only.
+  - Topic-aware conversation lanes are not internal work lanes.
+  - Topic-aware conversation lanes are not implementation lanes.
+  - Topic-aware conversation lanes are not orchestration lanes.
+  - Topic-aware conversation lanes are not verification lanes.
+  - Topic-aware conversation lanes are not background task lanes.
+  - Existing internal lane concepts and ownership models remain separate and must not be merged into user topic-lane behavior.
+
+- Internal/external separation rule:
+  - Internal lane handling remains an implementation and orchestration concern.
+  - User topic lanes, if surfaced at all, exist only to preserve user conversation continuity and reduce context confusion.
+  - Internal routing, worker assignment, verification state, and execution ownership must not be exposed to the user as topic-lane structure unless explicitly approved elsewhere.
+  - If user-visible topic-lane affordances exist, they must be limited, calm, and continuity-oriented rather than operational or technical.
+
+- Topic boundary rule:
+  - `same-topic continuation`
+    - A follow-up that keeps the same primary user goal, artifact, decision thread, or active problem space.
+    - Default behavior: remain in the same topic lane.
+  - `subtopic within same lane`
+    - A narrower branch, clarification, example, or related follow-up that still materially belongs to the same primary goal or workstream.
+    - Default behavior: remain in the same topic lane.
+  - `truly new topic`
+    - A shift to a meaningfully different primary goal, different problem domain, different long-lived task area, or different continuity context such that keeping the old lane would reduce clarity.
+    - Only this class is eligible for a new topic lane.
+  - Minor wording changes, small tangents, clarifying questions, shallow side branches, and closely related continuations do not justify a new topic lane by themselves.
+
+- No thread explosion rule:
+  - Do not create a new topic lane for every minor follow-up.
+  - Do not create a new topic lane for wording shifts alone.
+  - Do not create a new topic lane for closely related continuations.
+  - Prefer continuity by default.
+  - Create a new topic lane only when a meaningful topic boundary is crossed and continuity would otherwise become misleading or cluttered.
+
+- User-visible complexity rule:
+  - Topic-aware conversation lanes must not turn the product into a manual thread-management system unless a separate explicit design decision approves that behavior.
+  - If topic lanes are user-visible, the interface must prevent clutter, duplication, and maze-like switching behavior.
+  - The user must not be forced to actively manage a large set of parallel lanes for normal use.
+  - The default user experience must remain simple, continuity-friendly, and low-friction.
+
+- Lane naming / surfacing rule:
+  - User topic lane names, summaries, and switching affordances, if surfaced, must describe user topic continuity only.
+  - They must not expose internal worker, routing, orchestration, or verification semantics.
+  - No weaker lane may reuse internal lane terminology as user topic-lane terminology.
+
+- Conflict-prevention rule:
+  - User topic lanes must not silently conflict with existing system lane concepts.
+  - Internal work lanes continue to govern ownership, execution, verification, and orchestration.
+  - User topic lanes continue to govern continuity of user-facing conversation context only.
+  - If a design decision would blur those boundaries, it must be escalated before implementation.
+
+- Proliferation-prevention acceptance rule:
+  - The design is valid only if it prevents:
+    - a new lane for every tangent
+    - a visible chat-thread maze
+    - internal orchestration lanes masquerading as user topic lanes
+    - user topic lanes silently conflicting with system lane concepts
+
+PHASE 2: Distribution Lock
+- Google Play is primary public distribution.
+- Sideloading is internal/dev/test only.
+
+PHASE 3: Build Flavor Split (MANDATORY)
+- Maintain two Android realities:
+  - internal/dev build for fast iteration and Termux bridge experiments.
+  - play/release build for Play submission (review-safe permissions/networking).
+
+PHASE 4: Play-Safe Manifest Hardening
+- Remove/restrict Play-risk permissions and flags in play/release:
+  - SYSTEM_ALERT_WINDOW
+  - com.termux.permission.RUN_COMMAND
+  - legacy storage permissions
+  - cleartext traffic in release
+
+PHASE 5: Release Signing and Release Artifact Hardening
+- Replace debug signing for release.
+- Produce clean AAB path.
+- Ensure reproducible release builds.
+
+PHASE 6: Target SDK / Play Submission Gate
+- Verify and meet current Play-required targetSdk at submission time.
+
+PHASE 7: Phone Truth Gate (EXTERNAL)
+- Attach physical Android phone over adb.
+- Validate native castle and on-device sidecar reachability.
+- Validate first real task path.
+
+PHASE 7A: Sidecar Lifecycle Recovery Lock (MANDATORY, APP-OWNED)
+- Root-cause framing:
+  - Sidecar-down recovery is an actuator / permissions / ownership gap.
+  - It is not a worker-lane self-improvement problem.
+  - Worker lanes may not redesign themselves, expand their authority, or rewrite governance because they detected this gap.
+- Final recommended architecture:
+  - xMilo app owns sidecar lifecycle authority.
+  - Restart authority must be narrow, explicit, and allowlisted.
+  - Normal recovery must not depend on ad hoc ADB or manual Termux interaction.
+  - If Termux remains the sidecar host in v1, the app may invoke only one approved restart entrypoint for sidecar recovery.
+  - No arbitrary shell execution and no broad Termux control surface are permitted.
+- V1 decision:
+  - Use a single owned restart entrypoint / service action.
+  - If a bridge into Termux is required, it must expose only that single approved restart action and nothing broader.
+- Ownership lock:
+  - Main App Builder lane owns the lifecycle controller, restart trigger, restart-state UX, and recovery verification surface.
+  - Milo Mind lane owns only sidecar health/ready/auth semantics and must not own restart authority.
+  - Main Hub owns the governance, allowlist, and operator-fallback template.
+- Restart trigger contract:
+  - App may trigger restart when sidecar-down state is detected by the approved health checks or when the approved recovery policy determines the sidecar is unavailable or unhealthy.
+  - Approved restart target is only the owned sidecar restart entrypoint using the canonical config path.
+  - App must not send arbitrary command text, arbitrary file paths, or arbitrary arguments through the bridge.
+- Recovery-proof contract:
+  - Do not mark restart successful unless all required checks pass:
+    - `GET /health`
+    - `GET /ready`
+    - auth state verification when the current flow depends on auth/entitlement
+  - Recovery proof must be tied to the same restart attempt and recorded as one bounded result:
+    - `restart_verified`
+    - `restart_failed`
+    - `restart_rate_limited`
+    - `restart_needs_operator`
+- Repeated-failure handling rule:
+  - Use bounded retry with rate limit/backoff.
+  - V1 ceiling:
+    - attempt 1: immediate
+    - attempt 2: after short cooldown
+    - attempt 3: after longer cooldown
+  - If verification still fails after the bounded retry budget, stop autonomous restart and switch to the single approved operator fallback.
+  - Do not loop indefinitely.
+  - Reset the retry budget only after a fully verified healthy state.
+- Lane behavior rule:
+  - Worker lanes may detect sidecar-down state.
+  - Worker lanes may report proof and request app-owned restart.
+  - Worker lanes may not invent new Termux commands.
+  - Worker lanes may not invent new ADB commands as the normal recovery path.
+  - Worker lanes may not turn this into self-authored governance or architecture change.
+  - If autonomous restart is unavailable, only the single approved operator fallback command template may be surfaced.
+- Operator fallback rule:
+  - Operator fallback is allowed only after the app-owned restart path is unavailable, rate-limited, or explicitly unsupported in that build/runtime.
+  - Operator fallback must use one canonical command template owned by Main Hub.
+  - Operator fallback is not the normal recovery path.
+
+PHASE 7B: Termux Bridge Prerequisite + Guided Repair Lock (MANDATORY, BUILD-BLOCKING)
+- Scope rule:
+  - This is a product/runtime hardening requirement, not a one-device patch.
+  - A single-device Termux edit may unblock testing, but it does not close the production issue by itself.
+- Hard prerequisite rule:
+  - If xMilo depends on Termux-hosted external-app execution for bootstrap, restart, or recovery, that bridge capability is a hard prerequisite.
+  - Do not treat Termux external-app execution enablement as an assumed environment detail.
+- End-to-end bridge verification rule:
+  - Setup must include an explicit end-to-end bridge verification step before setup may report completion.
+  - Package presence, permission presence, API presence, or bootstrap artifact presence alone are insufficient.
+  - Verification must prove the app can invoke the owned bridge action and receive the expected runtime proof.
+- Failure classification rule:
+  - Add and preserve the explicit failure class `TERMUX_EXTERNAL_APPS_DISABLED`.
+  - This class means the app-owned bridge is blocked because Termux external-app execution is disabled, unavailable, or not yet applied.
+  - Do not collapse this into generic retry, generic sidecar-down, or generic setup-failed wording.
+- Guided repair rule:
+  - If `TERMUX_EXTERNAL_APPS_DISABLED` is detected, the app must block normal setup completion and show a specific guided repair path.
+  - Recovery must be actionable and specific, not generic retry-only behavior.
+  - If compliant auto-repair is technically possible, prefer a one-tap or minimal-tap repair path.
+  - If compliant auto-repair is not technically possible, provide the simplest allowed user-facing guided fix plus a visible re-check action.
+  - Hidden terminal editing must not be treated as the normal recovery path.
+- Ownership lock:
+  - Main App Builder lane owns detection, failure classification, guided repair UX, blocking setup behavior, and re-check flow.
+  - Milo Mind lane owns only the runtime success semantics needed for verification and must not redefine the repair UX.
+  - Testing Grounds owns validation that this condition is caught, named, blocked, and recoverable.
+  - Main Hub owns the governance and release-gate wording.
+- Release gate rule:
+  - No build may pass release readiness if this condition can survive setup or recovery without explicit in-app diagnosis and recoverability.
+  - A build fails the gate if `TERMUX_EXTERNAL_APPS_DISABLED` can leave the user in a broken bridge state with no specific guided repair path.
+  - Internal operator steps may unblock a test device, but they do not satisfy production hardening by themselves.
+
+PHASE 8: Native Castle Closure
+- If confirmed draw: lock success.
+- If started/no draw or crash: fix smallest root cause and re-run validator.
+
+PHASE 9: Non-Commerce Launch Path
+- Keep payment out of core phone launch/testing.
+- Ensure setup -> main hall -> first task works without commerce.
+
+PHASE 9A: Setup UX Copy Lock (MANDATORY, NO DRIFT)
+- Required setup gates:
+  - Termux is required.
+  - Termux:API is required.
+  - Setup cannot proceed if either required dependency is missing.
+  - If the Termux-hosted bridge is part of the runtime path, setup cannot complete until the app-owned bridge verification step passes.
+  - Setup must detect and block `TERMUX_EXTERNAL_APPS_DISABLED` as a named repair state, not a generic retry state.
+- Walkthrough voice lock:
+  - All setup, install, permission, bootstrap, and add-on prompts must read like one continuous xMilo-guided walkthrough.
+  - Use magical framing where possible, but never hide the real system action.
+  - Every prompt must clearly state:
+    - what will open, install, or run
+    - why xMilo needs it
+    - whether it is required or optional
+    - what will not work if declined
+  - Do not mix warm xMilo copy with abrupt dev-only wording in user-facing setup surfaces.
+- Optional advanced lane:
+  - "Extra magic ✨" is optional and must never block core setup completion.
+  - If user chooses "Maybe later", setup continues normally.
+  - Extra magic remains discoverable in Settings after onboarding.
+- Feature-triggered plugin prompting:
+  - If user invokes a feature requiring a missing add-on, prompt only for that exact missing add-on.
+  - Use a direct install link for that single add-on.
+  - Provide a secondary text hint to open "Extra magic ✨" for full advanced pack.
+
+Locked setup screen copy (exact text):
+- Section title: `Required for xMilo`
+- Required item 1: `Install Termux`
+- Required item 2: `Install Termux:API`
+- Required trust-warning intro before Termux setup:
+  - 2 to 3 very short click-through pages
+  - large-letter presentation
+  - must appear before the user reaches the Termux / Termux:API install and permission steps
+  - tagline locked: `Magic requires trust`
+  - purpose: explain in calm language that Android and Termux show strong warnings because local runtime and device features require elevated trust, and xMilo is warning the user ahead of time for the same reason
+  - user must explicitly continue through the pages
+  - disclosure requirements inside the flow:
+    - explain what xMilo is asking the user to install or open
+    - explain why xMilo needs it
+    - explain that nothing installs or runs silently
+    - explain what will not work if the user declines
+    - keep tone magical, but do not obscure the real consent meaning
+  - propagation rule:
+    - the same trust framing must continue in later install prompts, plugin prompts, settings prompts, and walkthrough helper text
+    - every "install this additional thing" message should feel like the same xMilo voice, not a separate cold system voice
+    - the same framing must also apply to:
+      - direct-link buttons
+      - permission-setting buttons
+      - bootstrap launch buttons
+      - fallback copy/paste instructions
+      - future single-plugin install prompts
+  - walkthrough structure lock:
+    - trust intro first
+    - required installs second
+    - artifact/check explanation third
+    - guided handoff fourth
+    - optional fallback/manual instruction last
+- Optional section title: `Optional`
+- Optional primary action label: `Extra magic ✨`
+- Optional subtitle: `Adds advanced Termux plug-ins for expanded capabilities`
+- Optional helper text: `You can do this now or later`
+- Optional choice labels:
+  - `Yes, set up Extra magic ✨`
+  - `Maybe later`
+
+Locked feature-level missing-plugin prompt (exact text):
+- Title: `To use this feature, Milo needs: {PluginName}`
+- Primary button: `Install Plug-in`
+- Secondary helper text: `Want all advanced plug-ins? Extra magic ✨`
+
+Locked extra-magic package structure (exact text):
+- Title: `Extra magic package`
+- Description: `Advanced plug-ins for expanded Milo abilities`
+- List items and labels:
+  - `Termux:Boot` - `Recommended`
+  - `Termux:Widget` - `Recommended`
+  - `Termux:Float` - `Optional`
+  - `Termux:Tasker` - `Power user`
+  - `Termux:Styling` - `Optional`
+  - `Termux:GUI` - `Power user`
+
+Locked setup behavior sequence:
+- 1) Check Termux.
+- 2) Check Termux:API.
+- 3) Complete core bootstrap.
+- 3A) Run the end-to-end app-owned bridge verification.
+- 3B) If bridge verification detects `TERMUX_EXTERNAL_APPS_DISABLED`, block completion and show the specific guided repair path plus re-check control.
+- 4) Ask: `Want extra magic ✨?`
+- 5) If yes, guide add-ons one-by-one with return-check after each.
+- 6) If later feature requires one add-on, deep-link only that add-on.
+- Direct-link and no-search rule:
+  - Setup must send users directly to the exact install destination whenever possible.
+  - Do not ask users to search app stores, browse long plugin lists, or discover package names manually.
+  - If a direct app/page deep-link is available and compliant, use it.
+  - If direct linking is unavailable or less reliable than terminal copy-paste, provide the exact one-shot command instead.
+  - Every setup action must include a short warning/explanation covering what will be installed or launched.
+  - Play-facing setup copy must remain accurate and must not imply hidden installs, background sideloading, or policy-unsafe behavior.
+
+Locked settings menu structure (exact IA labels):
+- `Settings`
+- `Runtime`
+- `Termux setup`
+- `Extra magic ✨`
+- `Advanced plug-ins`
+- `Installed add-ons`
+- `Missing add-ons`
+- `Run core bootstrap again`
+- `Open Termux`
+- `Open Termux permissions`
+- `Diagnostic checks`
+
+PHASE 9B: Best-in-Class Onboarding Architecture Lock (MANDATORY)
+- Primary recommendation is HYBRID, not library-only:
+  - Primary onboarding flow: custom floating overlay cards over the live Lair/map.
+  - Secondary contextual discovery: targeted coachmarks for specific controls after setup is complete.
+  - Do NOT use a generic full-screen swiper as the main onboarding truth.
+  - Do NOT use a tooltip/coachmark library as the only onboarding system.
+- Structural rule:
+  - `/lair` remains the true home route.
+  - Initial onboarding must render over the live Lair scene, with haze/blur/scrim behind it.
+  - Scribe Archive stays menu-only and is not part of first-run onboarding.
+- Step model:
+  - Step group 1: trust + required setup explanation.
+  - Step group 2: install/open actions and return-check states.
+  - Step group 3: access verification and code entry.
+  - Step group 4: final welcome card (`Enter the Lair`) only after setup readiness is real.
+  - Step group 5: post-entry contextual coachmarks for specific controls, only after map is interactive.
+- Visual rule:
+  - One floating card at a time.
+  - Background map remains visible but visually subordinated with haze/blur/scrim.
+  - Cards must feel premium, not default RN modal slabs.
+  - Motion must be deliberate: fade + slight rise for cards, subtle background dim transitions, no noisy spring spam.
+- Interaction rule:
+  - Onboarding cards own focus while active.
+  - User can go forward/back within the onboarding stack where safe.
+  - Required compliance/trust steps cannot be silently skipped.
+  - Later coachmarks may be dismissible and resumable.
+- Keyboard rule:
+  - Any step with input must remain fully visible above the keyboard.
+  - Input surfaces must be attached to keyboard-safe layout, not absolute-bottom overlays that disappear under IME.
+  - Android layout must use resize-safe behavior and be validated on physical device.
+- Accessibility rule:
+  - Active onboarding card must be modal/focus-dominant for screen readers.
+  - Dynamic step changes must announce politely.
+  - Labels/hints must describe the exact action and consequence.
+  - Tap targets must remain valid at large font sizes.
+- Permission rule:
+  - Educational UI must precede sensitive permission requests when rationale is needed.
+  - Every permission/install screen must explain feature value and what breaks if declined.
+  - Provide a non-destructive cancel / not now path whenever the action is optional.
+- Library decision lock:
+  - Use custom `SetupOverlay` / route-owned overlay stack for first-run onboarding.
+  - Allow a coachmark library only for post-setup contextual discovery.
+  - Preferred coachmark candidate: `react-native-walkthrough-tooltip` for narrow targeted callouts.
+  - Acceptable alternate candidate: `rn-tourguide` if we need ordered multi-target post-entry tours with custom tooltip UI.
+  - `react-native-copilot` is reference-only, not current first choice.
+  - `react-native-onboarding-swiper` is reference-only for pagination/gating ideas, not for map-first onboarding.
+- Exact dependency plan for implementation:
+  - Required:
+    - `expo-blur`
+  - Already present / continue using:
+    - `expo-router`
+    - `react-native-safe-area-context`
+  - Optional only if contextual coachmarks are approved:
+    - `react-native-walkthrough-tooltip`
+    - OR `rn-tourguide`
+    - `react-native-svg` is already present and satisfies the likely SVG requirement path
+  - Motion:
+    - Prefer native `Animated` first if sufficient
+    - escalate to `react-native-reanimated` only if the approved implementation actually needs more complex shared transitions
+- Implementation sequence lock:
+  - 1) Replace ad hoc setup screen flow with a deterministic overlay state machine.
+  - 2) Keep map visible behind onboarding at all times.
+  - 3) Lock keyboard-safe composer/input behavior in the Lair.
+  - 4) Add final welcome card as the last overlay, not a separate landing page.
+  - 5) Add optional contextual coachmarks only after first-run flow is stable.
+  - 6) Capture phone recordings and screenshots for each onboarding phase before declaring complete.
+- Research references approved for structural guidance:
+  - `react-native-copilot`
+  - `react-native-walkthrough-tooltip`
+  - `rn-tourguide`
+  - `react-native-onboarding-swiper`
+- Explicit anti-patterns:
+  - no first-run landing on debug/archive shell
+  - no full-screen dev-looking forms before map visibility
+  - no duplicate navigation surfaces for room selection
+  - no room-select buttons in the primary runtime UX
+  - no hidden composer behind keyboard
+  - no policy/compliance warnings separated into a cold non-xMilo voice
+
+PHASE 9C: Skill Import Entry Warning + Basic Safety Screening Lock
+- Purpose:
+  - When the user enters the skills-addition / skill-search / import flow, xMilo must show a bounded warning and apply only a basic safety-screening pass.
+  - This is risk reduction only.
+  - This is not a guarantee of safety.
+  - This is not a malware-proof scan.
+  - This is not a full code audit.
+- Entry warning popup rule:
+  - Show a warning popup when the user enters the skills-addition / search / import flow.
+  - The popup must include:
+    - a short explanation that community/imported skills can contain risky or misleading behavior
+    - a statement that xMilo performs only basic safety screening
+    - a statement that the user should still review what they add
+  - Required controls:
+    - `OK / Continue`
+    - checkbox: `Don't remind me again`
+- Reminder persistence rule:
+  - The popup must reappear every time the user opens the skills-addition / search / import flow unless the user explicitly checked `Don't remind me again`.
+  - Pressing `OK / Continue` alone must not suppress future reminders.
+  - If the checkbox is checked and the user continues, persist that preference locally.
+  - No weaker lane may turn this into a one-time dismiss forever unless the checkbox was explicitly checked.
+- Basic safety-screening scope:
+  - Screening is narrow and basic only.
+  - Screening may look for basic red flags such as:
+    - obviously dangerous script patterns
+    - obvious secret/token grabbing behavior
+    - suspicious external transmission patterns
+    - high-risk permission/escalation wording
+    - known-dangerous command patterns
+    - clearly unsafe install/runtime instructions
+    - gross mismatch between declared purpose and behavior hints
+  - Screening must not claim:
+    - guaranteed safety
+    - full malware detection
+    - full code audit
+    - full behavioral certainty
+- Screening result contract:
+  - Separate:
+    - entry warning popup
+    - screening result
+  - Required high-level screening result bands only:
+    - `NO_OBVIOUS_RED_FLAGS`
+    - `REVIEW_RECOMMENDED`
+    - `BLOCK_OR_STRONG_WARNING`
+  - Screening must not silently auto-approve a skill.
+  - Screening must not silently auto-install a high-risk skill without surfacing the result.
+- User-facing language lock:
+  - User-visible text must say screening is limited.
+  - User-visible text must not imply:
+    - guaranteed safety
+    - malware-proof detection
+    - full code audit
+    - full behavioral certainty
+- Acceptance lock:
+  - Popup reappears unless `Don't remind me again` was explicitly checked.
+  - Local persistence stores only the reminder preference for that warning state.
+  - Screening result is surfaced separately from the popup.
+  - No wording in the flow claims imported skills are “safe” in a guaranteed sense.
+
+PHASE 10: Gmail OAuth Login (MANDATORY)
+- Add Google login (Gmail OAuth) end-to-end.
+- Server-side token verification.
+- No entitlement bypass.
+
+PHASE 11: Account Management Compliance
+- Sign out.
+- Account deletion path.
+- Data deletion handling.
+- User-facing policy/help surfaces.
+- Locked account-compliance deliverables:
+  - If xMilo allows account creation or verified-email identity, the app must expose an in-app, readily discoverable account deletion entry point.
+  - A matching public web deletion/request surface must exist outside the app on an active public URL.
+  - Deletion flow must explain what is deleted immediately, what may be retained for security/fraud/legal reasons, and where that retention policy is documented.
+  - Temporary deactivation, hiding, logout-only behavior, or "contact us manually" does not satisfy account deletion.
+  - Sign out must remain separate from deletion.
+  - Any retained conversation or task history must be explicitly linked to the account/device identity needed for deletion review.
+  - Do not store future relay turn history in tables that cannot be filtered or deleted by account/device scope.
+  - If historical rows cannot yet be attributed for deletion, that gap must be disclosed and scheduled as release debt before public release.
+
+PHASE 12: Play Billing Path
+- For Play build, implement Play-compliant billing for digital goods/subscriptions.
+- Website-only checkout is not the Play truth for the Play build.
+
+PHASE 13: Entitlement Unification
+- Unify entitlement truth across:
+  - login/account
+  - Play purchase/subscription state
+  - access-code/trial fallback
+  - relay/sidecar session state
+
+PHASE 14: AI Safety Core
+- Strong refusal/guardrails.
+- Harmful-content filtering.
+- Red-team coverage.
+- No dishonest/unsafe roleplay escapes.
+
+PHASE 15: In-App AI Reporting (MANDATORY)
+- In-app report/flag on AI outputs without leaving app.
+- Must be real, not UI-only.
+- Locked minimum reporting UX:
+  - Every user-visible AI output surface must provide a direct report action.
+  - Minimum v1 reasons:
+    - `Harmful or unsafe`
+    - `Sexual or inappropriate`
+    - `Harassment or abusive`
+    - `False or misleading`
+    - `Pretending to have done something it did not do`
+    - `Other`
+  - Report action must capture enough evidence to review the exact output later:
+    - output text or durable content reference
+    - prompt/task context reference
+    - model/runtime identifiers when available
+    - timestamp
+    - device/account/runtime identifiers needed for abuse review
+  - Reporting must not require leaving the app, copying text manually, or opening email.
+
+PHASE 16: Moderation Loop (MANDATORY)
+- Backend report ingestion + storage.
+- Review workflow and feedback loop into filtering/moderation.
+- Locked moderation deliverables:
+  - Dedicated AI-content report ingestion is separate from generic crash/error reporting.
+  - Review surface must support status at minimum:
+    - `new`
+    - `triaged`
+    - `confirmed`
+    - `dismissed`
+    - `rule_update_needed`
+  - Confirmed reports must feed back into:
+    - policy/filter tightening
+    - regression coverage in testing grounds
+    - operational review notes
+  - False-completion, fabricated-evidence, deception, and unsafe-roleplay reports must remain first-class categories.
+
+PHASE 17: Privacy, Data Safety, and Disclosure
+- Privacy policy URL.
+- Data safety disclosures aligned to real data flows.
+- Permission explanations.
+- AI usage disclosure.
+- Locked legal/disclosure deliverables:
+  - Public privacy policy on an active non-PDF URL.
+  - In-app privacy policy entry point.
+  - Public support/contact URL.
+  - Public account deletion URL if account creation exists.
+  - Data retention/deletion language aligned with real runtime behavior.
+  - Data safety matrix mapped against actual app collection/sharing, not intent.
+  - Prominent disclosure for any sensitive permissions or device data use.
+  - AI disclosure must state that outputs are generated, may be wrong, and can be reported in-app.
+  - Repository/public release hygiene must include:
+    - an explicit project license file chosen intentionally by the project owner
+    - public README text that matches current runtime truth
+    - no stale third-party-branded xMilo-owned runtime naming in public-facing docs
+
+PHASE 17A: Public Legal and Store-Surface Readiness
+- Even while commerce is parked, the following are NOT parked work:
+  - privacy policy page
+  - terms/help/support pages
+  - account deletion request page
+  - AI safety/reporting explanation page
+  - store-listing support links
+- Website lane may advance these legal/support surfaces without unparking commerce.
+
+PHASE 17B: Public Release Hygiene
+- Public repo/release artifacts must be xMilo-owned and review-safe.
+- Required:
+  - local repo contains current LICENSE file
+  - README matches current product truth
+  - no legacy third-party runtime naming in public install/release instructions
+  - release asset names and binary names are xMilo-owned before public release
+  - public install/bootstrap docs do not claim hidden installs or capabilities
+
+PHASE 18: Mind Bot Lane (Production Go-Side)
+- Run-until-blocked sequence:
+  - evidence-boundary persistence
+  - bounded resume_checkpoint (one step, closed set)
+  - minimum memory governance enforcement
+- Operator clarification for multi-deliverable Phase 18 work:
+  - When both a contract/handoff artifact and an internal memory-governance artifact are open, they are not duplicates.
+  - Execute in this order unless the main hub overrides:
+    1) freeze the canonical runtime/app contract and handoff packet
+    2) unblock dependent app surfaces
+    3) complete bounded consolidation policy/proof
+    4) run cross-lane validation
+  - Do not mark the Phase 18 family complete until both the handoff artifact and the bounded-consolidation artifact are complete, plus required validation or declared external-blocker status.
+
+PHASE 18A: Weekly Runtime Integrity Check (PHASE 1, MANDATORY, READ-ONLY, NO DRIFT)
+
+- Phase purpose:
+  - Implement a narrow, low-risk, policy-backed weekly runtime integrity verification feature for xMiloClaw.
+  - This phase is not a freeform filesystem intelligence feature.
+  - This phase must not perform broad anomaly hunting.
+  - This phase must remain inside approved xMiloClaw-managed runtime roots and approved Phase 1 finding semantics only.
+
+- Absolute Phase 1 scope lock:
+  - Scan only explicit xMiloClaw-owned managed runtime roots that are marked Phase 1-ready in the canonical managed-root registry.
+  - Validate only against explicit registry, policy, manifest, database, or reference rules that are declared before the run begins.
+  - Detect only approved Phase 1 finding classes.
+  - Report calmly and non-destructively.
+  - Support `some items need review` as a valid outcome.
+  - Remain read-only for the full phase.
+
+- Absolute Phase 1 finding-class lock:
+  - Allowed finding classes only:
+    - `possible_orphaned_artifact`
+    - `possible_duplicate`
+    - `registry_mismatch`
+    - `partial_scan`
+  - Prohibited / deferred classes:
+    - `ghost_file`
+    - `random_script`
+    - `anomaly`
+    - `suspicious_file`
+    - `freeform_unknown_file_problem`
+    - any other unapproved class
+  - No lane, component, UI surface, or report may invent additional Phase 1 finding classes.
+
+- Canonical finding contract requirement (mandatory artifact):
+  - Phase 1 must define one canonical finding contract artifact/schema.
+  - No implementation may proceed without it.
+  - The canonical finding contract must define:
+    - allowed finding classes
+    - allowed outcome bands
+    - allowed confidence values
+    - required fields per finding
+    - prohibited classes for Phase 1
+    - mapping rules from finding state to user-facing outcome
+    - precedence rules
+    - prohibited upgrade paths
+  - Allowed outcome bands only:
+    - `CLEAN`
+    - `REVIEW_NEEDED`
+    - `CONFIRMED_ISSUE`
+  - Allowed confidence values only:
+    - `possible`
+    - `probable`
+    - `confirmed`
+  - No implementation or lane may invent additional Phase 1 result classes, confidence labels, or user-facing outcome bands.
+
+- Required finding fields per finding:
+  - `finding_id`
+  - `finding_class`
+  - `confidence`
+  - `root_id`
+  - `artifact_path`
+  - `artifact_class`
+  - `policy_snapshot_version`
+  - `contract_version`
+  - `evidence_summary`
+  - `reference_source_type`
+  - `reference_source_id` if applicable
+  - `grace_state`
+  - `exception_state`
+  - `requires_recheck`
+  - `user_outcome_band`
+  - `confirmed_gate_passed`
+  - `created_at`
+  - `updated_at`
+  - `run_id`
+  - `stable_for_run`
+  - `notes` (compact, non-speculative)
+  - Missing optional metadata may not be treated as proof of an issue unless policy explicitly requires that metadata for the root/class.
+
+- Managed-root registry requirement (mandatory control artifact):
+  - Phase 1 must define one canonical managed-root registry artifact.
+  - No directory may be scanned unless it appears in that registry and is marked Phase 1-ready.
+  - Each managed-root registry entry must define all of the following:
+    - `root_id`
+    - exact root scope / path family
+    - owner component / owner lane
+    - allowed file classes
+    - whether duplicates are ever valid there
+    - canonical reference source
+    - grace-period rules
+    - exception rules
+    - whether the root is Phase 1-ready
+    - performance budget notes if relevant
+    - exclusion state for the run
+  - Root readiness rule:
+    - A root may not participate in Phase 1 unless all required policy fields are defined.
+    - If any required policy input is missing, exclude that root from scanning rather than guessing.
+  - No scanning outside registered Phase 1-ready managed roots.
+
+- Managed-root definition lock:
+  - `managed root` means a runtime path family explicitly declared in the canonical managed-root registry, owned by xMiloClaw, with defined file classes, reference requirements, grace rules, and exception rules.
+  - A path is not a managed root merely because it appears xMiloClaw-related.
+  - A path is not a managed root merely because it is reachable by the runtime.
+
+- Phase 1 in-scope roots:
+  - Only xMiloClaw-owned runtime roots explicitly declared in the Phase 1-ready managed-root registry.
+  - Examples may be documented for planning, but examples do not become active scope unless the registry marks them Phase 1-ready.
+
+- Forbidden scan targets:
+  - any path outside declared managed roots
+  - user documents
+  - gallery/media libraries
+  - downloads
+  - shared storage not explicitly declared as xMiloClaw-managed
+  - other apps' directories
+  - repo source trees
+  - developer worktrees / checkouts
+  - generic Termux home paths outside explicitly declared xMiloClaw-managed subtrees
+
+- Definitions that may not drift:
+  - `registry_mismatch`
+    - A directly provable mismatch between a file or directory-state inside a managed root and the canonical registry / policy / required reference model for that same root and artifact class.
+    - It is valid only when the mismatch is explicitly checkable from declared policy.
+  - `possible_duplicate`
+    - A duplicate candidate inside Phase 1-managed scope whose equivalence is supported by allowed duplicate-policy evidence but has not met confirmed threshold for that run.
+  - `possible_orphaned_artifact`
+    - A managed-root artifact whose required owning reference is missing or unresolved under declared policy, but the evidence has not passed confirmed threshold for that run.
+  - `partial_scan`
+    - A scan-completeness state indicating that one or more required checks for the run did not finish due to runtime incompleteness or execution limits.
+    - `partial_scan` is not, by itself, proof of a confirmed integrity issue.
+  - `confirmed issue`
+    - A finding that passes the full confirmed gate using only allowed Phase 1 classes, stable evidence, and policy-backed validation.
+  - `review-needed`
+    - A calm, non-dramatic user-facing state meaning the scan completed with one or more items requiring review or recheck, but no confirmed critical issue was detected.
+  - `confidence`
+    - The contract-defined evidence-strength label for a finding: `possible`, `probable`, or `confirmed`.
+  - `grace period`
+    - A declared policy window during which an artifact may exist, lack a final reference, or remain transient without being promoted to a confirmed finding.
+  - `exception rule`
+    - A declared policy rule that protects a root, file class, or artifact state from normal classification or changes the classification threshold.
+  - `validly skipped by policy`
+    - A root or check omitted because the policy snapshot declared it not required before the run began.
+    - Valid skip examples:
+      - root intentionally disabled for this build/profile
+      - root intentionally excluded by declared Phase 1 policy
+      - root intentionally deferred by declared schedule/policy rule
+    - Not valid policy skips:
+      - permission unavailable
+      - root inaccessible unexpectedly
+      - runtime budget exhausted
+      - battery/thermal deferral
+      - transient filesystem/access error
+      - scanner interruption
+      - any other execution-time incompleteness
+
+- Anti-drift evidence rules:
+  - No file may be classified from filename alone.
+  - No file may be classified from extension alone.
+  - No file may be classified from `looks suspicious` reasoning.
+  - Unfamiliar file appearance is not evidence.
+  - Missing metadata alone is not proof of a problem unless policy explicitly requires that metadata/reference for the root/class in question.
+  - Unknown must stay unknown.
+  - Absence of certainty must remain uncertainty and must not be upgraded into suspicion.
+  - If policy/reference support is insufficient, the result must remain soft, deferred, excluded, or review-needed.
+  - No confirmed issue may exist without policy-backed validation.
+
+- Deferred-category firewall (mandatory):
+  - Deferred concepts must not leak into Phase 1 runtime behavior, outputs, logs intended for review, or user messaging.
+  - Deferred concepts include:
+    - ghost files
+    - random scripts
+    - anomaly hunting
+    - freeform weirdness detection
+    - anything outside approved Phase 1 classes
+  - No weaker lane, UI surface, or implementation may translate a Phase 1 finding into a deferred concept.
+
+- Non-destructive enforcement:
+  - Phase 1 is explicitly read-only.
+  - No delete behavior is permitted.
+  - No move behavior is permitted.
+  - No quarantine behavior is permitted.
+  - No rewrite behavior is permitted.
+  - No cleanup behavior is permitted.
+  - No silent remediation is permitted.
+  - No auto-fix interpretation is permitted.
+  - Phase 1 is detection, classification, persistence, and calm reporting only.
+
+- Policy snapshot and run-freeze rules:
+  - Every run must evaluate against one frozen policy snapshot for that run.
+  - The policy snapshot must include, at minimum:
+    - Phase 1-ready managed roots
+    - allowed file classes
+    - exception rules
+    - grace rules
+    - root readiness / exclusion state
+    - canonical reference requirements
+    - finding contract version
+    - outcome precedence rules
+  - No mid-run policy drift:
+    - policy, registry, or readiness changes after run start must not retroactively change classification inside that same run
+  - Required-root set freeze:
+    - the set of required roots for a run must be fixed at run start from the policy snapshot
+    - a root may not become `not required` midway through the run due to later state changes
+
+- Normalization rules:
+  - Before classification, normalize path representation according to platform rules.
+  - Normalize path separators.
+  - Normalize equivalent path references.
+  - Guard against relative/absolute path duplicates.
+  - Guard against aliasing or multi-reference representations of the same artifact when relevant.
+  - Representation differences alone must not create duplicates or mismatches.
+
+- Runtime-completeness and mutation rules:
+  - If runtime incompleteness affects required coverage, `CLEAN` must not be returned.
+  - If a file, registry reference, or required artifact changes during the scan window in a way that makes classification unstable or non-reproducible, do not promote it to `CONFIRMED_ISSUE` from that run alone.
+  - If an item appears, disappears, changes size/hash/metadata, or gains/loses its reference during the scan window, classify conservatively.
+  - Transient-write protection:
+    - Files currently being created, rewritten, compacted, exported, migrated, or otherwise actively mutated must not be treated as confirmed duplicates/orphans/mismatches unless policy explicitly defines a stable validation method for that lifecycle state.
+  - Recheck rule:
+    - where practical, unstable findings must prefer later recheck over confirmation in the current run.
+
+- Two-pass confirmation rule:
+  - For non-urgent findings, use two-pass confirmation where practical.
+  - First pass may produce `possible` or `probable` review-level findings.
+  - Second pass may confirm only if the issue remains after grace and revalidation.
+  - Two-pass confirmation is required to reduce false positives from transient lifecycle states.
+
+- Outcome precedence and gating:
+  - Deterministic precedence:
+    - 1) If one or more policy-backed confirmed findings exist, outcome = `CONFIRMED_ISSUE`
+    - 2) Else if one or more review-level findings exist, outcome = `REVIEW_NEEDED`
+    - 3) Else if scan completed within approved scope and no findings exist, outcome = `CLEAN`
+    - 4) Else if the only finding is `partial_scan`, outcome = `REVIEW_NEEDED`
+  - `partial_scan` gate:
+    - `partial_scan` is a scan-completeness state, not a confirmed integrity issue
+    - `partial_scan` alone must never produce `CONFIRMED_ISSUE`
+    - `partial_scan` may block `CLEAN`
+    - `partial_scan` may produce `REVIEW_NEEDED`
+  - confirmed-issue gate:
+    - A finding may be treated as confirmed only if all are true:
+      - file is in a managed Phase 1 root
+      - root policy is defined
+      - file class is defined
+      - required registry/reference model exists
+      - required reference/ownership validation fails
+      - grace period has elapsed
+      - no exception rule applies
+      - confidence threshold for confirmed is met
+      - finding class is allowed in Phase 1
+      - result is not based solely on incomplete scan, missing metadata, filename shape, extension, or heuristic suspicion
+      - the evidence used for classification is stable for that run
+  - review-needed gate:
+    - `REVIEW_NEEDED` may be used only for:
+      - `partial_scan`
+      - `possible_orphaned_artifact`
+      - `possible_duplicate`
+      - `registry_mismatch` below confirmed threshold
+      - bounded duplicate candidate awaiting recheck
+      - unstable findings requiring recheck
+    - `REVIEW_NEEDED` must not be described as confirmed breakage
+  - `CLEAN` gate:
+    - `CLEAN` may be returned only when:
+      - every required Phase 1 root was either fully checked or explicitly excluded by declared policy before the run began
+      - no review-worthy candidate remains
+      - no confirmed issue exists
+      - no runtime incompleteness affected required coverage
+
+- User-facing trust model lock:
+  - Default user-visible outcomes must be exactly:
+    - `CLEAN`
+      - `Weekly runtime integrity check completed.`
+      - `No confirmed runtime inventory issues found.`
+    - `REVIEW_NEEDED`
+      - `Weekly runtime integrity check completed.`
+      - `Some items need review.`
+      - `No confirmed critical issue was detected.`
+    - `CONFIRMED_ISSUE`
+      - `Weekly runtime integrity check completed.`
+      - `A confirmed runtime integrity issue needs attention.`
+  - Never use ghost-file language.
+  - Never use suspicious-script language.
+  - Never imply corruption, tampering, or compromise unless separately and explicitly policy-backed in a later approved phase.
+  - Incomplete scan coverage must never be described as confirmed breakage.
+
+- Persistence and reproducibility requirements:
+  - Persist at minimum:
+    - `run_id`
+    - `check_started_at`
+    - `check_completed_at`
+    - `outcome_band`
+    - `finding_counts_by_class`
+    - `required_roots_for_run`
+    - `roots_completed`
+    - `roots_validly_skipped`
+    - `roots_runtime_incomplete`
+    - `partial_scan_reason` if present
+    - compact review/issue summary
+    - policy snapshot version
+    - finding contract version
+  - Result reproducibility rule:
+    - every run result must be attributable to a specific policy snapshot / contract version so later review can explain:
+      - what rules were in force
+      - what roots were required
+      - what exclusions were valid
+      - why the final outcome was produced
+
+- Regression fixture requirement:
+  - Phase 1 must define explicit regression fixtures at minimum for:
+    - partial_scan only
+    - no findings + full scan
+    - possible duplicate below confirmed threshold
+    - valid duplicate allowed by policy
+    - stale-looking but still referenced artifact
+    - file created before registry/reference settles
+    - temporary missing metadata
+    - excluded/unready root
+    - deferred category accidentally introduced
+    - mixed-result precedence
+    - exception-rule-protected file
+    - same-content files allowed by class policy
+    - bounded scan termination due to budget/resource limit
+    - mid-scan mutation / file changes during scan
+    - root unavailable due to runtime failure
+    - policy-excluded root versus runtime-incomplete root
+  - Acceptance must prove these fixtures do not mis-escalate.
+
+- Ownership lock:
+  - One owner must control the canonical finding contract.
+  - One owner must control the managed-root registry.
+  - UI/app rendering may only render the canonical schema.
+  - UI/app rendering may not invent issue meanings, titles, classes, or escalations.
+  - Ownership ambiguity is not permitted in implementation.
+- Phase 18A ownership assignment:
+  - Main Hub owns Phase 18A source-of-truth wording, allowed classes/outcomes, precedence, and acceptance gates.
+  - Milo Mind lane owns the canonical finding contract, managed-root registry, scanner, scheduler, and persisted result generation.
+  - Main App Builder lane may only render the canonical persisted outcome and any manual trigger surface after the Phase 18A contract is locked.
+  - Main App Builder lane must not invent finding classes, severity, meanings, escalation copy, or precedence.
+  - Testing Grounds lane owns regression fixtures, false-positive checks, out-of-scope rejection proof, and precedence validation.
+  - UX Research lane may review user-facing wording clarity only after canonical outcome text is locked and may not redefine classes, precedence, or launch gates.
+  - Website lane has no implementation ownership in Phase 18A unless a later approved public support/status surface explicitly references the canonical outcome.
+
+- Phase acceptance criteria:
+  - canonical finding contract defined
+  - managed-root registry defined for all Phase 1 roots
+  - precedence rules defined
+  - deferred-category firewall defined
+  - read-only enforcement defined
+  - user-facing trust language defined
+  - regression fixtures defined
+  - ownership assigned
+  - acceptance verifies false-positive protection
+  - scanner proves:
+    - clean fixture -> `CLEAN`
+    - review fixture -> `REVIEW_NEEDED`
+    - confirmed fixture -> `CONFIRMED_ISSUE`
+    - out-of-scope paths are not scanned
+    - prohibited classes are not emitted
+    - no file mutation occurs during the check
+
+- Launch-readiness lock:
+  - Phase 1 is not launch-ready until all acceptance criteria above are satisfied.
+  - Do not mark Phase 1 launch-ready before those artifacts, rules, and proofs exist.
+
+PHASE 18B: xMiloClaw Memory Architecture Lock
+- Placement / compatibility lock:
+  - This phase family is a Main-Hub-owned source-of-truth insertion for the xMiloClaw memory rework.
+  - It extends the existing Milo Mind lane scope; it does not create a new permanent memory lane by default.
+  - Existing memory-governance, retrieval-order, anti-drift, and bounded-loop directives remain in force unless an exact conflict is later proven.
+  - Do not solve memory control with larger prompts, transcript replay, or a wholesale third-party stack transplant.
+- Purpose:
+  - Move xMiloClaw from mixed / partially prompt-defined memory behavior toward typed memory classes, governed writes, selective retrieval, authority-respecting reads, truthful continuity, rollback, and quarantine under xMilo-owned runtime control.
+- Scope lock:
+  - in scope:
+    - memory doctrine translation into xMilo-native runtime contracts
+    - typed memory schema/classes
+    - governed write filtering and provenance
+    - selective retrieval composer with authority order
+    - checkpointed task continuity and truthful resume/completion reporting
+    - preference promotion / correction in approved memory classes
+    - quarantine / rollback for suspicious or conflicting memory
+  - out of scope:
+    - broad unrelated product rewrite
+    - new permanent lane creation without proven scope failure
+    - prompt-bloat continuity
+    - policy mutation by memory
+    - app lane owning memory doctrine
+- Ownership lock:
+  - Main Hub owns source-of-truth wording, phase placement, acceptance gates, and cross-lane arbitration.
+  - Milo Mind lane owns primary doctrine implementation, Go/runtime translation, schemas, filters, retrieval logic, checkpoint state, and rollback/quarantine behavior where it belongs in production.
+  - Main App Builder lane owns only the production-facing storage/UI/runtime surfaces needed to expose the locked memory model cleanly.
+  - Testing Grounds lane owns regression/eval validation, false-positive checks, drift checks, and acceptance proof.
+  - No Art lane ownership is created by default.
+- Hard memory rules that may not drift:
+  - Memory may inform behavior but may not create policy.
+  - Memory may not self-authorize actions.
+  - Memory may not outrank canon, Main Hub decisions, or verified runtime state.
+  - User-teaching is allowed in approved memory classes and must not be overblocked.
+  - Stale, hostile, ambiguous, or externally injected memory must not hijack current control flow.
+  - External content may never self-promote into durable executable control logic.
+  - Continuity must come from structured state and checkpoints, not transcript bloat.
+  - Loops must remain bounded, state-valid, and non-self-escalating.
+  - Warmth, personalization, and safe user-shaped behavior must remain possible within bounds.
+  - Commercial hardening must explicitly guard against false positives.
+- Go-fit direction:
+  - Prefer Go-native schema, state, contracts, filtering, retrieval, checkpoint, and rollback logic for production control where practical.
+  - App surfaces may expose storage hooks, rendering, and settings/inspection surfaces, but must not become the memory-doctrine owner.
+  - Do not assume a Python, Docker, or external memory subsystem is acceptable as production truth.
+- Family readiness lock:
+  - Do not mark this family materially complete until truthfulness about what Milo knows, remembers, attempted, resumed, and completed is runtime-real rather than prompt-implied.
+  - Do not close this family if hardening repeatedly blocks valid durable preferences, benign corrections, or legitimate continuity.
+
+PHASE 18C: Typed Memory Schema and Authority Order
+- Purpose:
+  - Define one xMiloClaw-native memory contract with typed classes, authority order, provenance, and conflict semantics before broader implementation expands.
+- Exact scope:
+  - define canonical memory classes at minimum for:
+    - user preferences
+    - user profile/context facts
+    - task / checkpoint continuity state
+    - approved summaries / derived continuity artifacts
+    - runtime observations / tool-result-backed state
+    - quarantined / suppressed memory
+  - define authority order across:
+    - canon and Main Hub decisions
+    - verified runtime state
+    - user-approved durable teaching in allowed classes
+    - derived summaries and historical memory
+  - define per-class mutability, retention, provenance, and promotion rules
+- Prohibited shortcuts:
+  - single-bucket memory
+  - transcript replay as the canonical continuity model
+  - freeform memory entries with no class/provenance
+  - letting summaries outrank runtime truth
+- Required artifacts / contracts:
+  - canonical memory class schema
+  - authority order contract
+  - conflict-resolution contract
+  - per-class allowed write sources
+  - per-class allowed read consumers
+- Ownership:
+  - Main Hub locks canon wording and acceptance.
+  - Milo Mind lane owns implementation contracts.
+  - App lane may consume/render the schema only after lock.
+  - Testing Grounds validates authority-order and false-positive behavior.
+- Acceptance criteria:
+  - every production memory write target maps to a typed class
+  - every class has provenance expectations and conflict handling
+  - canon/runtime/user-teaching precedence is explicit
+  - no ambiguous `misc memory` control bucket remains for production truth
+- False positives to prevent:
+  - treating normal user preference teaching as suspicious by default
+  - treating benign corrections as policy attacks
+  - treating lack of certainty as proof of hostile memory
+- Overkill for this phase:
+  - deep optimization, compression, or speculative retrieval heuristics before the schema and authority order are locked
+
+PHASE 18D: Memory Write Filtering, Provenance, Quarantine, and Rollback
+- Purpose:
+  - Ensure writes are governed, class-valid, provenance-aware, and reversible without blocking normal benign learning.
+- Exact scope:
+  - write admission rules per memory class
+  - provenance capture
+  - suspicious-write suppression/quarantine
+  - rollback/revert path for bad or superseded memory
+  - correction path for user-fixed entries
+- Prohibited shortcuts:
+  - auto-promoting external content into durable control memory
+  - silent mutation of protected memory without provenance
+  - quarantine as a vague catch-all with no exit path
+  - rejecting all user-teaching because filtering is under-specified
+- Required artifacts / contracts:
+  - write filter contract
+  - provenance fields
+  - quarantine state contract
+  - rollback / restore contract
+  - user correction / supersession contract
+- Ownership:
+  - Milo Mind lane owns filter, provenance, quarantine, and rollback implementation.
+  - Main Hub owns protected-surface and acceptance wording.
+  - App lane may expose user-visible correction/history surfaces only where approved.
+  - Testing Grounds owns hostile-write and false-positive fixture coverage.
+- Acceptance criteria:
+  - protected classes cannot be silently mutated by low-trust inputs
+  - suspicious writes can be suppressed or quarantined without deleting benign continuity
+  - rollback exists for mispromoted or corrupted memory
+  - ordinary user corrections can repair prior memory without being treated as hostile events
+- False positives to prevent:
+  - valid durable preferences blocked by paranoid filters
+  - normal corrections quarantined as attacks
+  - harmless continuity artifacts discarded silently instead of downgraded to uncertainty
+- Overkill for this phase:
+  - scoring systems or defensive layers that materially reduce normal memory usefulness without clear risk reduction
+
+PHASE 18E: Retrieval Composer and Minimal Context Assembly
+- Purpose:
+  - Replace loose memory recall with minimal, typed, authority-respecting context assembly for the active task.
+- Exact scope:
+  - retrieval composer over approved memory classes
+  - authority-respecting read order
+  - minimal context assembly for active task / active lane state
+  - suppression of stale, conflicting, quarantined, or low-trust memory from primary control paths
+- Prohibited shortcuts:
+  - loading all memory by default
+  - retrieval that treats historical memory as equal to runtime truth
+  - prompt stuffing as memory governance
+  - treating retrieval backend output as independent authority
+- Required artifacts / contracts:
+  - retrieval composer contract
+  - selection/ranking rules by class and trust
+  - context assembly budget rules
+  - stale/conflict suppression rules
+- Ownership:
+  - Milo Mind lane owns runtime retrieval composer behavior.
+  - Main Hub owns precedence wording.
+  - App lane may surface inspection/debug views only if approved.
+  - Testing Grounds validates missing/stale/conflicting-memory behavior.
+- Acceptance criteria:
+  - retrieval is selective, minimal, and class-aware
+  - canon/runtime state outrank memory-derived suggestions
+  - stale or conflicting memory degrades to uncertainty rather than hijacking control flow
+  - no phase-complete claim relies on transcript bloat
+- False positives to prevent:
+  - suppressing useful continuity because it is historical
+  - over-filtering benign preferences out of context by default
+  - mistaking temporary retrieval failure for proof that the underlying memory is invalid
+- Overkill for this phase:
+  - speculative semantic search expansion or heavy service sprawl before the minimal composer is materially real
+
+PHASE 18F: Checkpointed Task Continuity and Truthful Resume
+- Purpose:
+  - Make continuity come from typed checkpoints and truthful state reporting rather than from narrative implication.
+- Exact scope:
+  - checkpoint state contract
+  - resume eligibility rules
+  - attempted / resumed / pending / complete reporting
+  - bounded continuation semantics
+  - continuity handoff between safe runtime steps
+- Prohibited shortcuts:
+  - reporting complete from intent alone
+  - resuming from narrative guesswork
+  - multi-step self-escalating resume loops
+  - using freeform summaries as the only source of checkpoint truth
+- Required artifacts / contracts:
+  - checkpoint schema
+  - resume gate contract
+  - completion truthfulness contract
+  - stale checkpoint invalidation rules
+- Ownership:
+  - Milo Mind lane owns checkpoint/resume implementation.
+  - Main Hub owns truthfulness wording and gate semantics.
+  - App lane may expose truthful status/resume UI only after the contract is locked.
+  - Testing Grounds owns interrupted-run, stale-checkpoint, and false-completion validation.
+- Acceptance criteria:
+  - resume occurs only from valid typed checkpoint state
+  - attempted / pending / resumed / complete states are distinguishable
+  - stale or contradictory continuity state cannot silently claim success
+  - bounded resume does not create autonomy creep
+- False positives to prevent:
+  - valid resume/checkpoint state quarantined casually
+  - ordinary interruption treated as corruption
+  - useful continuity suppressed as hidden policy
+- Overkill for this phase:
+  - broad long-horizon planning systems before truthful checkpoint/resume basics are stable
+
+PHASE 18G: Preference Promotion, Correction, and Governed User-Teaching
+- Purpose:
+  - Allow user-shaped memory growth in approved classes without letting user teaching mutate protected policy or runtime authority.
+- Exact scope:
+  - promotion rules for repeated benign preferences
+  - correction and demotion rules
+  - user-teaching boundaries
+  - separation between preferences and policy / capability / authority surfaces
+- Prohibited shortcuts:
+  - blocking all durable preference learning
+  - allowing ordinary user repetition to rewrite policy
+  - silently promoting emotionally charged or ambiguous content into durable control memory
+- Required artifacts / contracts:
+  - preference promotion contract
+  - correction/demotion contract
+  - approved user-teaching class list
+  - protected-surface rejection rules
+- Ownership:
+  - Milo Mind lane owns runtime promotion/correction behavior.
+  - Main Hub owns approved teaching boundaries.
+  - App lane may expose user-visible teaching/edit surfaces only if they preserve the locked class boundaries.
+  - Testing Grounds validates benign-teaching passes and policy-mutation rejection.
+- Acceptance criteria:
+  - repeated benign user patterns may be promoted only through approved rules
+  - protected policy surfaces reject ordinary teaching attempts
+  - user corrections can demote or replace outdated preferences cleanly
+  - personalization remains warm and useful rather than flattened by fear-driven filtering
+- False positives to prevent:
+  - treating normal user preference patterns as hostile memory events
+  - blocking harmless stable rituals or tone preferences by default
+  - misclassifying profile/context clarification as policy mutation
+- Overkill for this phase:
+  - elaborate personality engines or speculative emotional modeling not required for the approved teaching classes
+
+PHASE 18H: Bounded Consolidation, Loop Integration, and Cross-Lane Acceptance
+- Purpose:
+  - Integrate bounded consolidation and loop-safe continuity only after typed classes, truthful resume, and guarded promotion materially exist.
+- Exact scope:
+  - bounded consolidation of lower-level memory artifacts into approved summaries
+  - loop integration with existing governed process rules
+  - cross-lane acceptance gates
+  - rollout and validation sequencing
+- Prohibited shortcuts:
+  - background self-directed consolidation with unclear limits
+  - summary generation that replaces primary source memory truth
+  - loop escalation that widens goals or authority
+  - declaring the family complete without cross-lane proof
+- Required artifacts / contracts:
+  - consolidation policy
+  - loop-boundary contract
+  - cross-lane acceptance checklist
+  - rollback path for bad consolidations
+- Ownership:
+  - Milo Mind lane owns consolidation/loop implementation within existing bounded-process rules.
+  - Main Hub owns final acceptance wording and scope boundaries.
+  - App lane owns only the surfaces needed to expose approved outcomes.
+  - Testing Grounds owns cross-lane validation and false-positive regression proof.
+- Acceptance criteria:
+  - consolidation remains bounded, reversible, and class-aware
+  - loops remain non-self-escalating and state-valid
+  - cross-lane proof exists for doctrine implementation, app integration surfaces, and regression behavior
+  - no new permanent lane is required to operate the memory model
+- False positives to prevent:
+  - harmless continuity summaries treated as hostile by default
+  - benign repeated patterns blocked from promotion because consolidation rules are too defensive
+  - graceful uncertainty replaced by fabricated certainty or silent continuity loss
+- Overkill for this phase:
+  - autonomous long-horizon optimization, multi-service memory infrastructure, or speculative background evolution beyond the existing governed loop model
+
+PHASE 19: Testing Grounds Lane (Dialed Harness)
+- Model id resolution + snapshot.
+- Token-min gating enforced.
+- Caching by prompt hash enforced.
+- Reviewed anchor set stable.
+- Regression packs catch false execution/persistence drift.
+- Canonical testing battery authority lock:
+  - `C:\xMilo\xmilo_brain_drift_full_test_battery_2026.txt` is the canonical merged 2026 testing battery.
+  - `C:\xMilo\testing_ground_update.txt` is an apply-on-top forward-planning update file only and is not co-equal truth.
+  - The update file may refine the canonical battery only through explicit Main Hub merge into the canonical battery.
+  - `xmilo-testing-grounds/eval/update-file-alignment.md`, `handoff-summary.md`, `authority-snapshot.md`, and similar alignment/status artifacts are prep artifacts, not co-equal canonical batteries.
+  - Evaluators must not treat overlapping testing battery files as simultaneous equal authority.
+
+PHASE 20: Art/Behavior Lane
+- Hard execution contract (no exceptions):
+  - 1) Complete phase work.
+  - 2) Launch/refresh the real runnable build state.
+  - 3) Navigate every required room for that phase.
+  - 4) Capture one screenshot per required room (or failure-state screenshot if broken).
+  - 5) Save using the required filename format.
+  - 6) Verify files exist and are non-empty.
+  - 7) Write/update `manifest.txt` with phase id/title/timestamp/rooms/filenames/missing/failures.
+  - 8) Only then continue to next phase.
+- Required room source order:
+  - canonical room list in repo files (if present), otherwise phase docs room-spec list.
+- Immediate art sequence:
+  - A) Add inspectable arrival-validation artifacts for launch-critical rooms.
+  - B) Tighten launch-room clarity and stable canonical camera framing.
+  - C) Deepen Main Hall + Archive semantic arrival sets.
+  - D) Expand Workshop + Potions Room arrival sets.
+
+PHASE 21: Website Lane (Parked)
+- Keep commerce gated and site healthy.
+- Only re-enable when real verified + 2FA handoff-ready session exists.
+
+PHASE 22: Device-Awareness Product Decision Lock
+- Translate "understands the device" into review-safe, consented capabilities for Play build.
+- Internal-only capabilities may remain internal; Play build must be explicit and bounded.
+- Canon pivot lock:
+  - `LOCKED CANON`: xMilo is online-primary only.
+  - `LOCKED CANON`: xMilo uses one sidecar/runtime authority only: xMilo Sidecar Go.
+  - `REJECTED / NOT ADOPTED`: offline mode as a product/runtime plan.
+  - `REJECTED / NOT ADOPTED`: offline/local-LLM fallback.
+  - `REJECTED / NOT ADOPTED`: local-model runtime path in current source-of-truth.
+  - `REJECTED / NOT ADOPTED`: secondary sidecar, second sidecar, backup sidecar, alternate sidecar, extra sidecar, dual sidecar, or dual-sidecar architecture in any form.
+
+PHASE 23: Internal Testing Track Preparation (Play)
+- Review-safe build.
+- Reviewer instructions.
+- Login works.
+- Billing works or is intentionally disabled in that track with no dead ends.
+- Reporting is demonstrable.
+- Reviewer packet must include:
+  - exact login path
+  - exact reporting path
+  - exact deletion path
+  - explanation of any disabled/internal-only features
+  - explanation of required test credentials or staged access
+
+PHASE 24: Play Listing and Review Packet
+- Accurate store listing.
+- Privacy/support URLs.
+- AI/reporting explanation.
+- Permission explanation.
+- Listing/review truth locks:
+  - Do not imply autonomous device powers beyond implemented consented behavior.
+  - Do not market sideload/internal Termux behavior as the Play-distributed truth.
+  - Screenshots, description, and safety form must match the Play flavor, not the internal build.
+  - If generative chat is central, listing must reflect safety/reporting availability and user control.
+
+PHASE 24A: Final External Capability Parity Audit Gate (REPORT-ONLY, NO AUTO-ADOPTION)
+- Purpose:
+  - Before final full regression, run one bounded parity audit against the most recent relevant OpenClaw and PicoClaw reference state.
+  - This is a report-first research gate only.
+  - This phase must not auto-copy features, auto-reopen architecture, or auto-authorize implementation.
+- Timing lock:
+  - Run this phase after foundational architecture, privacy, entitlement, topic-lane, and runtime-integrity locks are already in place.
+  - Run this phase before final full regression and final launch-readiness testing.
+  - If this audit identifies an approved delta worth taking, that delta must still have room to go through implementation plus final testing afterward.
+- Comparison method lock:
+  - Compare capabilities, not branding.
+  - Compare current practical abilities, not vague roadmap language or hype.
+  - Distinguish every reviewed capability as one of:
+    - `PRESENT_IN_XMILO`
+    - `PARTIALLY_PRESENT`
+    - `NOT_PRESENT`
+    - `INTENTIONALLY_EXCLUDED`
+    - `UNKNOWN / NEEDS_VERIFICATION`
+- Recommendation class lock:
+  - For every `NOT_PRESENT` or `PARTIALLY_PRESENT` item, assign exactly one:
+    - `CONSIDER_NOW`
+    - `DEFER`
+    - `REJECT`
+    - `NEEDS_ARCHITECTURE_REVIEW`
+- Adoption risk lock:
+  - For every `CONSIDER_NOW` item, assign:
+    - `LOW`
+    - `MEDIUM`
+    - `HIGH`
+  - Include one short reason tied to architecture fit, implementation realism, or launch risk.
+- Anti-drift rules:
+  - Do not treat “OpenClaw has it” or “PicoClaw has it” as automatic approval.
+  - Do not reopen already locked hardened phases unless the audit reveals:
+    - a real conflict with current source-of-truth, or
+    - a clearly superior missing capability worth explicit human review.
+  - Do not recommend late-stage adoption of anything that would destabilize:
+    - core runtime
+    - entitlement model
+    - topic-aware conversation lanes
+    - weekly runtime integrity
+    - privacy/safety constraints
+    - launch readiness
+- Required report output:
+  - `REFERENCE SNAPSHOT`
+    - OpenClaw features/capabilities reviewed
+    - PicoClaw features/capabilities reviewed
+  - `XMILO STATUS BY CAPABILITY`
+    - one status per relevant capability using the locked status classes above
+  - `RECOMMENDATION CLASS`
+    - one recommendation class per `NOT_PRESENT` or `PARTIALLY_PRESENT` item
+  - `ADOPTION RISK`
+    - one risk level plus one short reason for each `CONSIDER_NOW` item
+  - `SOURCE_OF_TRUTH IMPACT`
+    - whether a source-of-truth change would be needed
+    - which lane would own it
+    - whether it should happen before or after final regression
+  - `FINAL DECISION HANDOFF`
+    - compact list of only the items worth bringing back for human approval discussion
+- Final rule:
+  - This phase is parity audit and recommendation only.
+  - No automatic adoption.
+  - No automatic fold-in.
+  - No implementation without explicit later approval.
+
+PHASE 25: Quality and Stability Gate
+- No dead-end onboarding/payments.
+- No silent auth failures.
+- No false-completion claims.
+- Stable main hall / native flow.
+- Acceptable crash/ANR posture.
+- Magical-helper UX preserved (not generic chatbot shell).
+- No releasable build may leave `TERMUX_EXTERNAL_APPS_DISABLED` uncaught, unnamed, or unrecoverable from inside the app.
+
+PHASE 26: Final Cross-Lane Acceptance Gate
+- Phone evidence: native or honest fallback proven.
+- Mind enforcement landed.
+- Testing grounds dialed and reviewed anchors stable.
+- Play-safe Android build exists.
+- Gmail login works.
+- Reporting/moderation works.
+- Billing compliant.
+
+PHASE 27: Current Highest-Value Missing Work (watchlist)
+- Play-safe flavor split
+- Release signing replacement
+- Cleartext + permission pruning for Play
+- Gmail OAuth + account deletion compliance
+- In-app reporting + moderation backend
+- Play billing path
+- Testing grounds expansion to login/billing/reporting truthfulness
+- Public privacy/support/account-deletion pages
+- Data safety mapping against real app flows
+- xMilo-owned rename pass for legacy `PicoClaw` / `picoclaw` public artifacts

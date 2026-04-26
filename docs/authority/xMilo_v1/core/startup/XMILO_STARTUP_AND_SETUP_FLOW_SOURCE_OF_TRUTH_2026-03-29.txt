@@ -1,0 +1,413 @@
+TITLE
+XMILO STARTUP AND SETUP FLOW — SOURCE OF TRUTH
+Last updated: 2026-03-29
+Owner: MAIN HUB
+Authority status: LOCKED STARTUP / SETUP FLOW AUTHORITY
+Authority root:
+- `LOCKED CANON`: this repo-local file is a mirror/helper copy.
+- `LOCKED CANON`: the active canonical startup/setup authority copy is `C:\xMilo\Source_Of_Truth_And_Phase_List_Master\XMILO_STARTUP_AND_SETUP_FLOW__SOURCE_OF_TRUTH.txt`.
+Conflict rule:
+- If older startup wording elsewhere conflicts with mirrored content below, `C:\xMilo\Source_Of_Truth_And_Phase_List_Master\XMILO_STARTUP_AND_SETUP_FLOW__SOURCE_OF_TRUTH.txt` controls for startup/setup card order, step naming, startup-vs-settings placement, and branching logic until Main Hub explicitly supersedes it.
+
+PURPOSE
+This file is the canonical startup/setup flow for xMilo from Play Store download through entry into the live Lair.
+It exists to stop startup-flow drift.
+It defines:
+- exact card order
+- exact card names
+- exact branch points
+- what belongs in startup
+- what must be moved to Settings
+- how command cards must behave
+- when the 12-hour timer starts
+- what should happen before the user reaches the Lair
+
+CORE STARTUP RULES
+1. Startup must use one active overlay card at a time.
+2. Startup must keep the live Lair/map behind the cards.
+3. No giant combined setup slab.
+4. No multi-action checklist card containing many unrelated buttons at once.
+5. Every active card must represent the smallest current required next action.
+6. Educational explanation must precede any sensitive permission or external handoff.
+7. If a user is being sent to another app or settings surface, the card must explicitly say what app/screen will open and what the user should do there.
+8. After leaving the app for a setup action, the user should return to xMilo and continue or re-check from a dedicated return card.
+9. Advanced runtime/debug/reference pages do not belong in first-run startup unless Main Hub explicitly marks them startup-critical.
+10. Startup must remain Play-safe and must not imply hidden installs, background sideloading, or deceptive external linking.
+
+CANONICAL FLOW FROM DOWNLOAD TO LAIR
+
+STEP 1
+Name: `Download xMilo`
+Type: startup step
+What happens:
+- User downloads xMilo from the Play Store.
+
+STEP 2
+Name: `Open xMilo`
+Type: startup step
+What happens:
+- User opens xMilo for the first time.
+
+STEP 3
+Name: `xMilo startup overlay`
+Type: shell state
+What happens:
+- xMilo opens into the live Lair-backed onboarding shell.
+- Onboarding appears as floating cards over the live Lair.
+- One card at a time.
+
+STEP GROUP 1 — TRUST INTRO
+
+STEP 4
+Name: `Magic requires trust`
+Type: trust page
+Purpose:
+- Explain that some setup actions require elevated trust because xMilo uses a local runtime path and device features.
+
+STEP 5
+Name: `What xMilo will ask you to do`
+Type: trust page
+Purpose:
+- Explain exactly what xMilo may ask the user to install, open, allow, or run.
+
+STEP 6
+Name: `Why xMilo needs this`
+Type: trust page
+Purpose:
+- Explain why xMilo needs those pieces and what will not work if declined.
+
+STEP 7
+Name: `Nothing runs silently`
+Type: trust page
+Purpose:
+- Explain that nothing installs or runs silently and the user stays in control.
+
+STEP 8
+Name: `I understand`
+Type: trust exit
+Purpose:
+- Exit trust intro and enter setup.
+
+STEP GROUP 2 — REQUIRED INSTALL / OPEN ACTIONS
+
+RULE FOR THIS GROUP
+- No giant `Required for xMilo` checklist card in startup.
+- No bundling several install actions into one active step.
+- The explanation may be one card.
+- The actual actions must each be their own cards.
+
+STEP 9
+Name: `Before we begin`
+Type: intro card
+Purpose:
+- Briefly explain that xMilo needs its local runtime path prepared on the phone.
+
+STEP 10
+Name: `Magic path from F-Droid`
+Type: explanation-only card
+Purpose:
+- Explain the happy-path install order:
+  - F-Droid
+  - Termux
+  - Termux:API
+- This card must not contain all action buttons inside the same card.
+
+STEP 11
+Name: `Open F-Droid`
+Type: single-action card
+Required copy behavior:
+- Must explicitly tell the user:
+  - this will open F-Droid
+  - install or confirm F-Droid there
+  - come back to xMilo and press Continue
+Primary button:
+- `Open F-Droid`
+
+STEP 12
+Name: `Open Termux page`
+Type: single-action card
+Required copy behavior:
+- Must explicitly tell the user:
+  - this will open the Termux install page
+  - install or confirm Termux there
+  - come back to xMilo and press Continue
+Primary button:
+- `Open Termux page`
+
+STEP 13
+Name: `Open Termux:API page`
+Type: single-action card
+Required copy behavior:
+- Must explicitly tell the user:
+  - this will open the Termux:API install page
+  - install or confirm Termux:API there
+  - come back to xMilo and press Continue
+Primary button:
+- `Open Termux:API page`
+
+STEP GROUP 3 — X MILO PERMISSION GATE
+
+RULE FOR THIS GROUP
+- Permission cards come before Termux workshop command cards when those permissions are needed first.
+- Each permission-related step is its own card when needed.
+- Do not dump all permissions into one startup page.
+
+STEP 14
+Name: `Allow xMilo permissions`
+Type: explanation card
+Purpose:
+- Explain the exact permission or permission-like access needed for the current step and what breaks if declined.
+
+STEP 15
+Name: `Open xMilo permission gate`
+Type: single-action card
+Purpose:
+- Open the exact xMilo permission/settings surface needed for the current step.
+Required copy behavior:
+- Must say what screen will open.
+- Must say exactly what to allow/change there.
+- User returns to xMilo afterward.
+Primary button:
+- `Open xMilo permission gate`
+
+STEP 16
+Name: `Permission granted`
+Type: return/check card
+Purpose:
+- Confirm the permission step completed and continue forward.
+
+EXPLICIT PERMISSION / BRIDGE FACTS TO PRESERVE
+- The bridge gate is not satisfied by Android app-info screenshots alone.
+- The real app-owned gate depends on Termux run-command capability and callback success.
+- If Android prompts for Termux run-command permission, xMilo must guide the user through that permission clearly.
+
+STEP GROUP 4 — APP-OWNED BOOTSTRAP AND BRIDGE VERIFICATION
+
+STEP 17
+Name: `Prepare xMilo`
+Type: bootstrap step
+Purpose:
+- Run the app-owned bootstrap/preparation stage.
+
+STEP 18
+Name: `Verify xMilo connection`
+Type: verification step
+Purpose:
+- Run the explicit end-to-end app-owned bridge verification.
+- Package presence, permission presence, API presence, or artifact presence alone are insufficient.
+
+STEP GROUP 5 — GUIDED TERMUX HANDOFF / WORKSHOP
+
+RULE FOR THIS GROUP
+- `Guided handoff into Termux` is an intro card only.
+- `Open Termux workshop` begins individually named workshop command cards.
+- Prefer direct user-initiated Termux action from the button if that is available and compliant.
+- Manual copy/paste is fallback, not first choice, when the direct handoff works.
+- The successful direct handoff pattern already observed in the current setup should be treated as the preferred behavior target for all similar workshop codes if compliant.
+
+STEP 19
+Name: `Guided handoff into Termux`
+Type: explanation-only card
+Purpose:
+- Explain:
+  - this will open the Termux app
+  - xMilo may run or ask the user to run a setup command
+  - after that, the user should return to xMilo and continue
+- This card must not be bundled with advanced artifact/release/debug buttons.
+
+STEP 20
+Name: `Open Termux workshop`
+Type: single-action card
+Purpose:
+- Open Termux and begin the workshop flow.
+Required copy behavior:
+- Must explicitly tell the user this will open the Termux app.
+- Must tell the user to do nothing else and return to xMilo when the command finishes or when instructed.
+Primary button:
+- `Open Termux workshop`
+
+STEP 21
+Name: `Enable Termux external commands`
+Type: workshop command card
+Purpose:
+- Enable external app command execution for the verified bridge check.
+Preferred behavior:
+- Button directly sends the command into Termux and runs it from the user-initiated handoff.
+Fallback behavior only if necessary:
+- `Copy command`
+- `Open Termux`
+Exact command:
+- `mkdir -p ~/.termux`
+- `echo "allow-external-apps=true" >> ~/.termux/termux.properties`
+- `termux-reload-settings`
+
+STEP 22
+Name: `Wake lock for first install`
+Type: workshop command card
+Purpose:
+- Ensure the sidecar/bootstrap path has a better chance of staying alive during first install/runtime setup if this is actually required by the current bootstrap flow.
+Preferred behavior:
+- Direct user-initiated Termux action from the button if possible.
+Fallback:
+- `Copy command`
+- `Open Termux`
+Exact command:
+- `termux-wake-lock`
+
+STEP 23
+Name: `Run setup spell in Termux`
+Type: manual fallback workshop card
+Purpose:
+- Manual fallback only if automatic Termux handoff is unavailable or fails.
+- This is not the normal happy path.
+Structure:
+- explanation card
+- then action card
+Preferred behavior:
+- direct user-initiated Termux action if possible
+Fallback:
+- `Copy setup spell`
+- `Open Termux`
+
+STEP 24
+Name: `Re-check`
+Type: verification return card
+Purpose:
+- User returns to xMilo and taps `Re-check`.
+- If the bridge now passes, xMilo continues automatically.
+- If it does not pass, xMilo stays on the same narrow guided blocker path.
+
+ADDITIONAL COMMAND-CHECK RULE
+- Main App Builder lane must explicitly verify whether any additional workshop commands are truly required beyond:
+  - `allow-external-apps=true` setup
+  - `termux-reload-settings`
+  - `termux-wake-lock`
+- If additional required commands exist, each must become its own individually named workshop card in this structure.
+- If no additional required commands exist, the workshop flow must be frozen to the minimum set above.
+
+STEP GROUP 6 — FINAL ACCESS GATE
+
+STEP 25
+Name: `Enter code or Skip for now`
+Type: final startup gate
+Purpose:
+- This is the final startup gate before live entry into the app path.
+Primary buttons:
+- `Enter code`
+- `Skip for now`
+
+STEP 26
+Name: `Enter code`
+Type: code entry step
+Purpose:
+- User enters a code and submits it.
+
+STEP 27
+Name: `Code accepted`
+Type: success result
+Purpose:
+- xMilo confirms the code and continues.
+
+STEP 28
+Name: `Code not accepted`
+Type: failure result
+Purpose:
+- xMilo offers retry/back.
+
+STEP 29
+Name: `Skip for now`
+Type: skip branch
+Purpose:
+- If the user taps this, the 12-hour timer starts exactly here.
+- The 12-hour timer does not start on:
+  - download
+  - first open
+  - trust pages
+  - install cards
+  - permission cards
+  - bootstrap cards
+  - workshop cards
+
+STEP GROUP 7 — OPTIONAL AFTER ACCESS GATE
+
+STEP 30
+Name: `Want extra magic ✨?`
+Type: optional branch
+Purpose:
+- Optional add-ons only.
+- Must not block core startup completion.
+
+STEP 31
+Name: `Extra magic package`
+Type: optional package surface
+Purpose:
+- Advanced plug-ins for expanded Milo abilities.
+- Guide one add-on at a time.
+
+STEP 32
+Name: `Maybe later`
+Type: optional skip branch
+Purpose:
+- Continue normally.
+- Extra magic remains discoverable in Settings.
+
+STEP GROUP 8 — FINAL ENTRY
+
+STEP 33
+Name: `Enter the Lair`
+Type: final welcome card
+Purpose:
+- Final welcome card after setup readiness is real.
+
+STEP 34
+Name: `Enter the Lair`
+Type: app entry
+Purpose:
+- User enters the live Lair/map.
+
+STEP 35
+Name: `Post-entry coachmarks`
+Type: post-entry contextual discovery
+Purpose:
+- Optional contextual coachmarks only after the map is interactive.
+
+MOVE OUT OF STARTUP AND INTO SETTINGS
+These are not part of the official startup flow.
+Do not delete them.
+Move the entire single-block page to the menu/settings area after the user is fully inside the app.
+
+Destination:
+- `Settings`
+- `Runtime`
+- `Termux setup`
+
+Move this whole block there:
+- `Magic artifact check`
+- `Open releases`
+- `Open binary asset`
+- `Open checksum`
+- `Open repo`
+- any GitHub/releases/artifact/checksum/runtime-debug slab content
+
+RULE:
+- This page may remain intact as an advanced runtime/support page in Settings.
+- It must not appear in first-run startup.
+
+PLAY-SAFETY RULE
+- Keep startup Play-safe.
+- Prefer user-initiated direct actions.
+- If linking users out to external app downloads or external content from the Play build, the app must accurately tell the user what destination will open and why.
+- Do not imply hidden installs or background sideloading.
+- Main Hub must review whether any Play build path that links to external app downloads requires External Content Links program handling before public shipping.
+
+SOURCE-OF-TRUTH MAINTENANCE RULE
+- Future startup/setup flow changes must update this file first.
+- Do not re-scatter startup truth across unrelated phase notes once this file exists.
+- If later startup-flow changes are needed, append/update this file rather than inventing a new drifting startup list elsewhere.
+
+MAIN HUB FOLLOW-UP ACTIONS
+1. Create this file.
+2. Add it to the canonical xMilo source-of-truth pack / startup authority list.
+3. Mark it as the controlling startup/setup flow authority.
+4. Instruct Main App Builder lane to implement against this file.
+5. Preserve older phase notes as historical context, but do not let them override this new startup-flow authority file on startup/setup sequencing questions.
