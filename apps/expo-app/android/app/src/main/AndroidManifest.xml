@@ -47,7 +47,7 @@
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
       </intent-filter>
     </receiver>
-    <activity android:name="com.hatsunama.xmilo.dev.NativeCastleActivity" android:exported="true" android:screenOrientation="portrait" android:theme="@style/AppTheme" />
+    <activity android:name="com.hatsunama.xmilo.dev.NativeCastleActivity" android:exported="false" android:screenOrientation="portrait" android:theme="@style/AppTheme" />
     <activity android:name="com.hatsunama.xmilo.dev.MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>

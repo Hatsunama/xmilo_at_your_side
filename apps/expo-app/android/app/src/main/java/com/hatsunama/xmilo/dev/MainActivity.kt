@@ -2,6 +2,8 @@ package com.hatsunama.xmilo.dev
 
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -12,8 +14,16 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnable
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 
 import expo.modules.ReactActivityDelegateWrapper
+import com.xmilo.castle.mobile.PatchedEbitenView
 
 class MainActivity : ReactActivity() {
+  private fun logResumeProbe(event: String) {
+    Log.i(
+      "xMiloCastle",
+      "XMILO_RESUME_PROBE_R1 activity event=$event t=${SystemClock.elapsedRealtime()} activeCastleView=${PatchedEbitenView.hasActiveView()}"
+    )
+  }
+
   private fun applyImmersiveSystemBars() {
     // Full-screen immersive: hide bottom nav (and status) and allow transient reveal via swipe.
     WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -32,10 +42,36 @@ class MainActivity : ReactActivity() {
     applyImmersiveSystemBars()
   }
 
+  override fun onStart() {
+    super.onStart()
+    logResumeProbe("onStart")
+    PatchedEbitenView.resumeActiveFromActivity()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    logResumeProbe("onResume")
+    PatchedEbitenView.resumeActiveFromActivity()
+  }
+
+  override fun onPause() {
+    logResumeProbe("onPause")
+    PatchedEbitenView.suspendActiveFromActivity()
+    super.onPause()
+  }
+
+  override fun onStop() {
+    logResumeProbe("onStop")
+    PatchedEbitenView.suspendActiveFromActivity()
+    super.onStop()
+  }
+
   override fun onWindowFocusChanged(hasFocus: Boolean) {
     super.onWindowFocusChanged(hasFocus)
+    logResumeProbe("onWindowFocusChanged hasFocus=$hasFocus")
     if (hasFocus) {
       applyImmersiveSystemBars()
+      PatchedEbitenView.resumeActiveFromActivity()
     }
   }
 

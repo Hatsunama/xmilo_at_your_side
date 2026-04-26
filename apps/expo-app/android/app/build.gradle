@@ -256,3 +256,97 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+def castleForbiddenNativeMarkers = [
+    "MILO DRAW",
+    "PROP DRAW",
+    "ASSET LOAD TRY",
+    "ASSET LOAD FAIL",
+    "XMILO_OVERVIEW_BASIC_PROOF",
+    "GO_DRAW_BUILD_ID",
+]
+
+def castleBytesContain = { byte[] haystack, byte[] needle ->
+    if (needle.length == 0 || haystack.length < needle.length) {
+        return false
+    }
+    for (int i = 0; i <= haystack.length - needle.length; i++) {
+        boolean matched = true
+        for (int j = 0; j < needle.length; j++) {
+            if (haystack[i + j] != needle[j]) {
+                matched = false
+                break
+            }
+        }
+        if (matched) {
+            return true
+        }
+    }
+    return false
+}
+
+def castleAssertNoForbiddenMarkers = { byte[] bytes, String label ->
+    def hits = castleForbiddenNativeMarkers.findAll { marker ->
+        castleBytesContain(bytes, marker.getBytes("US-ASCII"))
+    }
+    if (!hits.isEmpty()) {
+        throw new GradleException("Forbidden castle native marker(s) found in ${label}: ${hits.join(', ')}. Rebuild castle.aar and rebuild the APK before device validation.")
+    }
+    println "PASS: ${label}"
+}
+
+def castleReadZipEntryBytes = { File zipFile, String entryName, String label ->
+    if (!zipFile.exists()) {
+        throw new GradleException("${label} not found: ${zipFile}")
+    }
+    def zip = new java.util.zip.ZipFile(zipFile)
+    try {
+        def entry = zip.getEntry(entryName)
+        if (entry == null) {
+            throw new GradleException("${label} entry not found: ${entryName}")
+        }
+        return zip.getInputStream(entry).bytes
+    } finally {
+        zip.close()
+    }
+}
+
+def castleReadFileBytes = { File nativeFile, String label ->
+    if (!nativeFile.exists()) {
+        throw new GradleException("${label} not found: ${nativeFile}")
+    }
+    return nativeFile.bytes
+}
+
+tasks.register("verifyCastleNativeArtifactsInternalDebug") {
+    group = "verification"
+    description = "Verifies internalDebug castle native artifacts do not contain stale Go probe/log markers."
+    dependsOn("packageInternalDebug")
+
+    doLast {
+        def aarFile = file("libs/castle.aar")
+        def mergedLib = file("${buildDir}/intermediates/merged_native_libs/internalDebug/mergeInternalDebugNativeLibs/out/lib/arm64-v8a/libgojni.so")
+        def strippedLib = file("${buildDir}/intermediates/stripped_native_libs/internalDebug/stripInternalDebugDebugSymbols/out/lib/arm64-v8a/libgojni.so")
+        def apkFile = file("${buildDir}/outputs/apk/internal/debug/app-internal-debug.apk")
+
+        println "Verifying castle native artifacts for internalDebug..."
+        castleAssertNoForbiddenMarkers(
+            castleReadZipEntryBytes(aarFile, "jni/arm64-v8a/libgojni.so", "castle.aar jni/arm64-v8a/libgojni.so"),
+            "castle.aar jni/arm64-v8a/libgojni.so"
+        )
+        castleAssertNoForbiddenMarkers(
+            castleReadFileBytes(mergedLib, "merged native lib arm64-v8a/libgojni.so"),
+            "merged native lib arm64-v8a/libgojni.so"
+        )
+        castleAssertNoForbiddenMarkers(
+            castleReadFileBytes(strippedLib, "stripped native lib arm64-v8a/libgojni.so"),
+            "stripped native lib arm64-v8a/libgojni.so"
+        )
+        castleAssertNoForbiddenMarkers(
+            castleReadZipEntryBytes(apkFile, "lib/arm64-v8a/libgojni.so", "final APK lib/arm64-v8a/libgojni.so"),
+            "final APK lib/arm64-v8a/libgojni.so"
+        )
+        println "PASS: castle native artifact integrity verified."
+        println "APK: ${apkFile}"
+    }
+}

@@ -7,10 +7,8 @@ import { resolveLocalhostBearerToken } from "../lib/xmiloRuntimeHost";
 import { useApp } from "../state/AppContext";
 import { CastleView } from "./CastleModule";
 
-const WS_BASE_URL = SIDECAR_BASE_URL.replace("http://", "ws://").replace(
-  "https://",
-  "wss://"
-) + "/ws";
+const WS_BASE_URL =
+  SIDECAR_BASE_URL.replace("http://", "ws://").replace("https://", "wss://") + "/ws";
 
 type CastleSurfaceContextValue = {
   active: boolean;

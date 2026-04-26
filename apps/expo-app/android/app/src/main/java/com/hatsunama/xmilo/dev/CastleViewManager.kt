@@ -7,7 +7,6 @@ import com.facebook.react.uimanager.annotations.ReactProp
 import com.xmilo.castle.mobile.PatchedEbitenView
 
 class CastleViewManager : SimpleViewManager<PatchedEbitenView>() {
-
   override fun getName(): String = "EbitenView"
 
   override fun createViewInstance(reactContext: ThemedReactContext): PatchedEbitenView {

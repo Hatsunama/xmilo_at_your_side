@@ -14,6 +14,7 @@ import android.view.ViewGroup;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -24,6 +25,8 @@ import java.util.Map;
 import com.xmilo.castle.ebitenmobileview.Ebitenmobileview;
 
 public class PatchedEbitenView extends EbitenView {
+    private static final String RESUME_PROBE = "XMILO_RESUME_PROBE_R1";
+    private static WeakReference<PatchedEbitenView> activeView = new WeakReference<>(null);
     private boolean resumed;
     private int lastW;
     private int lastH;
@@ -49,6 +52,53 @@ public class PatchedEbitenView extends EbitenView {
         }
         Log.w("xMiloCastle", "PatchedEbitenView: child 0 is not GLSurfaceView: " +
                 (defaultSurface == null ? "null" : defaultSurface.getClass().getName()));
+    }
+
+    public static boolean hasActiveView() {
+        return activeView.get() != null;
+    }
+
+    public static void suspendActiveFromActivity() {
+        PatchedEbitenView view = activeView.get();
+        Log.i("xMiloCastle", RESUME_PROBE + " suspendActiveFromActivity active=" + (view != null));
+        if (view != null) {
+            view.suspendFromHost("activity");
+        }
+    }
+
+    public static void resumeActiveFromActivity() {
+        PatchedEbitenView view = activeView.get();
+        Log.i("xMiloCastle", RESUME_PROBE + " resumeActiveFromActivity active=" + (view != null));
+        if (view != null) {
+            view.resumeFromHost("activity");
+        }
+    }
+
+    private static void registerActiveView(PatchedEbitenView view) {
+        PatchedEbitenView previous = activeView.get();
+        Log.i("xMiloCastle", RESUME_PROBE + " registerActiveView previous=" + (previous != null) + " same=" + (previous == view) + " view=" + view.probeState());
+        if (previous != null && previous != view) {
+            previous.suspendFromHost("active-view-replaced");
+        }
+        activeView = new WeakReference<>(view);
+    }
+
+    private static void unregisterActiveView(PatchedEbitenView view) {
+        Log.i("xMiloCastle", RESUME_PROBE + " unregisterActiveView matches=" + (activeView.get() == view) + " view=" + view.probeState());
+        if (activeView.get() == view) {
+            activeView.clear();
+        }
+    }
+
+    private String probeState() {
+        View child = getChildAt(0);
+        return "resumed=" + resumed +
+                " last=" + lastW + "x" + lastH +
+                " size=" + getWidth() + "x" + getHeight() +
+                " visibility=" + getWindowVisibility() +
+                " childExists=" + (child != null) +
+                " childClass=" + (child == null ? "null" : child.getClass().getName()) +
+                " childIsGLSurfaceView=" + (child instanceof GLSurfaceView);
     }
 
     public void applyGesturePacket(String gesturePacket) {
@@ -221,19 +271,78 @@ public class PatchedEbitenView extends EbitenView {
 
     @Override
     public void suspendGame() {
+        Log.i("xMiloCastle", RESUME_PROBE + " suspendGame before " + probeState());
         try {
             super.suspendGame();
         } catch (Exception e) {
             Log.w("xMiloCastle", "PatchedEbitenView suspendGame failed: " + e.getMessage());
         }
+        Log.i("xMiloCastle", RESUME_PROBE + " suspendGame after " + probeState());
     }
 
     @Override
     public void resumeGame() {
+        Log.i("xMiloCastle", RESUME_PROBE + " resumeGame before " + probeState());
         try {
             super.resumeGame();
         } catch (Exception e) {
             Log.w("xMiloCastle", "PatchedEbitenView resumeGame failed: " + e.getMessage());
+        }
+        Log.i("xMiloCastle", RESUME_PROBE + " resumeGame after " + probeState());
+    }
+
+    private void suspendFromHost(String reason) {
+        Log.i("xMiloCastle", RESUME_PROBE + " suspendFromHost reason=" + reason + " before " + probeState());
+        if (!resumed) {
+            return;
+        }
+        Log.i("xMiloCastle", "PatchedEbitenView suspending from " + reason);
+        suspendGame();
+        resumed = false;
+        Log.i("xMiloCastle", RESUME_PROBE + " suspendFromHost reason=" + reason + " after " + probeState());
+    }
+
+    private void resumeFromHost(String reason) {
+        Log.i("xMiloCastle", RESUME_PROBE + " resumeFromHost reason=" + reason + " before " + probeState());
+        if (resumed) {
+            return;
+        }
+        Log.i("xMiloCastle", "PatchedEbitenView resuming from " + reason);
+        resumeGame();
+        resumed = true;
+        recoverLayoutAndRender();
+        Log.i("xMiloCastle", RESUME_PROBE + " resumeFromHost reason=" + reason + " after " + probeState());
+    }
+
+    private void recoverLayoutAndRender() {
+        Log.i("xMiloCastle", RESUME_PROBE + " recoverLayoutAndRender start " + probeState());
+        resendLayoutIfMeasured();
+        requestRenderIfPossible();
+        post(new Runnable() {
+            @Override
+            public void run() {
+                Log.i("xMiloCastle", RESUME_PROBE + " recoverLayoutAndRender posted " + probeState());
+                resendLayoutIfMeasured();
+                requestRenderIfPossible();
+            }
+        });
+    }
+
+    private void resendLayoutIfMeasured() {
+        if (lastW <= 0 || lastH <= 0) {
+            Log.i("xMiloCastle", RESUME_PROBE + " resendLayoutIfMeasured skipped " + probeState());
+            return;
+        }
+        double scale = Ebitenmobileview.deviceScale();
+        Log.i("xMiloCastle", RESUME_PROBE + " resendLayoutIfMeasured dp=" + (lastW / scale) + "x" + (lastH / scale) + " " + probeState());
+        Ebitenmobileview.layout(lastW / scale, lastH / scale);
+    }
+
+    private void requestRenderIfPossible() {
+        View child = getChildAt(0);
+        Log.i("xMiloCastle", RESUME_PROBE + " requestRenderIfPossible " + probeState());
+        if (child instanceof GLSurfaceView) {
+            ((GLSurfaceView) child).requestRender();
         }
     }
 
@@ -255,42 +364,41 @@ public class PatchedEbitenView extends EbitenView {
             lastH = h;
             Log.i("xMiloCastle", "PatchedEbitenView onLayout px=" + w + "x" + h + " changed=" + changed);
         }
+        Log.i("xMiloCastle", RESUME_PROBE + " onLayout changed=" + changed + " bounds=" + w + "x" + h + " " + probeState());
 
         if (!resumed && w > 0 && h > 0) {
-            Log.i("xMiloCastle", "PatchedEbitenView resuming from onLayout");
-            resumeGame();
-            resumed = true;
+            resumeFromHost("onLayout");
         }
     }
 
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
+        registerActiveView(this);
         Log.i("xMiloCastle", "PatchedEbitenView attached");
-        if (!resumed) {
-            Log.i("xMiloCastle", "PatchedEbitenView resuming from attach");
-            resumeGame();
-            resumed = true;
+        Log.i("xMiloCastle", RESUME_PROBE + " onAttachedToWindow " + probeState());
+        if (getWindowVisibility() == VISIBLE) {
+            resumeFromHost("attach");
         }
     }
 
     @Override
     protected void onWindowVisibilityChanged(int visibility) {
         super.onWindowVisibilityChanged(visibility);
-        if (visibility == VISIBLE && !resumed) {
-            Log.i("xMiloCastle", "PatchedEbitenView resuming from visibility");
-            resumeGame();
-            resumed = true;
+        Log.i("xMiloCastle", RESUME_PROBE + " onWindowVisibilityChanged visibility=" + visibility + " " + probeState());
+        if (visibility == VISIBLE) {
+            resumeFromHost("visibility");
+        } else {
+            suspendFromHost("visibility");
         }
     }
 
     @Override
     protected void onDetachedFromWindow() {
-        if (resumed) {
-            Log.i("xMiloCastle", "PatchedEbitenView suspending from detach");
-            suspendGame();
-            resumed = false;
-        }
+        Log.i("xMiloCastle", RESUME_PROBE + " onDetachedFromWindow before " + probeState());
+        suspendFromHost("detach");
+        unregisterActiveView(this);
         super.onDetachedFromWindow();
+        Log.i("xMiloCastle", RESUME_PROBE + " onDetachedFromWindow after " + probeState());
     }
 }

@@ -90,26 +90,59 @@ go run github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@v2.9.9 bind -target and
 apps/expo-app/android/app/libs/castle.aar
 ```
 
-3. Add the corresponding dependency wiring in the Android app module if it is not already present.
-4. Register the native bridge package only when the AAR is present on classpath.
-5. Keep the current Expo fallback path active until native startup is proven healthy within the early budget window.
+3. Build the selected Android validation APK.
+4. Verify native artifact integrity before device/runtime validation.
+5. Register the native bridge package only when the AAR is present on classpath.
 
-Current verified Android app packaging results:
+Current primary Android validation target:
 
 ```text
-apps/expo-app/android/app/build/outputs/apk/debug/app-debug.apk
-apps/expo-app/android/app/build/outputs/apk/release/app-release.apk
+apps/expo-app/android/app/build/outputs/apk/internal/debug/app-internal-debug.apk
 ```
 
-Important runtime note:
-- the debug APK is an Expo development build and can route into Dev Launcher behavior when Metro/dev-client expectations are active
-- the release APK is the correct embedded validation target for first native castle handoff testing
+## Native artifact integrity gate
+
+Any AI/lane build used for runtime or device validation must prove that the APK contains the current Go native code. Source scans are not enough: scan the AAR, merged native library, stripped native library, and final APK.
+
+Required one-command validation workflow from the repo root:
+
+```powershell
+.\scripts\verify-castle-native-artifacts.ps1 -Variant internalDebug -RebuildAar -BuildApk
+```
+
+If `castle.aar` was already intentionally rebuilt and the APK was already built, run verification only:
+
+```powershell
+.\scripts\verify-castle-native-artifacts.ps1 -Variant internalDebug -SkipBuild
+```
+
+The Android Gradle project also exposes an explicit verification task:
+
+```powershell
+cd apps/expo-app/android
+.\gradlew.bat :app:verifyCastleNativeArtifactsInternalDebug --no-daemon --console=plain
+```
+
+This verification task is intentionally explicit. Normal Android assemble tasks do not auto-run the long Go/Ebiten AAR rebuild.
+
+Forbidden stale markers:
+
+```text
+MILO DRAW
+PROP DRAW
+ASSET LOAD TRY
+ASSET LOAD FAIL
+XMILO_OVERVIEW_BASIC_PROOF
+GO_DRAW_BUILD_ID
+```
+
+If any marker is found, do not install or validate that APK. Rebuild `castle.aar`, rebuild the selected APK, and rerun verification.
 
 ## Current integration blocker
 
 In this workspace today:
 - `castle-go` builds successfully as Go code
 - static preview export now works for Main Hall and nightly ritual scenes
-- `castle.aar` packaging and Android app registration are a separate workstream
+- `castle.aar` packaging is manually triggered and verified through the native artifact integrity gate
 
-So the remaining native-renderer step outside this folder is Android packaging/integration, not scene truth or procedural renderer validation.
+So the remaining native-renderer step outside this folder is Android packaging/integration and artifact verification, not scene truth or procedural renderer validation.
