@@ -90,12 +90,7 @@ func LoadPropSprite(propKey string) *ebiten.Image {
 }
 
 func loadOrPlaceholder(filePath string, w, h int, colorKey string) *ebiten.Image {
-	println("ASSET LOAD TRY:", filePath)
-
 	data, err := fs.ReadFile(filePath)
-	if err != nil {
-		println("ASSET LOAD FAIL:", filePath, err.Error())
-	}
 	if err == nil {
 		img, _, err2 := image.Decode(bytes.NewReader(data))
 		if err2 == nil {

@@ -222,10 +222,7 @@ public class PatchedEbitenView extends EbitenView {
     @Override
     public void suspendGame() {
         try {
-            if (opaqueSurface != null) {
-                opaqueSurface.onPause();
-            }
-            Ebitenmobileview.suspend();
+            super.suspendGame();
         } catch (Exception e) {
             Log.w("xMiloCastle", "PatchedEbitenView suspendGame failed: " + e.getMessage());
         }
@@ -234,10 +231,7 @@ public class PatchedEbitenView extends EbitenView {
     @Override
     public void resumeGame() {
         try {
-            if (opaqueSurface != null) {
-                opaqueSurface.onResume();
-            }
-            Ebitenmobileview.resume();
+            super.resumeGame();
         } catch (Exception e) {
             Log.w("xMiloCastle", "PatchedEbitenView resumeGame failed: " + e.getMessage());
         }

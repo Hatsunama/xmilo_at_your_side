@@ -2,7 +2,6 @@ package game
 
 import (
 	"image/color"
-	"log"
 	"sort"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -89,7 +88,6 @@ type RoomScene struct {
 	miloState           string
 	moveIntent          *movementIntent
 	route               []RouteStep
-	overviewProbeLogged int
 }
 
 const (
@@ -99,6 +97,8 @@ const (
 	roomWorldH                   = 720.0
 	roomWorldTileOriginY         = 120.0
 	roomDetailZoomMultiplier     = 2.0
+	// Intentionally disabled after seam cleanup: these layers can contaminate
+	// overview/layout work until they are redesigned as world-space or approved LOD behavior.
 	roomDetailBackgroundsEnabled = false
 	roomMoodOverlayEnabled       = false
 	routeRevealOverlayEnabled    = false
@@ -313,7 +313,6 @@ func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, 
 		inner = color.RGBA{R: 150, G: 126, B: 103, A: 245}
 		accent = color.RGBA{R: 227, G: 190, B: 114, A: 230}
 	}
-	rs.logOverviewPlateProbe(screen, roomID, bounds, base)
 	rs.drawWorldRect(screen, bounds.MinX, bounds.MinY, bounds.Width(), bounds.Height(), base)
 	rs.drawWorldRect(screen, bounds.MinX+36, bounds.MinY+36, bounds.Width()-72, bounds.Height()-72, inner)
 	rs.drawWorldRect(screen, bounds.MinX+56, bounds.MinY+56, bounds.Width()-112, 32, accent)
@@ -331,30 +330,6 @@ func (rs *RoomScene) drawWorldRect(screen *ebiten.Image, x, y, w, h float64, c c
 	rs.cam.ApplyView(&op.GeoM)
 	op.ColorScale.Scale(float32(c.R)/255, float32(c.G)/255, float32(c.B)/255, float32(c.A)/255)
 	screen.DrawImage(colorWhite, op)
-}
-
-func (rs *RoomScene) logOverviewPlateProbe(screen *ebiten.Image, roomID RoomID, bounds WorldBounds, c color.RGBA) {
-	if rs == nil || rs.cam == nil || screen == nil || rs.overviewProbeLogged >= 8 {
-		return
-	}
-	screenBounds := screen.Bounds()
-	log.Printf(
-		"XMILO_OVERVIEW_BASIC_PROOF room=%s screen=%dx%d zoom=%.4f minZoom=%.4f maxZoom=%.4f pan=(%.2f,%.2f) world=(%.2f,%.2f)-(%.2f,%.2f) alpha=%d",
-		roomID,
-		screenBounds.Dx(),
-		screenBounds.Dy(),
-		rs.cam.View.Zoom,
-		rs.cam.View.MinZoom,
-		rs.cam.View.MaxZoom,
-		rs.cam.View.PanX,
-		rs.cam.View.PanY,
-		bounds.MinX,
-		bounds.MinY,
-		bounds.MaxX,
-		bounds.MaxY,
-		c.A,
-	)
-	rs.overviewProbeLogged++
 }
 
 func orderedRoomPair(a, b RoomID) [2]RoomID {
@@ -585,7 +560,6 @@ func (rs *RoomScene) drawProp(screen *ebiten.Image, prop *Prop) {
 	op.GeoM.Scale(scale, scale)
 	op.GeoM.Translate(prop.screenX, prop.screenY)
 	rs.cam.ApplyView(&op.GeoM)
-	println("PROP DRAW:", prop.screenX, prop.screenY)
 	screen.DrawImage(prop.sprite, op)
 }
 

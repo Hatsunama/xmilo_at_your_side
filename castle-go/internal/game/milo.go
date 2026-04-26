@@ -202,7 +202,6 @@ func (m *MiloAnimator) Draw(screen *ebiten.Image) {
 	op.GeoM.Scale(scale, scale)
 	op.GeoM.Translate(m.screenX+styleX, m.screenY+styleY)
 	m.cam.ApplyView(&op.GeoM)
-	println("MILO DRAW:", m.screenX, m.screenY)
 	screen.DrawImage(frame, op)
 
 	// Thought bubble — simple white rectangle with text overlay

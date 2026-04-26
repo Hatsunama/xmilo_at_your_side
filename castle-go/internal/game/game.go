@@ -53,7 +53,6 @@ type Game struct {
 	diagFrame        int
 	diagPixels       []byte
 	probeLogged      bool
-	layoutProbeCount int
 
 	mainHallFallbackChecked bool
 	mainHallFallbackApplied bool
@@ -87,10 +86,6 @@ func NewOfflineGame() *Game {
 // Layout implements ebiten.Game. Called before the first Update/Draw.
 // Sets the logical screen size and initializes camera/scene/milo on first call.
 func (g *Game) Layout(outsideW, outsideH int) (int, int) {
-	g.layoutProbeCount++
-	if g.layoutProbeCount <= 5 {
-		log.Printf("%s layout_call=%d outside=%dx%d initialized=%t", goDrawBuildID, g.layoutProbeCount, outsideW, outsideH, g.initialized)
-	}
 	// Ebiten mobile can report a transient 0×0 (or 1×1) size during view attach/layout.
 	// If we accept it, we can initialize the renderer at an invisible size and stay black.
 	if outsideW < 2 || outsideH < 2 {

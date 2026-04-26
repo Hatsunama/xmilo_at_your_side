@@ -8,8 +8,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-const goDrawBuildID = "GO_DRAW_BUILD_ID_ART_GO_SIGNATURE_PROBE_001_2026_04_18"
-
 // Diagnostic draw sequencer.
 //
 // Purpose: eliminate content-vs-presentation uncertainty by proving:
@@ -144,7 +142,7 @@ func drawGoSignatureProbe(screen *ebiten.Image, frame int, buildLogged *bool) bo
 	}
 
 	if frame <= 5 {
-		log.Printf("%s frame=%d", goDrawBuildID, frame)
+		log.Printf("diag: signature_probe frame=%d", frame)
 		if buildLogged != nil {
 			*buildLogged = true
 		}

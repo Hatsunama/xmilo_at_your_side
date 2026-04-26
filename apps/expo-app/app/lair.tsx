@@ -16,6 +16,7 @@
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
+  BackHandler,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -25,18 +26,9 @@ import {
   View,
 } from "react-native";
 
-import { CastleView } from "../src/components/CastleModule";
+import { usePersistentCastleSurface } from "../src/components/PersistentCastleSurface";
 import { useApp } from "../src/state/AppContext";
 import { submitCommand, taskInterrupt, setContext, clearContext } from "../src/lib/bridge";
-import { SIDECAR_BASE_URL } from "../src/lib/config";
-import { resolveLocalhostBearerToken } from "../src/lib/xmiloRuntimeHost";
-
-// Derive the WebSocket URL from the HTTP base URL.
-// SIDECAR_BASE_URL is "http://127.0.0.1:42817" → "ws://127.0.0.1:42817/ws"
-const WS_BASE_URL = SIDECAR_BASE_URL.replace("http://", "ws://").replace(
-  "https://",
-  "wss://"
-) + "/ws";
 
 export default function WizardLairScreen() {
   const router = useRouter();
@@ -45,36 +37,23 @@ export default function WizardLairScreen() {
   const [busy, setBusy] = useState(false);
   const [inputVisible, setInputVisible] = useState(false);
   const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
-  const [wsURL, setWsURL] = useState<string | null>(null);
-  const [wsPrepError, setWsPrepError] = useState<string>("");
-  const [gesturePacket, setGesturePacket] = useState("");
   const promptLenRef = useRef(0);
-  const lastGesturePacketRef = useRef("");
+  const castleSurface = usePersistentCastleSurface();
 
   // Chars added in a single onChangeText that signals a paste rather than typing.
   const PASTE_THRESHOLD = 800;
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function prepWS() {
-      try {
-        const bearer = await resolveLocalhostBearerToken();
-        if (cancelled) return;
-        setWsURL(`${WS_BASE_URL}?token=${encodeURIComponent(bearer)}`);
-        setWsPrepError("");
-      } catch (e: any) {
-        if (cancelled) return;
-        setWsURL(null);
-        setWsPrepError(e?.message ?? "Localhost bearer token was not available.");
-      }
-    }
-
-    prepWS();
-    return () => {
-      cancelled = true;
-    };
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      leaveLair();
+      return true;
+    });
+    return () => subscription.remove();
   }, []);
+
+  function leaveLair() {
+    router.replace("/");
+  }
 
   async function handleTextChange(text: string) {
     const delta = text.length - promptLenRef.current;
@@ -122,61 +101,29 @@ export default function WizardLairScreen() {
     }
   }
 
-  function emitGesturePacket(kind: "start" | "move" | "end" | "cancel", nativeEvent: any) {
-    const touches = (nativeEvent?.touches ?? []).map((touch: any) => ({
-      identifier: touch.identifier,
-      x: touch.pageX ?? touch.locationX ?? 0,
-      y: touch.pageY ?? touch.locationY ?? 0,
-    }));
-    const changedTouches = (nativeEvent?.changedTouches ?? []).map((touch: any) => ({
-      identifier: touch.identifier,
-      x: touch.pageX ?? touch.locationX ?? 0,
-      y: touch.pageY ?? touch.locationY ?? 0,
-    }));
-    const packet = JSON.stringify({
-      kind,
-      timestamp: Date.now(),
-      touches,
-      changedTouches,
-    });
-    if (packet !== lastGesturePacketRef.current) {
-      lastGesturePacketRef.current = packet;
-      setGesturePacket(packet);
-    }
-  }
-
   const roomLabel = ROOM_LABELS[state.current_room_id ?? "main_hall"] ?? "Main Hall";
   const miloStateLabel = STATE_LABELS[state.milo_state ?? "idle"] ?? "Idle";
   const lastEvent = events.length > 0 ? events[events.length - 1] : null;
 
   return (
     <View style={styles.screen}>
-      {wsURL ? (
-        <CastleView
-          wsURL={wsURL}
-          gesturePacket={gesturePacket}
-          style={StyleSheet.absoluteFill}
-          roomLabel={roomLabel}
-          miloStateLabel={miloStateLabel}
-          nightlyRitual={nightlyRitual}
-        />
-      ) : (
+      {!castleSurface.ready ? (
         <View style={[StyleSheet.absoluteFill, styles.wsPrep]}>
           <Text style={styles.wsPrepTitle}>Preparing castle link…</Text>
           <Text style={styles.wsPrepBody}>
-            {wsPrepError ? `Localhost bearer token not ready: ${wsPrepError}` : "Loading localhost bearer token."}
+            {castleSurface.prepError ? `Localhost bearer token not ready: ${castleSurface.prepError}` : "Loading localhost bearer token."}
           </Text>
         </View>
-      )}
+      ) : null}
 
       <View
         style={styles.gestureSurface}
         onStartShouldSetResponder={() => true}
         onMoveShouldSetResponder={() => true}
-        onTouchStart={({ nativeEvent }) => emitGesturePacket("start", nativeEvent)}
-        onTouchMove={({ nativeEvent }) => emitGesturePacket("move", nativeEvent)}
-        onTouchEnd={({ nativeEvent }) => emitGesturePacket("end", nativeEvent)}
-        onTouchCancel={({ nativeEvent }) => emitGesturePacket("cancel", nativeEvent)}
+        onTouchStart={({ nativeEvent }) => castleSurface.emitGesturePacket("start", nativeEvent)}
+        onTouchMove={({ nativeEvent }) => castleSurface.emitGesturePacket("move", nativeEvent)}
+        onTouchEnd={({ nativeEvent }) => castleSurface.emitGesturePacket("end", nativeEvent)}
+        onTouchCancel={({ nativeEvent }) => castleSurface.emitGesturePacket("cancel", nativeEvent)}
       />
 
       {/* Top HUD — room + state indicators */}
@@ -254,7 +201,7 @@ export default function WizardLairScreen() {
           <View style={styles.controlRow}>
             <Pressable
               style={styles.controlButton}
-              onPress={() => router.back()}
+              onPress={leaveLair}
             >
               <Text style={styles.controlButtonText}>← Back</Text>
             </Pressable>
@@ -359,7 +306,7 @@ function formatEvent(event: { type: string; payload?: any }): string {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#0D0A1A",
+    backgroundColor: "transparent",
   },
   wsPrep: {
     alignItems: "center",

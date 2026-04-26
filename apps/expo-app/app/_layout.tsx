@@ -5,6 +5,7 @@ import * as Notifications from "expo-notifications";
 import { AppProvider } from "../src/state/AppContext";
 import { useWakeWord } from "../src/hooks/useWakeWord";
 import { useNightlyRitualCues } from "../src/hooks/useNightlyRitualCues";
+import { PersistentCastleSurfaceProvider } from "../src/components/PersistentCastleSurface";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -30,28 +31,31 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AppProvider>
-        <WakeWordController />
-        <NightlyRitualCueController />
-        <StatusBar barStyle="light-content" />
-        <Stack
-          screenOptions={{
-            headerStyle: { backgroundColor: "#111827" },
-            headerTintColor: "#E5E7EB",
-            contentStyle: { backgroundColor: "#0B1020" }
-          }}
-        >
-          <Stack.Screen name="index" options={{ title: "xMilo" }} />
-          <Stack.Screen name="setup" options={{ title: "Setup" }} />
-          <Stack.Screen name="settings" options={{ title: "Settings" }} />
-          <Stack.Screen name="archive" options={{ title: "Archive" }} />
-          <Stack.Screen
-            name="lair"
-            options={{
-              title: "Wizard Lair",
-              headerShown: false,
+        <PersistentCastleSurfaceProvider>
+          <WakeWordController />
+          <NightlyRitualCueController />
+          <StatusBar barStyle="light-content" />
+          <Stack
+            screenOptions={{
+              headerStyle: { backgroundColor: "#111827" },
+              headerTintColor: "#E5E7EB",
+              contentStyle: { backgroundColor: "#0B1020" }
             }}
-          />
-        </Stack>
+          >
+            <Stack.Screen name="index" options={{ title: "xMilo" }} />
+            <Stack.Screen name="setup" options={{ title: "Setup" }} />
+            <Stack.Screen name="settings" options={{ title: "Settings" }} />
+            <Stack.Screen name="archive" options={{ title: "Archive" }} />
+            <Stack.Screen
+              name="lair"
+              options={{
+                title: "Wizard Lair",
+                headerShown: false,
+                contentStyle: { backgroundColor: "transparent" },
+              }}
+            />
+          </Stack>
+        </PersistentCastleSurfaceProvider>
       </AppProvider>
     </SafeAreaProvider>
   );
