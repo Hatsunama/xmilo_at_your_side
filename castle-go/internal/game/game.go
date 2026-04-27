@@ -17,8 +17,6 @@ import (
 	"xmilo/castle-go/internal/client"
 )
 
-const resumeProbeLogLimit = 20
-
 // Game implements the ebiten.Game interface.
 // It is constructed by NewGame() and passed to ebiten.RunGame() (standalone)
 // or mobile.SetGame() (gomobile bind for React Native integration).
@@ -58,9 +56,6 @@ type Game struct {
 
 	mainHallFallbackChecked bool
 	mainHallFallbackApplied bool
-
-	resumeProbeUpdateLogs int
-	resumeProbeDrawLogs   int
 }
 
 func newGameWithChannel(ch chan client.RawEvent) *Game {
@@ -165,7 +160,6 @@ func (g *Game) Update() error {
 	if !g.initialized {
 		return nil
 	}
-	g.logResumeProbeUpdate()
 
 	g.consumeCameraTouches()
 
@@ -266,79 +260,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	if !g.initialized {
 		return
 	}
-	g.logResumeProbeDraw(screen)
 	// RoomScene.Draw takes a z-order value for Milo and a closure that draws him.
 	// This lets the scene interleave Milo correctly between props (painter's algorithm).
 	g.scene.Draw(screen, g.milo.ZOrder, func() {
 		g.milo.Draw(screen)
 	})
-}
-
-func (g *Game) logResumeProbeUpdate() {
-	if g.resumeProbeUpdateLogs >= resumeProbeLogLimit {
-		return
-	}
-	g.resumeProbeUpdateLogs++
-	log.Printf(
-		"XMILO_RESUME_PROBE_R1 go_update count=%d initialized=%t screen=%dx%d room=%s state=%s cam_zoom=%.3f cam_pan=(%.1f,%.1f)",
-		g.resumeProbeUpdateLogs,
-		g.initialized,
-		g.screenW,
-		g.screenH,
-		g.currentRoomID,
-		g.currentState,
-		g.cameraZoomForProbe(),
-		g.cameraPanXForProbe(),
-		g.cameraPanYForProbe(),
-	)
-}
-
-func (g *Game) logResumeProbeDraw(screen *ebiten.Image) {
-	if g.resumeProbeDrawLogs >= resumeProbeLogLimit {
-		return
-	}
-	g.resumeProbeDrawLogs++
-	screenW, screenH := 0, 0
-	if screen != nil {
-		bounds := screen.Bounds()
-		screenW = bounds.Dx()
-		screenH = bounds.Dy()
-	}
-	log.Printf(
-		"XMILO_RESUME_PROBE_R1 go_draw count=%d initialized=%t screen=%dx%d image=%dx%d room=%s state=%s cam_zoom=%.3f cam_pan=(%.1f,%.1f)",
-		g.resumeProbeDrawLogs,
-		g.initialized,
-		g.screenW,
-		g.screenH,
-		screenW,
-		screenH,
-		g.currentRoomID,
-		g.currentState,
-		g.cameraZoomForProbe(),
-		g.cameraPanXForProbe(),
-		g.cameraPanYForProbe(),
-	)
-}
-
-func (g *Game) cameraZoomForProbe() float64 {
-	if g.cam == nil {
-		return 0
-	}
-	return g.cam.View.Zoom
-}
-
-func (g *Game) cameraPanXForProbe() float64 {
-	if g.cam == nil {
-		return 0
-	}
-	return g.cam.View.PanX
-}
-
-func (g *Game) cameraPanYForProbe() float64 {
-	if g.cam == nil {
-		return 0
-	}
-	return g.cam.View.PanY
 }
 
 func (g *Game) maybeApplyMainHallProceduralFallback() {
