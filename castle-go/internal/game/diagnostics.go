@@ -74,18 +74,18 @@ func diagDraw(screen *ebiten.Image, frame int, roomBackground *ebiten.Image, pix
 				screen.DrawImage(roomBackground, bgOp)
 			}
 		}
-		drawTintRect(screen, 0, 0, 48, 48, color.RGBA{R: 255, G: 255, B: 255, A: 255})       // white canary
-		drawTintRect(screen, sw-48, 0, 48, 48, color.RGBA{R: 255, G: 0, B: 255, A: 255})      // magenta canary
-		drawTintRect(screen, 0, sh-12, sw, 12, color.RGBA{R: 0, G: 0, B: 0, A: 255})          // black bar
+		drawTintRect(screen, 0, 0, 48, 48, color.RGBA{R: 255, G: 255, B: 255, A: 255}) // white canary
+
+		drawTintRect(screen, 0, sh-12, sw, 12, color.RGBA{R: 0, G: 0, B: 0, A: 255}) // black bar
 	case diagPhasePrimitivesOnly:
 		// Prove primitives survive even when textures do not.
 		screen.Fill(color.RGBA{R: 12, G: 12, B: 12, A: 255})
 		halfW := sw / 2
 		halfH := sh / 2
-		drawTintRect(screen, 0, 0, halfW, halfH, color.RGBA{R: 255, G: 64, B: 64, A: 255})              // red
+		drawTintRect(screen, 0, 0, halfW, halfH, color.RGBA{R: 255, G: 64, B: 64, A: 255})                // red
 		drawTintRect(screen, halfW, 0, sw-halfW, halfH, color.RGBA{R: 64, G: 255, B: 64, A: 255})         // green
-		drawTintRect(screen, 0, halfH, halfW, sh-halfH, color.RGBA{R: 64, G: 96, B: 255, A: 255})          // blue
-		drawTintRect(screen, halfW, halfH, sw-halfW, sh-halfH, color.RGBA{R: 255, G: 230, B: 80, A: 255})  // yellow
+		drawTintRect(screen, 0, halfH, halfW, sh-halfH, color.RGBA{R: 64, G: 96, B: 255, A: 255})         // blue
+		drawTintRect(screen, halfW, halfH, sw-halfW, sh-halfH, color.RGBA{R: 255, G: 230, B: 80, A: 255}) // yellow
 	}
 
 	// Readback truth probe: log a few sample points once per phase (frame 1 and 31).
