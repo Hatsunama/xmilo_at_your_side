@@ -259,7 +259,22 @@ func (rs *RoomScene) shouldDrawRoomDetail() bool {
 func (rs *RoomScene) drawWorldOverview(screen *ebiten.Image) {
 	layouts := RoomWorldLayouts()
 	rs.drawOverviewConnections(screen, layouts)
-	for roomID, layout := range layouts {
+
+	orderedRoomIDs := []RoomID{
+		RoomArchive,
+		RoomStudy,
+		RoomObservatory,
+		RoomMainHall,
+		RoomTrophy,
+		RoomWorkshop,
+		RoomPotions,
+		RoomThreshold,
+	}
+	for _, roomID := range orderedRoomIDs {
+		layout, ok := layouts[roomID]
+		if !ok {
+			continue
+		}
 		rs.drawOverviewRoomPlate(screen, roomID, layout)
 	}
 }
@@ -305,9 +320,9 @@ func (rs *RoomScene) drawOverviewConnection(screen *ebiten.Image, from, to RoomW
 
 func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, layout RoomWorldLayout) {
 	bounds := layout.Bounds()
-	base := color.RGBA{R: 62, G: 58, B: 70, A: 245}
-	inner := color.RGBA{R: 115, G: 101, B: 86, A: 235}
-	accent := color.RGBA{R: 174, G: 145, B: 96, A: 220}
+	base := color.RGBA{R: 45, G: 85, B: 150, A: 245}
+	inner := color.RGBA{R: 95, G: 150, B: 220, A: 235}
+	accent := color.RGBA{R: 255, G: 210, B: 90, A: 220}
 	if SceneRoomID(string(roomID)) == rs.activeID {
 		base = color.RGBA{R: 88, G: 74, B: 104, A: 255}
 		inner = color.RGBA{R: 150, G: 126, B: 103, A: 245}
