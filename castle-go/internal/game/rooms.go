@@ -68,6 +68,16 @@ func (l RoomWorldLayout) Bounds() WorldBounds {
 	}
 }
 
+func (l RoomWorldLayout) OverviewPlateBounds() WorldBounds {
+	bounds := l.Bounds()
+	return WorldBounds{
+		MinX: bounds.MinX + overviewPlateMarginX,
+		MinY: bounds.MinY + overviewPlateMarginY,
+		MaxX: bounds.MaxX - overviewPlateMarginX,
+		MaxY: bounds.MaxY - overviewPlateMarginY,
+	}
+}
+
 func (l RoomWorldLayout) TileToWorld(cam *Camera, gx, gy, gz int) (float64, float64) {
 	if cam == nil {
 		return l.CenterX, l.CenterY
@@ -79,24 +89,26 @@ func (l RoomWorldLayout) TileToWorld(cam *Camera, gx, gy, gz int) (float64, floa
 
 // RoomScene manages renderer-visible rooms and renders the active room's live state.
 type RoomScene struct {
-	rooms               map[string]*Room
-	activeID            string
-	cam                 *Camera
-	tickCount           int
-	ritualStatus        string
-	ritualPulse         int
-	miloState           string
-	moveIntent          *movementIntent
-	route               []RouteStep
+	rooms        map[string]*Room
+	activeID     string
+	cam          *Camera
+	tickCount    int
+	ritualStatus string
+	ritualPulse  int
+	miloState    string
+	moveIntent   *movementIntent
+	route        []RouteStep
 }
 
 const (
-	roomWorldSpacingX            = 960.0
-	roomWorldSpacingY            = 640.0
-	roomWorldW                   = 960.0
-	roomWorldH                   = 720.0
-	roomWorldTileOriginY         = 120.0
-	roomDetailZoomMultiplier     = 2.0
+	roomWorldSpacingX        = 960.0
+	roomWorldSpacingY        = 640.0
+	roomWorldW               = 960.0
+	roomWorldH               = 720.0
+	roomWorldTileOriginY     = 120.0
+	roomDetailZoomMultiplier = 2.0
+	overviewPlateMarginX     = 120.0
+	overviewPlateMarginY     = 120.0
 	// Intentionally disabled after seam cleanup: these layers can contaminate
 	// overview/layout work until they are redesigned as world-space or approved LOD behavior.
 	roomDetailBackgroundsEnabled = false
@@ -319,7 +331,11 @@ func (rs *RoomScene) drawOverviewConnection(screen *ebiten.Image, from, to RoomW
 }
 
 func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, layout RoomWorldLayout) {
-	bounds := layout.Bounds()
+	plate := layout.OverviewPlateBounds()
+	plateX := plate.MinX
+	plateY := plate.MinY
+	plateW := plate.Width()
+	plateH := plate.Height()
 	base := color.RGBA{R: 45, G: 85, B: 150, A: 245}
 	inner := color.RGBA{R: 95, G: 150, B: 220, A: 235}
 	accent := color.RGBA{R: 255, G: 210, B: 90, A: 220}
@@ -328,10 +344,10 @@ func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, 
 		inner = color.RGBA{R: 150, G: 126, B: 103, A: 245}
 		accent = color.RGBA{R: 227, G: 190, B: 114, A: 230}
 	}
-	rs.drawWorldRect(screen, bounds.MinX, bounds.MinY, bounds.Width(), bounds.Height(), base)
-	rs.drawWorldRect(screen, bounds.MinX+36, bounds.MinY+36, bounds.Width()-72, bounds.Height()-72, inner)
-	rs.drawWorldRect(screen, bounds.MinX+56, bounds.MinY+56, bounds.Width()-112, 32, accent)
-	rs.drawWorldRect(screen, bounds.MinX+56, bounds.MaxY-88, bounds.Width()-112, 28, color.RGBA{R: accent.R, G: accent.G, B: accent.B, A: accent.A / 2})
+	rs.drawWorldRect(screen, plateX, plateY, plateW, plateH, base)
+	rs.drawWorldRect(screen, plateX+36, plateY+36, plateW-72, plateH-72, inner)
+	rs.drawWorldRect(screen, plateX+56, plateY+56, plateW-112, 32, accent)
+	rs.drawWorldRect(screen, plateX+56, plateY+plateH-88, plateW-112, 28, color.RGBA{R: accent.R, G: accent.G, B: accent.B, A: accent.A / 2})
 }
 
 func (rs *RoomScene) drawWorldRect(screen *ebiten.Image, x, y, w, h float64, c color.RGBA) {
@@ -558,17 +574,12 @@ func (rs *RoomScene) drawProp(screen *ebiten.Image, prop *Prop) {
 	case "hearth_glow", "fire_glow":
 		pulse := 0.92 + float64((rs.tickCount%18))/100
 		op.ColorScale.Scale(float32(1.0), float32(0.9+pulse/10), float32(0.78), float32(1.0))
-		op.GeoM.Scale(1, pulse)
-		y -= 6 * (pulse - 0.92)
 	case "lamp_flicker", "candle_flicker":
 		alpha := 0.86 + float64((rs.tickCount%14))/100
 		op.ColorScale.Scale(float32(1.0), float32(0.98), float32(0.86), float32(alpha))
 	case "orb_pulse", "memory_pulse", "rune_glow":
 		pulse := 0.9 + float64((rs.tickCount%24))/80
 		op.ColorScale.Scale(float32(0.88+pulse/8), float32(0.95+pulse/12), float32(1.0), float32(0.92))
-		op.GeoM.Scale(pulse, pulse)
-		x -= (float64(prop.sprite.Bounds().Dx()) * (pulse - 1)) / 2
-		y -= (float64(prop.sprite.Bounds().Dy()) * (pulse - 1)) / 2
 	}
 
 	op.GeoM.Translate(x, y)
@@ -747,6 +758,20 @@ func (rs *RoomScene) buildRooms() {
 		}
 		for _, pd := range rd.props {
 			sx, sy := layout.TileToWorld(rs.cam, pd.gx, pd.gy, pd.gz)
+			propBounds := layout.OverviewPlateBounds()
+			propAnchorPad := 72.0
+			if sx < propBounds.MinX+propAnchorPad {
+				sx = propBounds.MinX + propAnchorPad
+			}
+			if sx > propBounds.MaxX-propAnchorPad {
+				sx = propBounds.MaxX - propAnchorPad
+			}
+			if sy < propBounds.MinY+propAnchorPad {
+				sy = propBounds.MinY + propAnchorPad
+			}
+			if sy > propBounds.MaxY-propAnchorPad {
+				sy = propBounds.MaxY - propAnchorPad
+			}
 			prop := &Prop{
 				SpriteKey:  pd.key,
 				GridX:      pd.gx,

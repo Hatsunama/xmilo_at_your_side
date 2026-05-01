@@ -89,11 +89,35 @@ func (c *Camera) TileToScreen(gx, gy, gz int) (float64, float64) {
 // AnchorToScreen looks up an anchor by ID and returns its screen position.
 // Falls back to the camera origin if the anchor is unknown.
 func (c *Camera) AnchorToScreen(anchorID string) (float64, float64) {
+	if x, y, ok := c.dynamicOverviewAnchor(anchorID); ok {
+		return x, y
+	}
 	coord, ok := anchorRegistry[anchorID]
 	if !ok {
 		return c.OffsetX, c.OffsetY
 	}
 	return c.TileToScreen(coord.X, coord.Y, coord.Z)
+}
+
+func (c *Camera) dynamicOverviewAnchor(anchorID string) (float64, float64, bool) {
+	layout, ok := RoomWorldLayoutFor("main_hall")
+	if !ok {
+		return 0, 0, false
+	}
+	plate := layout.OverviewPlateBounds()
+
+	switch anchorID {
+	case "main_hall_center":
+		return plate.MinX + plate.Width()*0.50, plate.MinY + plate.Height()*0.50, true
+	case "main_hall_left":
+		return plate.MinX + plate.Width()*0.32, plate.MinY + plate.Height()*0.52, true
+	case "main_hall_right":
+		return plate.MinX + plate.Width()*0.68, plate.MinY + plate.Height()*0.52, true
+	case "main_hall_front":
+		return plate.MinX + plate.Width()*0.50, plate.MinY + plate.Height()*0.72, true
+	default:
+		return 0, 0, false
+	}
 }
 
 // ZOrder returns a sort key for painter's algorithm depth ordering.
