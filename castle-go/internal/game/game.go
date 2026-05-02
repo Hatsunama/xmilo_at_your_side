@@ -50,9 +50,9 @@ type Game struct {
 
 	assetsRefreshed bool
 
-	diagFrame        int
-	diagPixels       []byte
-	probeLogged      bool
+	diagFrame   int
+	diagPixels  []byte
+	probeLogged bool
 
 	mainHallFallbackChecked bool
 	mainHallFallbackApplied bool
@@ -133,7 +133,7 @@ func (g *Game) initializeCameraView() {
 		return
 	}
 
-	targetRoomWidth := float64(g.cam.ScreenW) * 0.70
+	targetRoomWidth := mainHallBounds.Width() * g.cam.View.MinZoom
 	roomZoom := clamp(targetRoomWidth/mainHallBounds.Width(), g.cam.View.MinZoom, g.cam.View.MaxZoom)
 	g.cam.View.Zoom = roomZoom
 

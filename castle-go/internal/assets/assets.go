@@ -42,6 +42,7 @@ var placeholderColors = map[string]color.RGBA{
 	"rooms/observatory":     {R: 32, G: 48, B: 86, A: 255},
 	"rooms/potions_room":    {R: 38, G: 72, B: 50, A: 255},
 	"rooms/threshold":       {R: 52, G: 46, B: 72, A: 255},
+	"rooms/bedroom":         {R: 64, G: 48, B: 82, A: 255},
 	// Legacy room IDs retained as compatibility fallback aliases.
 	"rooms/war_room":      {R: 70, G: 52, B: 40, A: 255},
 	"rooms/library":       {R: 54, G: 64, B: 48, A: 255},
@@ -550,6 +551,8 @@ func roomPalette(roomID string) roomColors {
 		return roomColors{rgba(42, 47, 64, 255), rgba(24, 27, 39, 255), rgba(69, 78, 101, 255), rgba(12, 13, 22, 118), rgba(13, 14, 24, 180), rgba(132, 182, 255, 68), rgba(58, 63, 82, 255), rgba(110, 121, 152, 255), rgba(18, 21, 30, 255)}
 	case "threshold":
 		return roomColors{rgba(42, 36, 58, 255), rgba(24, 20, 36, 255), rgba(76, 66, 98, 255), rgba(12, 10, 20, 118), rgba(13, 11, 24, 180), rgba(160, 130, 232, 74), rgba(62, 54, 86, 255), rgba(106, 92, 148, 255), rgba(18, 16, 30, 255)}
+	case "bedroom":
+		return roomColors{rgba(50, 36, 68, 255), rgba(28, 22, 40, 255), rgba(92, 70, 118, 255), rgba(16, 10, 24, 118), rgba(18, 12, 28, 180), rgba(190, 150, 230, 70), rgba(72, 54, 92, 255), rgba(128, 96, 150, 255), rgba(24, 18, 34, 255)}
 	default:
 		return roomColors{rgba(44, 48, 66, 255), rgba(24, 27, 40, 255), rgba(73, 80, 104, 255), rgba(12, 13, 23, 112), rgba(14, 15, 26, 180), rgba(152, 126, 232, 74), rgba(59, 64, 86, 255), rgba(109, 98, 156, 255), rgba(19, 22, 33, 255)}
 	}
@@ -655,7 +658,7 @@ func rgba(r, g, b, a uint8) color.RGBA {
 func AssetManifest() []string {
 	states := []string{"idle", "walking", "talking", "thinking", "sleeping", "working", "reading", "stirring", "gazing"}
 	facings := []string{"n", "s", "e", "w"}
-	rooms := []string{"main_hall", "archive", "trophy_room", "study", "workshop", "observatory", "potions_room", "threshold"}
+	rooms := []string{"main_hall", "archive", "trophy_room", "study", "workshop", "observatory", "potions_room", "bedroom", "threshold"}
 	var paths []string
 	for _, s := range states {
 		for _, f := range facings {

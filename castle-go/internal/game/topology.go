@@ -13,6 +13,7 @@ const (
 	RoomObservatory RoomID = "observatory"
 	RoomPotions     RoomID = "potions_room"
 	RoomThreshold   RoomID = "threshold"
+	RoomBedroom     RoomID = "bedroom"
 )
 
 type RouteStep struct {
@@ -57,6 +58,7 @@ var roomAliasMap = map[string]RoomID{
 	"crystal_orb":  RoomObservatory,
 	"observatory":  RoomObservatory,
 	"threshold":    RoomThreshold,
+	"bedroom":      RoomBedroom,
 }
 
 var sceneRoomMap = map[RoomID]string{
@@ -67,6 +69,7 @@ var sceneRoomMap = map[RoomID]string{
 	RoomObservatory: "observatory",
 	RoomPotions:     "potions_room",
 	RoomThreshold:   "threshold",
+	RoomBedroom:     "bedroom",
 	RoomMainHall:    "main_hall",
 }
 
@@ -97,7 +100,7 @@ var roomTopologies = map[RoomID]RoomTopology{
 		Cluster:     "home",
 		LaunchLive:  false,
 		SafeIdle:    true,
-		Neighbors:   []RoomID{RoomArchive},
+		Neighbors:   []RoomID{RoomArchive, RoomBedroom},
 		MapX:        1,
 		MapY:        -1,
 	},
@@ -141,15 +144,25 @@ var roomTopologies = map[RoomID]RoomTopology{
 		MapX:        -1,
 		MapY:        1,
 	},
+	RoomBedroom: {
+		Canonical:   RoomBedroom,
+		DisplayName: "Bedroom",
+		Cluster:     "rest",
+		LaunchLive:  false,
+		SafeIdle:    true,
+		Neighbors:   []RoomID{RoomThreshold, RoomTrophy},
+		MapX:        2,
+		MapY:        1,
+	},
 	RoomThreshold: {
 		Canonical:   RoomThreshold,
 		DisplayName: "Threshold",
 		Cluster:     "threshold",
 		LaunchLive:  false,
 		SafeIdle:    false,
-		Neighbors:   []RoomID{RoomMainHall},
-		MapX:        1,
-		MapY:        0,
+		Neighbors:   []RoomID{RoomMainHall, RoomBedroom},
+		MapX:        0,
+		MapY:        1,
 	},
 }
 

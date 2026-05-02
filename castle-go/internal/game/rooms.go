@@ -2,6 +2,7 @@ package game
 
 import (
 	"image/color"
+	"math"
 	"sort"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -280,6 +281,7 @@ func (rs *RoomScene) drawWorldOverview(screen *ebiten.Image) {
 		RoomTrophy,
 		RoomWorkshop,
 		RoomPotions,
+		RoomBedroom,
 		RoomThreshold,
 	}
 	for _, roomID := range orderedRoomIDs {
@@ -315,6 +317,13 @@ func (rs *RoomScene) drawOverviewConnections(screen *ebiten.Image, layouts map[R
 
 func (rs *RoomScene) drawOverviewConnection(screen *ebiten.Image, from, to RoomWorldLayout) {
 	const bandW = 120
+	dx := to.CenterX - from.CenterX
+	dy := to.CenterY - from.CenterY
+	if absFloat(dx) > 0 && absFloat(dy) > 0 {
+		rs.drawWorldLine(screen, from.CenterX, from.CenterY, to.CenterX, to.CenterY, bandW, color.RGBA{R: 92, G: 78, B: 68, A: 220})
+		rs.drawWorldLine(screen, from.CenterX, from.CenterY, to.CenterX, to.CenterY, bandW*0.3, color.RGBA{R: 141, G: 118, B: 92, A: 190})
+		return
+	}
 	if absFloat(from.CenterX-to.CenterX) >= absFloat(from.CenterY-to.CenterY) {
 		x := minFloat(from.CenterX, to.CenterX)
 		y := (from.CenterY+to.CenterY)/2 - bandW/2
@@ -358,6 +367,24 @@ func (rs *RoomScene) drawWorldRect(screen *ebiten.Image, x, y, w, h float64, c c
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Scale(w, h)
 	op.GeoM.Translate(x, y)
+	rs.cam.ApplyView(&op.GeoM)
+	op.ColorScale.Scale(float32(c.R)/255, float32(c.G)/255, float32(c.B)/255, float32(c.A)/255)
+	screen.DrawImage(colorWhite, op)
+}
+
+func (rs *RoomScene) drawWorldLine(screen *ebiten.Image, x1, y1, x2, y2, width float64, c color.RGBA) {
+	dx := x2 - x1
+	dy := y2 - y1
+	length := math.Hypot(dx, dy)
+	if length <= 0 || width <= 0 {
+		return
+	}
+	ensureDrawPrimitives()
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Scale(length, width)
+	op.GeoM.Translate(0, -width/2)
+	op.GeoM.Rotate(math.Atan2(dy, dx))
+	op.GeoM.Translate(x1, y1)
 	rs.cam.ApplyView(&op.GeoM)
 	op.ColorScale.Scale(float32(c.R)/255, float32(c.G)/255, float32(c.B)/255, float32(c.A)/255)
 	screen.DrawImage(colorWhite, op)
@@ -740,6 +767,10 @@ func (rs *RoomScene) buildRooms() {
 				{key: "archive_shelf_b", gx: 12, gy: 7, gz: 0, ambient: ""},
 				{key: "memory_crystal", gx: 8, gy: 5, gz: 1, ambient: "memory_pulse"},
 			},
+		},
+		{
+			id:    "bedroom",
+			props: nil,
 		},
 		{
 			id:    "threshold",
