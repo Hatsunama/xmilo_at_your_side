@@ -33,6 +33,8 @@ type Game struct {
 	currentState  string
 	currentRoute  []RouteStep
 	routeLast     map[string]int
+	moveSegments  []movementSegment
+	activeSegment *movementSegment
 
 	// screen dimensions — updated in Layout()
 	screenW int
@@ -56,6 +58,14 @@ type Game struct {
 
 	mainHallFallbackChecked bool
 	mainHallFallbackApplied bool
+}
+
+type movementSegment struct {
+	fromRoom string
+	toRoom   string
+	toAnchor string
+	reason   string
+	duration int
 }
 
 func newGameWithChannel(ch chan client.RawEvent) *Game {
@@ -175,6 +185,7 @@ drain:
 	}
 
 	g.milo.Tick(g.cam)
+	g.advanceMovementSegments()
 	g.idle.Tick(g)
 	g.scene.Tick()
 	return nil
@@ -374,14 +385,7 @@ func (g *Game) handleEvent(ev client.RawEvent) {
 			log.Printf("game: decode movement_started: %v", err)
 			return
 		}
-		toX, toY := g.cam.AnchorToScreen(p.ToAnchor)
-		facing := WalkFacing(p.FromAnchor, p.ToAnchor)
-		// If the sidecar provided a nonzero duration use it; otherwise compute from grid distance.
-		durationMS := p.EstimatedMS
-		if durationMS == 0 {
-			durationMS = WalkDurationMS(p.FromAnchor, p.ToAnchor)
-		}
-		g.milo.StartWalk(toX, toY, facing, durationMS)
+		g.startTopologyMovement(p)
 		g.currentAnchor = p.ToAnchor
 		g.scene.SetMovementIntent(p.ToRoom, p.ToAnchor, p.Reason)
 		variant := g.nextRouteVariant(g.currentRoomID, p.ToRoom)
@@ -397,6 +401,9 @@ func (g *Game) handleEvent(ev client.RawEvent) {
 		}
 		g.currentRoomID = p.RoomID
 		g.currentAnchor = p.AnchorID
+		g.moveSegments = nil
+		g.activeSegment = nil
+		g.placeMiloAtRoomAnchor(p.RoomID, p.AnchorID)
 		g.scene.SetActiveRoom(p.RoomID)
 		log.Printf("game: room changed to=%s anchor=%s scene=%s", p.RoomID, p.AnchorID, SceneRoomID(p.RoomID))
 		g.scene.ClearMovementIntent()
@@ -468,6 +475,127 @@ func (g *Game) handleEvent(ev client.RawEvent) {
 		if g.idle != nil {
 			g.idle.Reset()
 		}
+	}
+}
+
+func (g *Game) placeMiloAtRoomAnchor(roomID, anchorID string) {
+	if g.cam == nil || g.milo == nil {
+		return
+	}
+	x, y := g.cam.AnchorToRoomScreen(roomID, anchorID)
+	g.milo.screenX = x
+	g.milo.screenY = y
+	g.milo.walkActive = false
+	g.milo.walkProgress = 1
+	g.milo.walkTicks = 0
+	g.milo.ZOrder = g.cam.MiloZOrderFromScreen(x, y)
+}
+
+func (g *Game) startTopologyMovement(p MovementStarted) {
+	g.moveSegments = g.buildMovementSegments(p)
+	g.startNextMovementSegment()
+}
+
+func (g *Game) buildMovementSegments(p MovementStarted) []movementSegment {
+	from := string(CanonicalRoomID(p.FromRoom))
+	to := string(CanonicalRoomID(p.ToRoom))
+	duration := p.EstimatedMS
+	if duration == 0 {
+		duration = WalkDurationMS(p.FromAnchor, p.ToAnchor)
+	}
+	if duration <= 0 {
+		duration = 1
+	}
+
+	if from == to || SharesWall(from, to) {
+		return []movementSegment{{
+			fromRoom: from,
+			toRoom:   to,
+			toAnchor: p.ToAnchor,
+			reason:   p.Reason,
+			duration: duration,
+		}}
+	}
+
+	variant := g.nextRouteVariant(from, to)
+	route := RouteBetweenVariant(from, to, variant)
+	if len(route) < 2 {
+		return nil
+	}
+
+	segmentDuration := duration / (len(route) - 1)
+	if segmentDuration < 1 {
+		segmentDuration = 1
+	}
+	segments := make([]movementSegment, 0, len(route)-1)
+	for index := 1; index < len(route); index++ {
+		fromRoom := string(route[index-1].Room)
+		toRoom := string(route[index].Room)
+		if !SharesWall(fromRoom, toRoom) {
+			return nil
+		}
+		toAnchor := roomCenterAnchor(toRoom)
+		if index == len(route)-1 {
+			toAnchor = p.ToAnchor
+		}
+		segments = append(segments, movementSegment{
+			fromRoom: fromRoom,
+			toRoom:   toRoom,
+			toAnchor: toAnchor,
+			reason:   p.Reason,
+			duration: segmentDuration,
+		})
+	}
+	return segments
+}
+
+func (g *Game) advanceMovementSegments() {
+	if g.milo == nil || g.milo.walkActive {
+		return
+	}
+	if g.activeSegment != nil {
+		g.currentRoomID = g.activeSegment.toRoom
+		g.currentAnchor = g.activeSegment.toAnchor
+		g.activeSegment = nil
+	}
+	g.startNextMovementSegment()
+}
+
+func (g *Game) startNextMovementSegment() {
+	if g.cam == nil || g.milo == nil || len(g.moveSegments) == 0 {
+		return
+	}
+	segment := g.moveSegments[0]
+	g.moveSegments = g.moveSegments[1:]
+	g.activeSegment = &segment
+	toX, toY := g.cam.AnchorToRoomScreen(segment.toRoom, segment.toAnchor)
+	facing := WalkFacing(g.currentAnchor, segment.toAnchor)
+	g.milo.StartWalk(toX, toY, facing, segment.duration)
+	g.scene.SetMovementIntent(segment.toRoom, segment.toAnchor, segment.reason)
+}
+
+func roomCenterAnchor(roomID string) string {
+	switch CanonicalRoomID(roomID) {
+	case RoomMainHall:
+		return "main_hall_center"
+	case RoomArchive:
+		return "archive_center"
+	case RoomTrophy:
+		return "trophy_room_center"
+	case RoomStudy:
+		return "study_center"
+	case RoomWorkshop:
+		return "workshop_center"
+	case RoomObservatory:
+		return "observatory_center"
+	case RoomPotions:
+		return "potions_room_center"
+	case RoomThreshold:
+		return "threshold_center"
+	case RoomBedroom:
+		return "bedroom_center"
+	default:
+		return "room_center"
 	}
 }
 

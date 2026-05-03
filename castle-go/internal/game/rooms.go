@@ -115,6 +115,7 @@ const (
 	roomDetailBackgroundsEnabled = false
 	roomMoodOverlayEnabled       = false
 	routeRevealOverlayEnabled    = false
+	movementIntentOverlayEnabled = false
 )
 
 type movementIntent struct {
@@ -681,6 +682,9 @@ func newRoomWorldLayout(roomID RoomID, topo RoomTopology) RoomWorldLayout {
 }
 
 func (rs *RoomScene) drawMovementIntent(screen *ebiten.Image) {
+	if !movementIntentOverlayEnabled {
+		return
+	}
 	if rs.moveIntent == nil {
 		return
 	}

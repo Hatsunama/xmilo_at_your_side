@@ -99,6 +99,56 @@ func (c *Camera) AnchorToScreen(anchorID string) (float64, float64) {
 	return c.TileToScreen(coord.X, coord.Y, coord.Z)
 }
 
+func (c *Camera) AnchorToRoomScreen(roomID, anchorID string) (float64, float64) {
+	if CanonicalRoomID(roomID) == RoomMainHall {
+		if x, y, ok := c.dynamicOverviewAnchor(anchorID); ok {
+			return x, y
+		}
+	}
+
+	layout, ok := RoomWorldLayoutFor(roomID)
+	if !ok {
+		return c.AnchorToScreen(anchorID)
+	}
+	plate := layout.OverviewPlateBounds()
+	fx, fy := roomAnchorFraction(CanonicalRoomID(roomID), anchorID)
+	return plate.MinX + plate.Width()*fx, plate.MinY + plate.Height()*fy
+}
+
+func roomAnchorFraction(roomID RoomID, anchorID string) (float64, float64) {
+	switch roomID {
+	case RoomArchive:
+		if anchorID == "archive_lectern" {
+			return 0.50, 0.62
+		}
+	case RoomStudy:
+		if anchorID == "library_desk" {
+			return 0.45, 0.62
+		}
+	case RoomObservatory:
+		if anchorID == "crystal_orb_watch" {
+			return 0.55, 0.58
+		}
+	case RoomWorkshop:
+		if anchorID == "war_room_table" {
+			return 0.50, 0.58
+		}
+	case RoomPotions:
+		if anchorID == "cauldron_stir" {
+			return 0.50, 0.62
+		}
+	case RoomThreshold:
+		if anchorID == "threshold_center" {
+			return 0.50, 0.50
+		}
+	case RoomBedroom:
+		if anchorID == "bedroom_center" {
+			return 0.50, 0.50
+		}
+	}
+	return 0.50, 0.50
+}
+
 func (c *Camera) dynamicOverviewAnchor(anchorID string) (float64, float64, bool) {
 	layout, ok := RoomWorldLayoutFor("main_hall")
 	if !ok {
