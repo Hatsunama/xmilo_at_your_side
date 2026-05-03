@@ -207,6 +207,9 @@ func SharesWall(a, b string) bool {
 	return false
 }
 
+// RequiresThreshold is legacy behavior terminology for routed cross-room travel.
+// It returns true for non-adjacent rooms that require graph routing, even when
+// the resolved path does not literally pass through the Threshold room.
 func RequiresThreshold(a, b string) bool {
 	aID := CanonicalRoomID(a)
 	bID := CanonicalRoomID(b)

@@ -220,11 +220,11 @@ func mapState(sidecarState, roomID string) string {
 		return "walking"
 	case "working":
 		switch roomID {
-		case "library", "spellbook", "archive":
+		case "study", "library", "spellbook", "archive":
 			return "reading"
-		case "cauldron":
+		case "potions_room", "cauldron":
 			return "stirring"
-		case "crystal_orb":
+		case "observatory", "crystal_orb":
 			return "gazing"
 		case "baby_dragon":
 			return "working" // playing with dragon

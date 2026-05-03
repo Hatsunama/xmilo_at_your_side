@@ -376,9 +376,9 @@ func (g *Game) ApplyRawEvent(ev client.RawEvent) {
 func (g *Game) handleEvent(ev client.RawEvent) {
 	switch ev.Type {
 
-	// "milo.movement_started" — Milo begins walking to a new anchor.
-	// This is emitted before the room changes, so we start the walk animation
-	// using the destination anchor's screen coordinates.
+	// "milo.movement_started" — Milo begins topology-safe movement.
+	// Same-room and adjacent-room moves animate directly; non-adjacent moves expand
+	// into adjacent room segments using room-aware endpoints.
 	case "milo.movement_started":
 		var p MovementStarted
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
@@ -392,7 +392,8 @@ func (g *Game) handleEvent(ev client.RawEvent) {
 		g.currentRoute = RouteBetweenVariant(g.currentRoomID, p.ToRoom, variant)
 		g.scene.SetRoute(g.currentRoute)
 
-	// "milo.room_changed" — Milo has arrived. Update the active room state.
+	// "milo.room_changed" — Milo has arrived. Place him at the room-aware anchor,
+	// reset any pending movement segments, and update the active room state.
 	case "milo.room_changed":
 		var p RoomChanged
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {

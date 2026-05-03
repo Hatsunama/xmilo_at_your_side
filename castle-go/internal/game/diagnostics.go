@@ -14,8 +14,8 @@ import (
 // 1) whether the active room background texture is non-black at draw time
 // 2) whether draw primitives (tint rects) are visible at draw time
 //
-// This file is intentionally small and time-bounded so it can be removed
-// after Main Hub approves a final cure patch.
+// Diagnostics are disabled by default and retained as an opt-in local utility
+// for future renderer visibility checks.
 
 const diagEnabled = false
 
