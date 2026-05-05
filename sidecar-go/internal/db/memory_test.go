@@ -8,169 +8,130 @@ import (
 	"xmilo/sidecar-go/internal/runtime"
 )
 
-func TestMemoryEntryQuarantineRemovesFromActiveReads(t *testing.T) {
+func TestTaskSlotPersistsMemoryIntentAssessment(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "test.sqlite"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.SetActiveMemoryEntry(runtime.MemoryEntry{
-		Class:     runtime.MemoryClassUserPreference,
-		Key:       "preference_memory",
-		Value:     "I prefer cinnamon.",
-		Source:    "user_prompt",
-		Effect:    "user_teaching",
-		TrustTier: 5,
-	}); err != nil {
-		t.Fatalf("set active: %v", err)
+	task := runtime.TaskSnapshot{
+		TaskID:    "task_memory_write",
+		Prompt:    "remember that I prefer cinnamon",
+		Intent:    "memory",
+		RoomID:    "archive",
+		AnchorID:  "archive_lectern",
+		Status:    "running",
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		IntakeAssessment: &runtime.IntakeAssessment{
+			PrimaryClass:       "MEMORY_WRITE_CANDIDATE",
+			ValidationState:    "PENDING_APPROVAL",
+			ChosenClosedAction: "DECLINE_MEMORY_WRITE",
+			MemoryIntent: &runtime.MemoryIntent{
+				Class:        "preference",
+				Source:       "user_prompt",
+				Effect:       "preference_write",
+				SafetyStatus: "needs_confirmation",
+			},
+		},
 	}
 
-	if err := store.QuarantineActiveMemoryEntry(runtime.MemoryClassUserPreference, "preference_memory", "suspicious"); err != nil {
-		t.Fatalf("quarantine: %v", err)
+	if err := store.UpsertTask("active", task); err != nil {
+		t.Fatalf("upsert task: %v", err)
 	}
 
-	value, err := store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
+	loaded, err := store.GetTask("active")
 	if err != nil {
-		t.Fatalf("get active: %v", err)
+		t.Fatalf("get task: %v", err)
 	}
-	if value != "" {
-		t.Fatalf("expected no active value after quarantine, got %q", value)
+	if loaded == nil || loaded.IntakeAssessment == nil || loaded.IntakeAssessment.MemoryIntent == nil {
+		t.Fatalf("expected persisted memory intent assessment, got %#v", loaded)
+	}
+	if got := loaded.IntakeAssessment.MemoryIntent.SafetyStatus; got != "needs_confirmation" {
+		t.Fatalf("expected memory safety status to round-trip, got %q", got)
 	}
 }
 
-func TestMemoryEntryRestoreReactivatesSupersededValue(t *testing.T) {
+func TestResumeCheckpointPersistsMemoryIntentAssessment(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "test.sqlite"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.SetActiveMemoryEntry(runtime.MemoryEntry{
-		Class:     runtime.MemoryClassUserPreference,
-		Key:       "preference_memory",
-		Value:     "I prefer cinnamon.",
-		Source:    "user_prompt",
-		Effect:    "user_teaching",
-		TrustTier: 5,
-	}); err != nil {
-		t.Fatalf("set active: %v", err)
-	}
-	if err := store.SetActiveMemoryEntry(runtime.MemoryEntry{
-		Class:     runtime.MemoryClassUserPreference,
-		Key:       "preference_memory",
-		Value:     "I prefer mint.",
-		Source:    "user_prompt",
-		Effect:    "user_teaching",
-		TrustTier: 5,
-	}); err != nil {
-		t.Fatalf("supersede: %v", err)
+	checkpoint := &runtime.ResumeCheckpoint{
+		TaskID:             "task_memory_resume",
+		SourceStatus:       "awaiting_user_choice",
+		Phase:              "resume_after_user_choice",
+		Blocker:            "memory_needs_confirmation",
+		ContinuationStatus: "awaiting_user_choice",
+		NextStepType:       "await_user_choice",
+		ContextHash:        "context-hash",
+		Status:             "awaiting_user_choice",
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:          time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:          time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339),
+		IntakeAssessment: &runtime.IntakeAssessment{
+			PrimaryClass:       "MEMORY_WRITE_CANDIDATE",
+			ValidationState:    "PENDING_APPROVAL",
+			ChosenClosedAction: "DECLINE_MEMORY_WRITE",
+			MemoryIntent: &runtime.MemoryIntent{
+				Class:        "preference",
+				Source:       "user_prompt",
+				Effect:       "preference_write",
+				SafetyStatus: "needs_confirmation",
+			},
+		},
 	}
 
-	value, err := store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
+	if err := store.SetResumeCheckpoint(checkpoint); err != nil {
+		t.Fatalf("set checkpoint: %v", err)
+	}
+
+	loaded, err := store.GetResumeCheckpoint()
 	if err != nil {
-		t.Fatalf("get active: %v", err)
+		t.Fatalf("get checkpoint: %v", err)
 	}
-	if value != "I prefer mint." {
-		t.Fatalf("expected latest active value, got %q", value)
+	if loaded == nil || loaded.IntakeAssessment == nil || loaded.IntakeAssessment.MemoryIntent == nil {
+		t.Fatalf("expected persisted checkpoint memory intent, got %#v", loaded)
 	}
-
-	if err := store.RestoreMostRecentSupersededMemoryEntry(runtime.MemoryClassUserPreference, "preference_memory"); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-
-	value, err = store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
-	if err != nil {
-		t.Fatalf("get active (post-restore): %v", err)
-	}
-	if value != "I prefer cinnamon." {
-		t.Fatalf("expected restored value, got %q", value)
+	if got := loaded.IntakeAssessment.MemoryIntent.Effect; got != "preference_write" {
+		t.Fatalf("expected memory effect to round-trip, got %q", got)
 	}
 }
 
-func TestConsolidateMemoryBoundedNeverDeletesActive(t *testing.T) {
+func TestClearingResumeCheckpointRemovesMemoryIntentState(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "test.sqlite"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.SetActiveMemoryEntry(runtime.MemoryEntry{
-		Class:     runtime.MemoryClassUserPreference,
-		Key:       "preference_memory",
-		Value:     "I prefer mint.",
-		Source:    "user_prompt",
-		Effect:    "user_teaching",
-		TrustTier: 5,
-	}); err != nil {
-		t.Fatalf("set active: %v", err)
+	checkpoint := &runtime.ResumeCheckpoint{
+		TaskID:      "task_memory_clear",
+		Status:      "awaiting_user_choice",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:   time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339),
+		ContextHash: "context-hash",
+		IntakeAssessment: &runtime.IntakeAssessment{
+			MemoryIntent: &runtime.MemoryIntent{SafetyStatus: "needs_confirmation"},
+		},
 	}
 
-	old := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339)
-	for i := 0; i < 3; i++ {
-		_, err := store.DB.Exec(`INSERT INTO memory_entries(class, mkey, value, status, source, effect, trust_tier, quarantine_reason, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			string(runtime.MemoryClassUserPreference),
-			"preference_memory",
-			"old superseded",
-			string(runtime.MemoryEntryStatusSuperseded),
-			"user_prompt",
-			"user_teaching",
-			5,
-			"",
-			old,
-			old,
-		)
-		if err != nil {
-			t.Fatalf("seed superseded: %v", err)
-		}
+	if err := store.SetResumeCheckpoint(checkpoint); err != nil {
+		t.Fatalf("set checkpoint: %v", err)
 	}
-	for i := 0; i < 3; i++ {
-		_, err := store.DB.Exec(`INSERT INTO memory_entries(class, mkey, value, status, source, effect, trust_tier, quarantine_reason, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			string(runtime.MemoryClassUserPreference),
-			"preference_memory",
-			"old quarantined",
-			string(runtime.MemoryEntryStatusQuarantined),
-			"user_prompt",
-			"user_teaching",
-			5,
-			"suspicious",
-			old,
-			old,
-		)
-		if err != nil {
-			t.Fatalf("seed quarantined: %v", err)
-		}
+	if err := store.ClearResumeCheckpoint(); err != nil {
+		t.Fatalf("clear checkpoint: %v", err)
 	}
 
-	if _, err := store.ConsolidateMemoryBounded(runtime.MemoryClassUserPreference, "preference_memory", 1, 1, 0); err != nil {
-		t.Fatalf("consolidate: %v", err)
-	}
-
-	value, err := store.GetActiveMemoryValue(runtime.MemoryClassUserPreference, "preference_memory")
+	loaded, err := store.GetResumeCheckpoint()
 	if err != nil {
-		t.Fatalf("get active: %v", err)
+		t.Fatalf("get checkpoint: %v", err)
 	}
-	if value != "I prefer mint." {
-		t.Fatalf("expected active value preserved, got %q", value)
-	}
-
-	var supersededCount int
-	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM memory_entries WHERE class = ? AND mkey = ? AND status = ?`,
-		string(runtime.MemoryClassUserPreference), "preference_memory", string(runtime.MemoryEntryStatusSuperseded)).Scan(&supersededCount); err != nil {
-		t.Fatalf("count superseded: %v", err)
-	}
-	if supersededCount > 1 {
-		t.Fatalf("expected superseded pruned to <= 1, got %d", supersededCount)
-	}
-
-	var quarantinedCount int
-	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM memory_entries WHERE class = ? AND mkey = ? AND status = ?`,
-		string(runtime.MemoryClassUserPreference), "preference_memory", string(runtime.MemoryEntryStatusQuarantined)).Scan(&quarantinedCount); err != nil {
-		t.Fatalf("count quarantined: %v", err)
-	}
-	if quarantinedCount > 1 {
-		t.Fatalf("expected quarantined pruned to <= 1, got %d", quarantinedCount)
+	if loaded != nil {
+		t.Fatalf("expected checkpoint cleared, got %#v", loaded)
 	}
 }

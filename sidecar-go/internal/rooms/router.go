@@ -11,6 +11,7 @@ type Route struct {
 	AnchorID string
 }
 
+func Resolve(prompt, intentHint string) Route {
 	intent := strings.ToLower(strings.TrimSpace(intentHint))
 	lower := strings.ToLower(prompt)
 
