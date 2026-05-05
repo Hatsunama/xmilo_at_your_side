@@ -10,6 +10,7 @@ export type RuntimeCheckSnapshot = {
   checked_at: string;
   runtime_host_started: boolean;
   bridge_connected: boolean;
+  task_route_surface_ready: boolean;
   host_ready: boolean;
   restart_attempted?: boolean;
   restart_succeeded?: boolean;
@@ -36,6 +37,7 @@ export type RuntimeRecoveryState = {
   attempting: boolean;
   runtimeHostStarted?: boolean;
   bridgeConnected?: boolean;
+  taskRouteSurfaceReady?: boolean;
   notificationsGranted?: boolean;
   appearOnTopGranted?: boolean;
   batteryUnrestricted?: boolean;
@@ -45,6 +47,8 @@ export type RuntimeRecoveryState = {
 const VERIFY_BUDGET_MAX_ATTEMPTS = 3;
 const VERIFY_BUDGET_WINDOW_MS = 10 * 60 * 1000;
 const VERIFY_BACKOFF_MS = [0, 15_000, 45_000];
+const TASK_ROUTE_SURFACE_UNAVAILABLE =
+  "runtime host is running, but the full task route surface is unavailable";
 
 type AttemptBudget = {
   window_started_at_ms: number;
@@ -58,19 +62,25 @@ function nowIso() {
 
 async function checkRuntime(): Promise<RuntimeCheckSnapshot> {
   const runtime = await getXMiloclawRuntimeStatus().catch(() => null);
+  const runtimeHostStarted = runtime?.runtimeHostStarted ?? false;
+  const bridgeConnected = runtime?.bridgeConnected ?? false;
+  const taskRouteSurfaceReady = runtime?.taskRouteSurfaceReady ?? false;
   return {
     checked_at: nowIso(),
-    runtime_host_started: runtime?.runtimeHostStarted ?? false,
-    bridge_connected: runtime?.bridgeConnected ?? false,
+    runtime_host_started: runtimeHostStarted,
+    bridge_connected: bridgeConnected,
+    task_route_surface_ready: taskRouteSurfaceReady,
     host_ready: runtime?.hostReady ?? false,
     restart_attempted: runtime?.restartAttempted,
     restart_succeeded: runtime?.restartSucceeded,
-    last_error: runtime?.lastError,
+    last_error:
+      runtime?.lastError ??
+      (runtimeHostStarted && bridgeConnected && !taskRouteSurfaceReady ? TASK_ROUTE_SURFACE_UNAVAILABLE : undefined),
   };
 }
 
 function classifyStatus(snapshot: RuntimeCheckSnapshot): RuntimeRecoveryState["status"] {
-  if (snapshot.host_ready) return "healthy";
+  if (snapshot.host_ready && snapshot.task_route_surface_ready) return "healthy";
   if (snapshot.runtime_host_started || snapshot.bridge_connected) return "unready";
   return "down";
 }
@@ -130,6 +140,7 @@ export async function refreshRuntimeRecoveryState(current: RuntimeRecoveryState)
     last_check: snapshot,
     runtimeHostStarted: runtime?.runtimeHostStarted ?? current.runtimeHostStarted,
     bridgeConnected: runtime?.bridgeConnected ?? current.bridgeConnected,
+    taskRouteSurfaceReady: runtime?.taskRouteSurfaceReady ?? current.taskRouteSurfaceReady,
     notificationsGranted: runtime?.notificationsGranted ?? current.notificationsGranted,
     appearOnTopGranted: runtime?.appearOnTopGranted ?? current.appearOnTopGranted,
     batteryUnrestricted: runtime?.batteryUnrestricted ?? current.batteryUnrestricted,
@@ -198,6 +209,7 @@ export async function attemptRuntimeRecovery(current: RuntimeRecoveryState): Pro
     const runtime = await restartXMiloclawRuntimeHost();
     const verified = await checkRuntime();
     const verifiedStatus = classifyStatus(verified);
+    const verifiedReady = verified.host_ready && verified.task_route_surface_ready;
     return {
       next: {
         ...current,
@@ -209,14 +221,20 @@ export async function attemptRuntimeRecovery(current: RuntimeRecoveryState): Pro
         next_allowed_at: new Date(nextBudget.next_allowed_at_ms).toISOString(),
         runtimeHostStarted: runtime.runtimeHostStarted,
         bridgeConnected: runtime.bridgeConnected,
+        taskRouteSurfaceReady: runtime.taskRouteSurfaceReady,
         notificationsGranted: runtime.notificationsGranted,
         appearOnTopGranted: runtime.appearOnTopGranted,
         batteryUnrestricted: runtime.batteryUnrestricted,
         accessibilityEnabled: runtime.accessibilityEnabled,
         last_result: {
-          result: verified.host_ready ? "restart_verified" : "restart_failed",
+          result: verifiedReady ? "restart_verified" : "restart_failed",
           at: nowIso(),
-          note: runtime.lastError ?? verified.last_error ?? "runtime host not ready",
+          note:
+            runtime.lastError ??
+            verified.last_error ??
+            (!verified.task_route_surface_ready && verified.runtime_host_started && verified.bridge_connected
+              ? TASK_ROUTE_SURFACE_UNAVAILABLE
+              : "runtime host not ready"),
         },
       },
     };

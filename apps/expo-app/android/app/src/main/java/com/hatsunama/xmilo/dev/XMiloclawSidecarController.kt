@@ -23,6 +23,8 @@ object XMiloclawSidecarController {
   private const val PREFS_NAME = "xmilo_runtime_host"
   private const val PREFS_TOKEN_KEY = "localhost_bearer_token"
   private const val TOKEN_FILENAME = "xmilo_localhost_bearer_token.txt"
+  private const val TASK_ROUTE_SURFACE_UNAVAILABLE =
+    "runtime host is running, but the full task route surface is unavailable"
 
   private val running = AtomicBoolean(false)
   @Volatile private var serverSocket: ServerSocket? = null
@@ -86,7 +88,11 @@ object XMiloclawSidecarController {
 
   fun healthOk(): Boolean = isListening()
 
-  fun readyOk(): Boolean = isListening()
+  fun taskRouteSurfaceReady(): Boolean = false
+
+  fun taskRouteSurfaceUnavailableReason(): String = TASK_ROUTE_SURFACE_UNAVAILABLE
+
+  fun readyOk(): Boolean = isListening() && taskRouteSurfaceReady()
 
   private fun acceptLoop(socket: ServerSocket) {
     while (running.get()) {
@@ -175,9 +181,19 @@ object XMiloclawSidecarController {
         return
       }
 
-      when (path) {
+      when (pathOnly) {
         "/health" -> writeResponse(writer, 200, "{\"ok\":true}")
-        "/ready" -> writeResponse(writer, 200, "{\"ok\":true}")
+        "/ready" -> {
+          if (taskRouteSurfaceReady()) {
+            writeResponse(writer, 200, "{\"ok\":true,\"taskRouteSurfaceReady\":true}")
+          } else {
+            writeResponse(
+              writer,
+              503,
+              "{\"ok\":false,\"taskRouteSurfaceReady\":false,\"error\":\"task route surface unavailable\",\"message\":\"$TASK_ROUTE_SURFACE_UNAVAILABLE\"}"
+            )
+          }
+        }
         else -> writeResponse(writer, 404, "{\"error\":\"not found\"}")
       }
     }
@@ -268,6 +284,7 @@ object XMiloclawSidecarController {
         200 -> "OK"
         401 -> "Unauthorized"
         404 -> "Not Found"
+        503 -> "Service Unavailable"
         else -> "Error"
       }
     val bytes = body.toByteArray(Charsets.UTF_8)

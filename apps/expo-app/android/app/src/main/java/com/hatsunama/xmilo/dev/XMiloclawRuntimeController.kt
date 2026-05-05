@@ -40,14 +40,22 @@ object XMiloclawRuntimeController {
     }
     val accessibilityEnabled = XMiloclawAccessibilityService.isEnabled(context)
     val runtimeHostStarted = XMiloclawRuntimeService.isRunning
-    val bridgeConnected = XMiloclawSidecarController.readyOk()
+    val bridgeConnected = XMiloclawSidecarController.isListening()
+    val taskRouteSurfaceReady = XMiloclawSidecarController.taskRouteSurfaceReady()
     val hostReady =
       notificationsGranted &&
         appearOnTopGranted &&
         batteryUnrestricted &&
         accessibilityEnabled &&
         runtimeHostStarted &&
-        bridgeConnected
+        bridgeConnected &&
+        taskRouteSurfaceReady
+    val effectiveLastError =
+      lastError ?: if (runtimeHostStarted && bridgeConnected && !taskRouteSurfaceReady) {
+        XMiloclawSidecarController.taskRouteSurfaceUnavailableReason()
+      } else {
+        null
+      }
 
     val status =
       XMiloclawRuntimeStatus(
@@ -57,12 +65,13 @@ object XMiloclawRuntimeController {
       accessibilityEnabled = accessibilityEnabled,
       runtimeHostStarted = runtimeHostStarted,
       bridgeConnected = bridgeConnected,
+      taskRouteSurfaceReady = taskRouteSurfaceReady,
       hostReady = hostReady,
       restartAttempted = lastRestartAttempted,
       restartSucceeded = lastRestartSucceeded,
-      lastError = lastError
+      lastError = effectiveLastError
     )
-    Log.d(TAG, "snapshot runtimeHostStarted=$runtimeHostStarted bridgeConnected=$bridgeConnected hostReady=$hostReady lastError=${lastError ?: ""}")
+    Log.d(TAG, "snapshot runtimeHostStarted=$runtimeHostStarted bridgeConnected=$bridgeConnected taskRouteSurfaceReady=$taskRouteSurfaceReady hostReady=$hostReady lastError=${effectiveLastError ?: ""}")
     return status
   }
 
@@ -77,9 +86,7 @@ object XMiloclawRuntimeController {
     val bridged = waitForBridge(appContext)
     Log.d(TAG, "startRuntimeHost waitForBridge bridged=$bridged")
     XMiloclawSidecarController.ensureRunning(context)
-    if (!XMiloclawSidecarController.readyOk()) {
-      lastError = XMiloclawSidecarController.getLastError() ?: "localhost bridge not ready"
-    }
+    updateReadinessError()
     return snapshot(appContext)
   }
 
@@ -102,9 +109,7 @@ object XMiloclawRuntimeController {
         lastError = "bridge timeout"
       }
       XMiloclawSidecarController.ensureRunning(appContext)
-      if (!XMiloclawSidecarController.readyOk()) {
-        lastError = XMiloclawSidecarController.getLastError() ?: "localhost bridge not ready"
-      }
+      updateReadinessError()
     } catch (error: Exception) {
       lastRestartSucceeded = false
       lastError = error.message ?: "restart failed"
@@ -112,6 +117,16 @@ object XMiloclawRuntimeController {
     Log.d(TAG, "restartRuntimeHost result restartSucceeded=$lastRestartSucceeded lastError=${lastError ?: ""}")
 
     return snapshot(appContext)
+  }
+
+  private fun updateReadinessError() {
+    if (!XMiloclawSidecarController.isListening()) {
+      lastError = XMiloclawSidecarController.getLastError() ?: "localhost bridge not ready"
+      return
+    }
+    if (!XMiloclawSidecarController.taskRouteSurfaceReady()) {
+      lastError = XMiloclawSidecarController.taskRouteSurfaceUnavailableReason()
+    }
   }
 
   private fun waitForBridge(context: Context): Boolean {

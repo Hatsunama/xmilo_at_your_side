@@ -10,6 +10,7 @@ data class XMiloclawRuntimeStatus(
   val accessibilityEnabled: Boolean,
   val runtimeHostStarted: Boolean,
   val bridgeConnected: Boolean,
+  val taskRouteSurfaceReady: Boolean,
   val hostReady: Boolean,
   val restartAttempted: Boolean = false,
   val restartSucceeded: Boolean? = null,
@@ -24,6 +25,7 @@ data class XMiloclawRuntimeStatus(
       putBoolean("accessibilityEnabled", accessibilityEnabled)
       putBoolean("runtimeHostStarted", runtimeHostStarted)
       putBoolean("bridgeConnected", bridgeConnected)
+      putBoolean("taskRouteSurfaceReady", taskRouteSurfaceReady)
       putBoolean("hostReady", hostReady)
       putBoolean("restartAttempted", restartAttempted)
       if (restartSucceeded != null) {

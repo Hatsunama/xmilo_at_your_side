@@ -9,6 +9,7 @@ export type XMiloclawRuntimeStatus = {
   accessibilityEnabled: boolean;
   runtimeHostStarted: boolean;
   bridgeConnected: boolean;
+  taskRouteSurfaceReady?: boolean;
   hostReady: boolean;
   restartAttempted?: boolean;
   restartSucceeded?: boolean;
@@ -43,6 +44,7 @@ export async function getXMiloclawRuntimeStatus(): Promise<XMiloclawRuntimeStatu
       accessibilityEnabled: false,
       runtimeHostStarted: false,
       bridgeConnected: false,
+      taskRouteSurfaceReady: false,
       hostReady: false,
     };
   }
