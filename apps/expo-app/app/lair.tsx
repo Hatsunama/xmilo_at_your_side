@@ -17,6 +17,7 @@ import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   BackHandler,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -30,12 +31,17 @@ import { usePersistentCastleSurface } from "../src/components/PersistentCastleSu
 import { useApp } from "../src/state/AppContext";
 import { submitCommand, taskInterrupt, setContext, clearContext } from "../src/lib/bridge";
 
+const ANDROID_KEYBOARD_CLEARANCE = 56;
+
 export default function WizardLairScreen() {
   const router = useRouter();
-  const { state, events, nightlyRitual } = useApp();
+  const { state, events, nightlyRitual, pushEvent } = useApp();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [inputVisible, setInputVisible] = useState(false);
+  const [sendStatus, setSendStatus] = useState("");
+  const [sendError, setSendError] = useState("");
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
   const promptLenRef = useRef(0);
   const castleSurface = usePersistentCastleSurface();
@@ -51,8 +57,26 @@ export default function WizardLairScreen() {
     return () => subscription.remove();
   }, []);
 
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener("keyboardDidShow", (event) => {
+      setKeyboardOffset(Platform.OS === "android" ? event.endCoordinates.height + ANDROID_KEYBOARD_CLEARANCE : 0);
+    });
+    const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardOffset(0);
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
   function leaveLair() {
     router.replace("/");
+  }
+
+  function hidePrompt() {
+    Keyboard.dismiss();
+    setInputVisible(false);
   }
 
   async function handleTextChange(text: string) {
@@ -78,15 +102,26 @@ export default function WizardLairScreen() {
 
   async function submit(nextPrompt: string) {
     if (!nextPrompt.trim()) return;
+    setSendError("");
+    setSendStatus("Sending...");
     setBusy(true);
-    setInputVisible(false);
     try {
       await submitCommand(nextPrompt.trim());
       setPrompt("");
       promptLenRef.current = 0;
+      setInputVisible(false);
+      setSendStatus("Sent to Milo");
       // Context persists in sidecar until user explicitly dismisses the chip
-    } catch (_err) {
-      // error event will surface via the WS bridge
+    } catch (error: any) {
+      const message = error?.message ?? "Failed to send prompt";
+      setInputVisible(true);
+      setSendStatus("");
+      setSendError(message);
+      pushEvent({
+        type: "runtime.error",
+        timestamp: new Date().toISOString(),
+        payload: { message, recoverable: true }
+      });
     } finally {
       setBusy(false);
     }
@@ -106,7 +141,10 @@ export default function WizardLairScreen() {
   const lastEvent = events.length > 0 ? events[events.length - 1] : null;
 
   return (
-    <View style={styles.screen}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      style={styles.screen}
+    >
       {!castleSurface.ready ? (
         <View style={[StyleSheet.absoluteFill, styles.wsPrep]}>
           <Text style={styles.wsPrepTitle}>Preparing castle link…</Text>
@@ -159,12 +197,55 @@ export default function WizardLairScreen() {
       ) : null}
 
       {/* Bottom controls */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.bottomControls}
+      <View
+        style={[
+          styles.bottomControls,
+          Platform.OS === "android" ? { bottom: keyboardOffset } : null,
+        ]}
       >
+        {sendStatus || sendError ? (
+          <View style={[
+            styles.sendStatusBox,
+            sendError ? styles.sendStatusBoxError : null,
+            !inputVisible ? styles.sendStatusBoxClosed : null,
+          ]}>
+            <Text style={[styles.sendStatusText, sendError ? styles.sendStatusTextError : null]} numberOfLines={2}>
+              {sendError ? `Send failed: ${sendError}` : sendStatus}
+            </Text>
+          </View>
+        ) : null}
+        <View style={styles.controlRow}>
+          <Pressable
+            style={styles.controlButton}
+            onPress={leaveLair}
+          >
+            <Text style={styles.controlButtonText}>← Back</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.primaryButton, busy && styles.disabled]}
+            disabled={busy}
+            onPress={() => {
+              if (inputVisible) {
+                hidePrompt();
+              } else {
+                setInputVisible(true);
+              }
+            }}
+          >
+            <Text style={styles.primaryButtonText}>
+              {busy ? "Working..." : inputVisible ? "Hide prompt" : "✦ Send Milo a prompt"}
+            </Text>
+          </Pressable>
+          {busy && (
+            <Pressable style={styles.controlButton} onPress={interrupt}>
+              <Text style={styles.controlButtonText}>Stop</Text>
+            </Pressable>
+          )}
+        </View>
         {inputVisible ? (
-          <View style={styles.inputRow}>
+          <View
+            style={styles.inputRow}
+          >
             {pastedContext && (
               <View style={styles.pasteChip}>
                 <Text style={styles.pasteChipText} numberOfLines={1}>
@@ -197,32 +278,9 @@ export default function WizardLairScreen() {
             </Pressable>
             </View>
           </View>
-        ) : (
-          <View style={styles.controlRow}>
-            <Pressable
-              style={styles.controlButton}
-              onPress={leaveLair}
-            >
-              <Text style={styles.controlButtonText}>← Back</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.primaryButton, busy && styles.disabled]}
-              disabled={busy}
-              onPress={() => setInputVisible(true)}
-            >
-              <Text style={styles.primaryButtonText}>
-                {busy ? "Working..." : "✦ Send Milo a prompt"}
-              </Text>
-            </Pressable>
-            {busy && (
-              <Pressable style={styles.controlButton} onPress={interrupt}>
-                <Text style={styles.controlButtonText}>Stop</Text>
-              </Pressable>
-            )}
-          </View>
-        )}
-      </KeyboardAvoidingView>
-    </View>
+        ) : null}
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -425,9 +483,8 @@ const styles = StyleSheet.create({
     right: 0,
     padding: 16,
     paddingBottom: 28,
-    backgroundColor: "rgba(13, 10, 26, 0.88)",
-    borderTopWidth: 1,
-    borderTopColor: "rgba(200, 184, 255, 0.12)",
+    backgroundColor: "transparent",
+    borderTopWidth: 0,
     zIndex: 20,
   },
   gestureSurface: {
@@ -473,6 +530,35 @@ const styles = StyleSheet.create({
   },
   inputRow: {
     flexDirection: "column",
+    marginTop: 10,
+  },
+  sendStatusBox: {
+    backgroundColor: "rgba(46, 36, 83, 0.92)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(123, 95, 214, 0.45)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  sendStatusBoxError: {
+    backgroundColor: "rgba(68, 30, 42, 0.94)",
+    borderColor: "rgba(255, 126, 154, 0.5)",
+  },
+  sendStatusBoxClosed: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 2,
+    marginBottom: 6,
+  },
+  sendStatusText: {
+    color: "#D7CAEE",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  sendStatusTextError: {
+    color: "#FFC7D2",
   },
   input: {
     flex: 1,

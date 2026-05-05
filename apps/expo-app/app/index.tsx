@@ -206,6 +206,21 @@ export default function MainHallScreen() {
           ) : null}
         </View>
 
+        <View style={styles.footerRow}>
+          <Pressable style={[styles.footerButton, styles.lairButton]} onPress={() => router.push("/lair")}>
+            <Text style={styles.lairButtonText}>🏰 Enter the Lair</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.footerRow}>
+          <Pressable style={styles.footerButton} onPress={() => router.push("/setup")}>
+            <Text style={styles.footerButtonText}>Setup</Text>
+          </Pressable>
+          <Pressable style={styles.footerButton} onPress={() => router.push("/settings")}>
+            <Text style={styles.footerButtonText}>Settings</Text>
+          </Pressable>
+        </View>
+
         <StarterChips
           prompts={starterPrompts}
           onSelect={(value) => {
@@ -300,20 +315,6 @@ export default function MainHallScreen() {
           ))
         )}
 
-        <View style={styles.footerRow}>
-          <Pressable style={[styles.footerButton, styles.lairButton]} onPress={() => router.push("/lair")}>
-            <Text style={styles.lairButtonText}>🏰 Enter the Lair</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.footerRow}>
-          <Pressable style={styles.footerButton} onPress={() => router.push("/setup")}>
-            <Text style={styles.footerButtonText}>Setup</Text>
-          </Pressable>
-          <Pressable style={styles.footerButton} onPress={() => router.push("/settings")}>
-            <Text style={styles.footerButtonText}>Settings</Text>
-          </Pressable>
-        </View>
       </ScrollView>
       <Modal
         animationType="fade"
