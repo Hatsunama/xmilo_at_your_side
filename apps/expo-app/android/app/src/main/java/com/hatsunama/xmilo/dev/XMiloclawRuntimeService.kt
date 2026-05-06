@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -16,6 +17,7 @@ class XMiloclawRuntimeService : Service() {
   }
 
   companion object {
+    private const val TAG = "XMiloclawRuntimeSvc"
     private const val NOTIFICATION_ID = 0x7842
 
     @Volatile
@@ -29,6 +31,7 @@ class XMiloclawRuntimeService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    Log.i(TAG, "XMILO_RUNTIME_HOST service_onCreate entered")
     isRunning = true
     XMiloclawWakeController.acquire(applicationContext)
     XMiloclawNotificationController.ensureChannel(applicationContext)
@@ -38,10 +41,14 @@ class XMiloclawRuntimeService : Service() {
       buildNotification(),
       ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
     )
-    Thread { XMiloclawSidecarController.ensureRunning(applicationContext) }.start()
+    Thread {
+      Log.i(TAG, "XMILO_RUNTIME_HOST sidecar_launch_thread_started")
+      XMiloclawSidecarProcessController.ensureRunning(applicationContext)
+    }.start()
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    Log.i(TAG, "XMILO_RUNTIME_HOST service_onStartCommand entered")
     isRunning = true
     return START_STICKY
   }
@@ -54,7 +61,7 @@ class XMiloclawRuntimeService : Service() {
     bridgeConnected = false
     isRunning = false
     XMiloclawWakeController.release()
-    XMiloclawSidecarController.stop()
+    XMiloclawSidecarProcessController.stop()
     super.onDestroy()
   }
 

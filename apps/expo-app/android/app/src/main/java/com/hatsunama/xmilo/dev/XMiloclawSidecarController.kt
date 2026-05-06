@@ -63,7 +63,7 @@ object XMiloclawSidecarController {
       }
       expectedBearerToken = token
       if (BuildConfig.FLAVOR.contains("internal", ignoreCase = true)) {
-        Log.i(TAG, "internal localhost bearer token=$token")
+        Log.i(TAG, "internal localhost bearer token present=${token.isNotBlank()}")
       }
       try {
         File(context.filesDir, TOKEN_FILENAME).writeText(token)

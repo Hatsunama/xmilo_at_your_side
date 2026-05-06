@@ -3,6 +3,10 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def xmiloRelayBaseUrl = System.getenv("EXPO_PUBLIC_RELAY_BASE_URL") ?: findProperty("EXPO_PUBLIC_RELAY_BASE_URL") ?: "http://127.0.0.1:8080"
+def xmiloBuildConfigString = { value ->
+    "\"${(value ?: "").replace("\\", "\\\\").replace("\"", "\\\"")}\""
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -96,6 +100,7 @@ android {
         versionName "0.1.5"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
+        buildConfigField "String", "DEFAULT_RELAY_BASE_URL", xmiloBuildConfigString(xmiloRelayBaseUrl)
     }
     signingConfigs {
         debug {
@@ -172,8 +177,7 @@ android {
     }
     packagingOptions {
         jniLibs {
-            def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
-            useLegacyPackaging enableLegacyPackaging.toBoolean()
+            useLegacyPackaging true
         }
     }
     androidResources {
@@ -226,6 +230,8 @@ repositories {
         }
     }
 }
+
+android.packagingOptions.doNotStrip += "**/libxmilo_sidecar.so"
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
@@ -348,5 +354,66 @@ tasks.register("verifyCastleNativeArtifactsInternalDebug") {
         )
         println "PASS: castle native artifact integrity verified."
         println "APK: ${apkFile}"
+    }
+}
+
+tasks.register("verifySidecarExecutableAssetInternalDebug") {
+    group = "verification"
+    description = "Verifies the internalDebug sidecar native-library payload is present and packaged."
+    dependsOn("packageInternalDebug")
+
+    doLast {
+        def expectedSha256 = "9FC73A183DABF33F463B8AEB46EF3D22472DFF9E3A12824BD1D78A1774DDC121"
+        def sidecarPayload = file("src/main/jniLibs/arm64-v8a/libxmilo_sidecar.so")
+        def apkFile = file("${buildDir}/outputs/apk/internal/debug/app-internal-debug.apk")
+        def apkEntry = "lib/arm64-v8a/libxmilo_sidecar.so"
+
+        if (!sidecarPayload.exists()) {
+            throw new GradleException("Sidecar native-library payload missing: ${sidecarPayload}")
+        }
+        if (sidecarPayload.length() <= 0) {
+            throw new GradleException("Sidecar native-library payload is empty: ${sidecarPayload}")
+        }
+
+        def hashBytes = { byte[] bytes ->
+            def digest = java.security.MessageDigest.getInstance("SHA-256")
+            digest.update(bytes)
+            return digest.digest().collect { String.format("%02X", it) }.join("")
+        }
+
+        def digest = java.security.MessageDigest.getInstance("SHA-256")
+        sidecarPayload.withInputStream { input ->
+            byte[] buffer = new byte[8192]
+            int read
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        def actualSha256 = digest.digest().collect { String.format("%02X", it) }.join("")
+        if (actualSha256 != expectedSha256) {
+            throw new GradleException("Sidecar executable SHA-256 mismatch. Expected ${expectedSha256}, got ${actualSha256}.")
+        }
+
+        def zip = new java.util.zip.ZipFile(apkFile)
+        try {
+            def entry = zip.getEntry(apkEntry)
+            if (entry == null) {
+                throw new GradleException("Sidecar native-library payload not packaged in APK: ${apkEntry}")
+            }
+            if (entry.size <= 0) {
+                throw new GradleException("Packaged sidecar native-library payload is empty: ${apkEntry}")
+            }
+            def packagedSha256 = hashBytes(zip.getInputStream(entry).bytes)
+            if (packagedSha256 != expectedSha256) {
+                throw new GradleException("Packaged sidecar native-library SHA-256 mismatch. Expected ${expectedSha256}, got ${packagedSha256}.")
+            }
+            println "PASS: sidecar native-library payload verified."
+            println "Payload: ${sidecarPayload}"
+            println "SHA-256: ${actualSha256}"
+            println "APK entry: ${apkEntry} (${entry.size} bytes)"
+            println "APK: ${apkFile}"
+        } finally {
+            zip.close()
+        }
     }
 }

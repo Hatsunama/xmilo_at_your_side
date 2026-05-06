@@ -39,22 +39,29 @@ object XMiloclawRuntimeController {
       true
     }
     val accessibilityEnabled = XMiloclawAccessibilityService.isEnabled(context)
-    val runtimeHostStarted = XMiloclawRuntimeService.isRunning
-    val bridgeConnected = XMiloclawSidecarController.isListening()
-    val taskRouteSurfaceReady = XMiloclawSidecarController.taskRouteSurfaceReady()
+    val foregroundServiceStarted = XMiloclawRuntimeService.isRunning
+    val runtimeFilesPrepared = XMiloclawSidecarProcessController.runtimeFilesPrepared()
+    val sidecarProcessLaunched = XMiloclawSidecarProcessController.sidecarProcessLaunched()
+    val sidecarProcessAlive = XMiloclawSidecarProcessController.isProcessRunning()
+    Log.i(TAG, "XMILO_RUNTIME_HOST process_alive_check alive=$sidecarProcessAlive")
+    val bridgeConnected = XMiloclawSidecarProcessController.healthOk(context)
+    val taskRouteSurfaceReady = XMiloclawSidecarProcessController.taskRouteSurfaceReady(context)
+    val runtimeHostStarted = foregroundServiceStarted
     val hostReady =
       notificationsGranted &&
         appearOnTopGranted &&
         batteryUnrestricted &&
         accessibilityEnabled &&
-        runtimeHostStarted &&
+        foregroundServiceStarted &&
+        runtimeFilesPrepared &&
+        sidecarProcessAlive &&
         bridgeConnected &&
         taskRouteSurfaceReady
     val effectiveLastError =
-      lastError ?: if (runtimeHostStarted && bridgeConnected && !taskRouteSurfaceReady) {
-        XMiloclawSidecarController.taskRouteSurfaceUnavailableReason()
+      lastError ?: if (foregroundServiceStarted && bridgeConnected && !taskRouteSurfaceReady) {
+        XMiloclawSidecarProcessController.getLastError() ?: "real sidecar task route surface unavailable"
       } else {
-        null
+        XMiloclawSidecarProcessController.getLastError()
       }
 
     val status =
@@ -64,14 +71,30 @@ object XMiloclawRuntimeController {
       batteryUnrestricted = batteryUnrestricted,
       accessibilityEnabled = accessibilityEnabled,
       runtimeHostStarted = runtimeHostStarted,
+      foregroundServiceStarted = foregroundServiceStarted,
+      runtimeFilesPrepared = runtimeFilesPrepared,
+      sidecarProcessLaunched = sidecarProcessLaunched,
+      sidecarProcessAlive = sidecarProcessAlive,
       bridgeConnected = bridgeConnected,
       taskRouteSurfaceReady = taskRouteSurfaceReady,
       hostReady = hostReady,
+      lastRuntimeStage = XMiloclawSidecarProcessController.lastRuntimeStage(),
+      lastHealthCode = XMiloclawSidecarProcessController.lastHealthCode(),
+      lastReadyCode = XMiloclawSidecarProcessController.lastReadyCode(),
+      lastHealthCategory = XMiloclawSidecarProcessController.lastHealthCategory(),
+      lastReadyCategory = XMiloclawSidecarProcessController.lastReadyCategory(),
+      lastProcessExitCode = XMiloclawSidecarProcessController.lastProcessExitCode(),
+      lastProcessUptimeMillis = XMiloclawSidecarProcessController.lastProcessUptimeMillis(),
+      firstSafeStdoutLine = XMiloclawSidecarProcessController.firstSafeStdoutLine(),
+      firstSafeStdoutCategory = XMiloclawSidecarProcessController.firstSafeStdoutCategory(),
+      firstSafeStderrLine = XMiloclawSidecarProcessController.firstSafeStderrLine(),
+      firstSafeStderrCategory = XMiloclawSidecarProcessController.firstSafeStderrCategory(),
+      lastProcessErrorSummary = XMiloclawSidecarProcessController.lastProcessErrorSummary(),
       restartAttempted = lastRestartAttempted,
       restartSucceeded = lastRestartSucceeded,
       lastError = effectiveLastError
     )
-    Log.d(TAG, "snapshot runtimeHostStarted=$runtimeHostStarted bridgeConnected=$bridgeConnected taskRouteSurfaceReady=$taskRouteSurfaceReady hostReady=$hostReady lastError=${effectiveLastError ?: ""}")
+    Log.d(TAG, "snapshot foregroundServiceStarted=$foregroundServiceStarted runtimeFilesPrepared=$runtimeFilesPrepared sidecarProcessAlive=$sidecarProcessAlive bridgeConnected=$bridgeConnected taskRouteSurfaceReady=$taskRouteSurfaceReady hostReady=$hostReady stage=${status.lastRuntimeStage} health=${status.lastHealthCode}:${status.lastHealthCategory} ready=${status.lastReadyCode}:${status.lastReadyCategory} exit=${status.lastProcessExitCode ?: "—"} stderr=${status.firstSafeStderrCategory} stdout=${status.firstSafeStdoutCategory} lastError=${effectiveLastError ?: ""}")
     return status
   }
 
@@ -85,8 +108,12 @@ object XMiloclawRuntimeController {
     ContextCompat.startForegroundService(appContext, Intent(appContext, XMiloclawRuntimeService::class.java))
     val bridged = waitForBridge(appContext)
     Log.d(TAG, "startRuntimeHost waitForBridge bridged=$bridged")
-    XMiloclawSidecarController.ensureRunning(context)
-    updateReadinessError()
+    val sidecarStarted = XMiloclawSidecarProcessController.ensureRunning(context)
+    Log.i(TAG, "XMILO_RUNTIME_HOST startRuntimeHost ensureRunning=$sidecarStarted")
+    if (!sidecarStarted) {
+      lastError = XMiloclawSidecarProcessController.getLastError() ?: "sidecar process launch failed"
+    }
+    updateReadinessError(appContext)
     return snapshot(appContext)
   }
 
@@ -108,8 +135,13 @@ object XMiloclawRuntimeController {
       if (!bridged) {
         lastError = "bridge timeout"
       }
-      XMiloclawSidecarController.ensureRunning(appContext)
-      updateReadinessError()
+      XMiloclawSidecarProcessController.stop()
+      val sidecarStarted = XMiloclawSidecarProcessController.ensureRunning(appContext)
+      Log.i(TAG, "XMILO_RUNTIME_HOST restartRuntimeHost ensureRunning=$sidecarStarted")
+      if (!sidecarStarted) {
+        lastError = XMiloclawSidecarProcessController.getLastError() ?: "sidecar process launch failed"
+      }
+      updateReadinessError(appContext)
     } catch (error: Exception) {
       lastRestartSucceeded = false
       lastError = error.message ?: "restart failed"
@@ -119,13 +151,13 @@ object XMiloclawRuntimeController {
     return snapshot(appContext)
   }
 
-  private fun updateReadinessError() {
-    if (!XMiloclawSidecarController.isListening()) {
-      lastError = XMiloclawSidecarController.getLastError() ?: "localhost bridge not ready"
+  private fun updateReadinessError(context: Context) {
+    if (!XMiloclawSidecarProcessController.healthOk(context)) {
+      lastError = XMiloclawSidecarProcessController.getLastError() ?: "sidecar process health not ready"
       return
     }
-    if (!XMiloclawSidecarController.taskRouteSurfaceReady()) {
-      lastError = XMiloclawSidecarController.taskRouteSurfaceUnavailableReason()
+    if (!XMiloclawSidecarProcessController.taskRouteSurfaceReady(context)) {
+      lastError = XMiloclawSidecarProcessController.getLastError() ?: "real sidecar task route surface unavailable"
     }
   }
 

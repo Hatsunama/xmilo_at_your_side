@@ -7,8 +7,6 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import java.io.File
-import java.util.UUID
 
 class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
@@ -110,17 +108,7 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
   @ReactMethod
   fun getLocalhostBearerToken(promise: Promise) {
     try {
-      val prefs = reactContext.getSharedPreferences("xmilo_runtime_host", android.content.Context.MODE_PRIVATE)
-      var token = prefs.getString("localhost_bearer_token", null)
-      if (token.isNullOrBlank()) {
-        token = UUID.randomUUID().toString()
-        prefs.edit().putString("localhost_bearer_token", token).apply()
-      }
-      try {
-        File(reactContext.filesDir, "xmilo_localhost_bearer_token.txt").writeText(token)
-      } catch (_: Exception) {
-      }
-      promise.resolve(token)
+      promise.resolve(XMiloclawSidecarProcessController.resolveBearerToken(reactContext))
     } catch (error: Exception) {
       promise.reject("XMILO_RUNTIME_LOCALHOST_TOKEN_FAILED", error)
     }

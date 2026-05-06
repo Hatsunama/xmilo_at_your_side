@@ -8,9 +8,25 @@ export type XMiloclawRuntimeStatus = {
   batteryUnrestricted: boolean;
   accessibilityEnabled: boolean;
   runtimeHostStarted: boolean;
+  foregroundServiceStarted?: boolean;
+  runtimeFilesPrepared?: boolean;
+  sidecarProcessLaunched?: boolean;
+  sidecarProcessAlive?: boolean;
   bridgeConnected: boolean;
   taskRouteSurfaceReady?: boolean;
   hostReady: boolean;
+  lastRuntimeStage?: string;
+  lastHealthCode?: number;
+  lastReadyCode?: number;
+  lastHealthCategory?: string;
+  lastReadyCategory?: string;
+  lastProcessExitCode?: number;
+  lastProcessUptimeMillis?: number;
+  firstSafeStdoutLine?: string;
+  firstSafeStdoutCategory?: string;
+  firstSafeStderrLine?: string;
+  firstSafeStderrCategory?: string;
+  lastProcessErrorSummary?: string;
   restartAttempted?: boolean;
   restartSucceeded?: boolean;
   lastError?: string;
@@ -43,9 +59,18 @@ export async function getXMiloclawRuntimeStatus(): Promise<XMiloclawRuntimeStatu
       batteryUnrestricted: false,
       accessibilityEnabled: false,
       runtimeHostStarted: false,
+      foregroundServiceStarted: false,
+      runtimeFilesPrepared: false,
+      sidecarProcessLaunched: false,
+      sidecarProcessAlive: false,
       bridgeConnected: false,
       taskRouteSurfaceReady: false,
       hostReady: false,
+      lastRuntimeStage: "native_module_missing",
+      lastHealthCategory: "unknown",
+      lastReadyCategory: "unknown",
+      firstSafeStdoutCategory: "none",
+      firstSafeStderrCategory: "none",
     };
   }
   return nativeModule.getStatus();

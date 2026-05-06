@@ -22,11 +22,26 @@ castle-go/behavior-report.json
 castle-go/topology-report.json
 
 # Local/runtime artifacts
+.env
+.env.*
+!.env.example
 validation-artifacts/
 sidecar-go/.xmilo/
 sidecar-go/.miloclaw/
+**/xmilo_localhost_bearer_token.txt
+**/runtime/config/config.json
+**/runtime/state/
+**/*token*.txt
+**/*secret*.txt
+**/*bearer*.txt
 **/*.log
 **/*.err.log
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+adb-*.txt
+logcat-*.txt
 
 # Local device capture artifacts (kept out of git)
 /*.png

@@ -9,9 +9,18 @@ import {
 export type RuntimeCheckSnapshot = {
   checked_at: string;
   runtime_host_started: boolean;
+  foreground_service_started: boolean;
+  runtime_files_prepared: boolean;
+  sidecar_process_launched: boolean;
+  sidecar_process_alive: boolean;
   bridge_connected: boolean;
   task_route_surface_ready: boolean;
   host_ready: boolean;
+  last_runtime_stage?: string;
+  last_health_code?: number;
+  last_ready_code?: number;
+  last_health_category?: string;
+  last_ready_category?: string;
   restart_attempted?: boolean;
   restart_succeeded?: boolean;
   last_error?: string;
@@ -36,6 +45,10 @@ export type RuntimeRecoveryState = {
   attempts_used: number;
   attempting: boolean;
   runtimeHostStarted?: boolean;
+  foregroundServiceStarted?: boolean;
+  runtimeFilesPrepared?: boolean;
+  sidecarProcessLaunched?: boolean;
+  sidecarProcessAlive?: boolean;
   bridgeConnected?: boolean;
   taskRouteSurfaceReady?: boolean;
   notificationsGranted?: boolean;
@@ -49,6 +62,8 @@ const VERIFY_BUDGET_WINDOW_MS = 10 * 60 * 1000;
 const VERIFY_BACKOFF_MS = [0, 15_000, 45_000];
 const TASK_ROUTE_SURFACE_UNAVAILABLE =
   "runtime host is running, but the full task route surface is unavailable";
+const SERVICE_ONLY_UNAVAILABLE =
+  "foreground service is running, but runtime files/process/readiness are not complete";
 
 type AttemptBudget = {
   window_started_at_ms: number;
@@ -63,25 +78,41 @@ function nowIso() {
 async function checkRuntime(): Promise<RuntimeCheckSnapshot> {
   const runtime = await getXMiloclawRuntimeStatus().catch(() => null);
   const runtimeHostStarted = runtime?.runtimeHostStarted ?? false;
+  const foregroundServiceStarted = runtime?.foregroundServiceStarted ?? runtimeHostStarted;
+  const runtimeFilesPrepared = runtime?.runtimeFilesPrepared ?? false;
+  const sidecarProcessLaunched = runtime?.sidecarProcessLaunched ?? false;
+  const sidecarProcessAlive = runtime?.sidecarProcessAlive ?? false;
   const bridgeConnected = runtime?.bridgeConnected ?? false;
   const taskRouteSurfaceReady = runtime?.taskRouteSurfaceReady ?? false;
   return {
     checked_at: nowIso(),
     runtime_host_started: runtimeHostStarted,
+    foreground_service_started: foregroundServiceStarted,
+    runtime_files_prepared: runtimeFilesPrepared,
+    sidecar_process_launched: sidecarProcessLaunched,
+    sidecar_process_alive: sidecarProcessAlive,
     bridge_connected: bridgeConnected,
     task_route_surface_ready: taskRouteSurfaceReady,
     host_ready: runtime?.hostReady ?? false,
+    last_runtime_stage: runtime?.lastRuntimeStage,
+    last_health_code: runtime?.lastHealthCode,
+    last_ready_code: runtime?.lastReadyCode,
+    last_health_category: runtime?.lastHealthCategory,
+    last_ready_category: runtime?.lastReadyCategory,
     restart_attempted: runtime?.restartAttempted,
     restart_succeeded: runtime?.restartSucceeded,
     last_error:
       runtime?.lastError ??
+      (foregroundServiceStarted && (!runtimeFilesPrepared || !sidecarProcessAlive)
+        ? SERVICE_ONLY_UNAVAILABLE
+        : undefined) ??
       (runtimeHostStarted && bridgeConnected && !taskRouteSurfaceReady ? TASK_ROUTE_SURFACE_UNAVAILABLE : undefined),
   };
 }
 
 function classifyStatus(snapshot: RuntimeCheckSnapshot): RuntimeRecoveryState["status"] {
   if (snapshot.host_ready && snapshot.task_route_surface_ready) return "healthy";
-  if (snapshot.runtime_host_started || snapshot.bridge_connected) return "unready";
+  if (snapshot.foreground_service_started || snapshot.runtime_host_started || snapshot.bridge_connected) return "unready";
   return "down";
 }
 
@@ -139,6 +170,10 @@ export async function refreshRuntimeRecoveryState(current: RuntimeRecoveryState)
     status: classifyStatus(snapshot),
     last_check: snapshot,
     runtimeHostStarted: runtime?.runtimeHostStarted ?? current.runtimeHostStarted,
+    foregroundServiceStarted: runtime?.foregroundServiceStarted ?? current.foregroundServiceStarted,
+    runtimeFilesPrepared: runtime?.runtimeFilesPrepared ?? current.runtimeFilesPrepared,
+    sidecarProcessLaunched: runtime?.sidecarProcessLaunched ?? current.sidecarProcessLaunched,
+    sidecarProcessAlive: runtime?.sidecarProcessAlive ?? current.sidecarProcessAlive,
     bridgeConnected: runtime?.bridgeConnected ?? current.bridgeConnected,
     taskRouteSurfaceReady: runtime?.taskRouteSurfaceReady ?? current.taskRouteSurfaceReady,
     notificationsGranted: runtime?.notificationsGranted ?? current.notificationsGranted,
@@ -220,6 +255,10 @@ export async function attemptRuntimeRecovery(current: RuntimeRecoveryState): Pro
         attempts_used: nextBudget.attempts_used,
         next_allowed_at: new Date(nextBudget.next_allowed_at_ms).toISOString(),
         runtimeHostStarted: runtime.runtimeHostStarted,
+        foregroundServiceStarted: runtime.foregroundServiceStarted,
+        runtimeFilesPrepared: runtime.runtimeFilesPrepared,
+        sidecarProcessLaunched: runtime.sidecarProcessLaunched,
+        sidecarProcessAlive: runtime.sidecarProcessAlive,
         bridgeConnected: runtime.bridgeConnected,
         taskRouteSurfaceReady: runtime.taskRouteSurfaceReady,
         notificationsGranted: runtime.notificationsGranted,
@@ -232,6 +271,9 @@ export async function attemptRuntimeRecovery(current: RuntimeRecoveryState): Pro
           note:
             runtime.lastError ??
             verified.last_error ??
+            (verified.foreground_service_started && (!verified.runtime_files_prepared || !verified.sidecar_process_alive)
+              ? SERVICE_ONLY_UNAVAILABLE
+              : undefined) ??
             (!verified.task_route_surface_ready && verified.runtime_host_started && verified.bridge_connected
               ? TASK_ROUTE_SURFACE_UNAVAILABLE
               : "runtime host not ready"),

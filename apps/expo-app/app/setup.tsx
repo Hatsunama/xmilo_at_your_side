@@ -387,13 +387,21 @@ export default function SetupScreen() {
         batteryUnrestricted: false,
         accessibilityEnabled: false,
         runtimeHostStarted: false,
+        foregroundServiceStarted: false,
+        runtimeFilesPrepared: false,
+        sidecarProcessLaunched: false,
+        sidecarProcessAlive: false,
         bridgeConnected: false,
+        taskRouteSurfaceReady: false,
         hostReady: false
       };
 
-    const missing: Array<"Runtime host started" | "Bridge connected" | "Host ready"> = [];
-    if (!snapshot.runtimeHostStarted) missing.push("Runtime host started");
+    const missing: Array<"Foreground service started" | "Runtime files prepared" | "Sidecar process alive" | "Bridge connected" | "Task route surface ready" | "Host ready"> = [];
+    if (!(snapshot.foregroundServiceStarted ?? snapshot.runtimeHostStarted)) missing.push("Foreground service started");
+    if (!snapshot.runtimeFilesPrepared) missing.push("Runtime files prepared");
+    if (!snapshot.sidecarProcessAlive) missing.push("Sidecar process alive");
     if (!snapshot.bridgeConnected) missing.push("Bridge connected");
+    if (!snapshot.taskRouteSurfaceReady) missing.push("Task route surface ready");
     if (!snapshot.hostReady) missing.push("Host ready");
     return missing;
   }
@@ -505,7 +513,12 @@ export default function SetupScreen() {
         batteryUnrestricted: false,
         accessibilityEnabled: false,
         runtimeHostStarted: false,
+        foregroundServiceStarted: false,
+        runtimeFilesPrepared: false,
+        sidecarProcessLaunched: false,
+        sidecarProcessAlive: false,
         bridgeConnected: false,
+        taskRouteSurfaceReady: false,
         hostReady: false
       };
 
@@ -534,7 +547,7 @@ export default function SetupScreen() {
     set("unrestricted_battery_access", snapshot.batteryUnrestricted ? "granted" : "missing");
     set("ask_ignore_battery_optimizations", snapshot.batteryUnrestricted ? "granted" : "missing");
     set("accessibility_service_enabled", snapshot.accessibilityEnabled ? "granted" : "missing");
-    set("run_commands_terminal_environment", snapshot.runtimeHostStarted ? "granted" : "missing");
+    set("run_commands_terminal_environment", snapshot.hostReady ? "granted" : "missing");
 
     // Shared storage/media mapping (Android version dependent).
     // Note: WRITE_EXTERNAL_STORAGE is deprecated and not grantable on modern Android targets; we still check it
@@ -869,7 +882,12 @@ export default function SetupScreen() {
         batteryUnrestricted: false,
         accessibilityEnabled: false,
         runtimeHostStarted: false,
+        foregroundServiceStarted: false,
+        runtimeFilesPrepared: false,
+        sidecarProcessLaunched: false,
+        sidecarProcessAlive: false,
         bridgeConnected: false,
+        taskRouteSurfaceReady: false,
         hostReady: false
       };
 
@@ -954,12 +972,12 @@ export default function SetupScreen() {
       {
         id: "app_owned_hidden_runtime_execution",
         section: "internal_runtime_capabilities",
-        label: "App-owned hidden runtime execution",
+        label: "Foreground runtime service",
         behavior: "clickable_settings_path",
         requiredForContinue: false,
-        status: runtimeProof.runtimeHostStarted ? "granted" : "missing",
-        actionHint: runtimeProof.runtimeHostStarted
-          ? "Already running."
+        status: (runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted) ? "granted" : "missing",
+        actionHint: (runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted)
+          ? "Foreground service is running; continue checking runtime files/process/readiness."
           : "Tap to start the app-owned hidden runtime host."
       },
       {
@@ -1091,9 +1109,12 @@ export default function SetupScreen() {
       try {
         const status = await startXMiloclawRuntimeHost();
         setRuntimeStatus(status);
-        if (!status.runtimeHostStarted) {
+        if (!(status.foregroundServiceStarted ?? status.runtimeHostStarted)) {
           setRuntimeError(status.lastError || "Runtime host did not start.");
           return;
+        }
+        if (!status.hostReady) {
+          setRuntimeError(status.lastError || "Runtime service started, but runtime files/process/readiness are not complete yet.");
         }
         setRuntimeStep("re_check");
       } catch (error: any) {
@@ -1514,9 +1535,16 @@ export default function SetupScreen() {
                   Start the app-owned hidden runtime host and verify the on-device proof surfaces.
                 </Text>
                 <Text style={styles.fine}>
-                  Runtime host started: {runtimeProof.runtimeHostStarted ? "PASS" : "MISSING"} · Bridge connected:{" "}
-                  {runtimeProof.bridgeConnected ? "PASS" : "MISSING"} · Host ready: {runtimeProof.hostReady ? "PASS" : "MISSING"}
+                  Service: {(runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted) ? "PASS" : "MISSING"} · Files:{" "}
+                  {runtimeProof.runtimeFilesPrepared ? "PASS" : "MISSING"} · Process: {runtimeProof.sidecarProcessAlive ? "PASS" : "MISSING"} · Bridge:{" "}
+                  {runtimeProof.bridgeConnected ? "PASS" : "MISSING"} · Ready route: {runtimeProof.taskRouteSurfaceReady ? "PASS" : "MISSING"} · Host ready:{" "}
+                  {runtimeProof.hostReady ? "PASS" : "MISSING"}
                 </Text>
+                <Text style={styles.fine}>
+                  Process exit: {runtimeProof.lastProcessExitCode ?? "—"} · stderr: {runtimeProof.firstSafeStderrCategory || "none"} · stdout:{" "}
+                  {runtimeProof.firstSafeStdoutCategory || "none"}
+                </Text>
+                {runtimeProof.lastProcessErrorSummary ? <Text style={styles.fine}>Process summary: {runtimeProof.lastProcessErrorSummary}</Text> : null}
                 {runtimeError ? <Text style={styles.error}>{runtimeError}</Text> : null}
                 <View style={styles.actionStack}>
                   <Pressable
@@ -1550,22 +1578,50 @@ export default function SetupScreen() {
 
                 <View style={{ gap: 10, marginTop: 6 }}>
                   <View style={styles.checkRow}>
-                    <Text style={[styles.checkLabel, runtimeProof.runtimeHostStarted ? styles.checkLabelGranted : styles.checkLabelMissing]}>
-                      Runtime host started
+                    <Text style={[styles.checkLabel, (runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted) ? styles.checkLabelGranted : styles.checkLabelMissing]}>
+                      Foreground service started
                     </Text>
                     <View
                       style={[
                         styles.checkBadge,
-                        runtimeProof.runtimeHostStarted ? styles.checkBadgeGranted : styles.checkBadgeMissing
+                        (runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted) ? styles.checkBadgeGranted : styles.checkBadgeMissing
                       ]}
                     >
-                      <Text style={styles.checkBadgeText}>{runtimeProof.runtimeHostStarted ? "✓" : "—"}</Text>
+                      <Text style={styles.checkBadgeText}>{(runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted) ? "✓" : "—"}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.checkRow}>
+                    <Text style={[styles.checkLabel, runtimeProof.runtimeFilesPrepared ? styles.checkLabelGranted : styles.checkLabelMissing]}>
+                      Runtime files prepared
+                    </Text>
+                    <View
+                      style={[
+                        styles.checkBadge,
+                        runtimeProof.runtimeFilesPrepared ? styles.checkBadgeGranted : styles.checkBadgeMissing
+                      ]}
+                    >
+                      <Text style={styles.checkBadgeText}>{runtimeProof.runtimeFilesPrepared ? "✓" : "—"}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.checkRow}>
+                    <Text style={[styles.checkLabel, runtimeProof.sidecarProcessAlive ? styles.checkLabelGranted : styles.checkLabelMissing]}>
+                      Sidecar process alive
+                    </Text>
+                    <View
+                      style={[
+                        styles.checkBadge,
+                        runtimeProof.sidecarProcessAlive ? styles.checkBadgeGranted : styles.checkBadgeMissing
+                      ]}
+                    >
+                      <Text style={styles.checkBadgeText}>{runtimeProof.sidecarProcessAlive ? "✓" : "—"}</Text>
                     </View>
                   </View>
 
                   <View style={styles.checkRow}>
                     <Text style={[styles.checkLabel, runtimeProof.bridgeConnected ? styles.checkLabelGranted : styles.checkLabelMissing]}>
-                      Bridge connected
+                      Bridge health
                     </Text>
                     <View
                       style={[
@@ -1578,6 +1634,20 @@ export default function SetupScreen() {
                   </View>
 
                   <View style={styles.checkRow}>
+                    <Text style={[styles.checkLabel, runtimeProof.taskRouteSurfaceReady ? styles.checkLabelGranted : styles.checkLabelMissing]}>
+                      Task route surface ready
+                    </Text>
+                    <View
+                      style={[
+                        styles.checkBadge,
+                        runtimeProof.taskRouteSurfaceReady ? styles.checkBadgeGranted : styles.checkBadgeMissing
+                      ]}
+                    >
+                      <Text style={styles.checkBadgeText}>{runtimeProof.taskRouteSurfaceReady ? "✓" : "—"}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.checkRow}>
                     <Text style={[styles.checkLabel, runtimeProof.hostReady ? styles.checkLabelGranted : styles.checkLabelMissing]}>
                       Host ready
                     </Text>
@@ -1586,6 +1656,16 @@ export default function SetupScreen() {
                     </View>
                   </View>
                 </View>
+
+                <Text style={styles.fine}>
+                  Stage: {runtimeProof.lastRuntimeStage || "unknown"} · Health: {runtimeProof.lastHealthCode ?? "—"} {runtimeProof.lastHealthCategory || "unknown"} · Ready:{" "}
+                  {runtimeProof.lastReadyCode ?? "—"} {runtimeProof.lastReadyCategory || "unknown"}
+                </Text>
+                <Text style={styles.fine}>
+                  Process exit: {runtimeProof.lastProcessExitCode ?? "—"} · Uptime: {runtimeProof.lastProcessUptimeMillis ?? "—"} ms · stderr:{" "}
+                  {runtimeProof.firstSafeStderrCategory || "none"} · stdout: {runtimeProof.firstSafeStdoutCategory || "none"}
+                </Text>
+                {runtimeProof.lastProcessErrorSummary ? <Text style={styles.fine}>Process summary: {runtimeProof.lastProcessErrorSummary}</Text> : null}
 
                 {runtimeError ? <Text style={styles.error}>{runtimeError}</Text> : null}
 
