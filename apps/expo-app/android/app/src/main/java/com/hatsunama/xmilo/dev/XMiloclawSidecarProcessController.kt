@@ -15,6 +15,7 @@ object XMiloclawSidecarProcessController {
   private const val HOST = "127.0.0.1"
   private const val PORT = 42817
   private const val SIDECAR_NATIVE_LIBRARY_FILENAME = "libxmilo_sidecar.so"
+  private const val MIND_ASSET_ROOT = "mind/xMilo_v1"
   private const val EXPECTED_SIDECAR_SHA256 = "9FC73A183DABF33F463B8AEB46EF3D22472DFF9E3A12824BD1D78A1774DDC121"
   private const val PREFS_NAME = "xmilo_runtime_host"
   private const val PREFS_TOKEN_KEY = "localhost_bearer_token"
@@ -23,6 +24,7 @@ object XMiloclawSidecarProcessController {
   private const val CONNECT_TIMEOUT_MS = 1_000
   private const val READ_TIMEOUT_MS = 1_500
   private const val MAX_PROCESS_OUTPUT_LINE_CHARS = 220
+  private val requiredMindFiles = listOf("IDENTITY.md", "SOUL.md", "SECURITY.md", "TOOLS.md", "USER.md")
 
   private val lock = Any()
   private val jwtPattern = Regex("""eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}""")
@@ -62,6 +64,15 @@ object XMiloclawSidecarProcessController {
   private var lastReadyCategory = "unknown"
 
   @Volatile
+  private var mindRootPrepared = false
+
+  @Volatile
+  private var requiredMindFilesPresent = false
+
+  @Volatile
+  private var missingMindFiles = emptyList<String>()
+
+  @Volatile
   private var processStartMillis: Long? = null
 
   @Volatile
@@ -99,6 +110,9 @@ object XMiloclawSidecarProcessController {
       lastReady = false
       runtimeFilesPrepared = false
       sidecarProcessLaunched = false
+      mindRootPrepared = false
+      requiredMindFilesPresent = false
+      missingMindFiles = emptyList()
       clearProcessDiagnostics()
       lastRuntimeStage = "launch_start"
       XMiloclawSidecarController.stop()
@@ -186,6 +200,12 @@ object XMiloclawSidecarProcessController {
 
   fun lastReadyCategory(): String = lastReadyCategory
 
+  fun mindRootPrepared(): Boolean = mindRootPrepared
+
+  fun requiredMindFilesPresent(): Boolean = requiredMindFilesPresent
+
+  fun missingMindFiles(): List<String> = missingMindFiles
+
   fun lastProcessExitCode(): Int? = lastProcessExitCode
 
   fun lastProcessUptimeMillis(): Long? = lastProcessUptimeMillis
@@ -234,13 +254,14 @@ object XMiloclawSidecarProcessController {
 
     val executable = resolveNativeLibraryExecutable(context)
     writeConfig(context, File(configDir, "config.json"), stateDir, mindRoot)
-    copyMindAssetsIfPresent(context, mindRoot)
+    val requiredMindReady = copyAndVerifyRequiredMindAssets(context, mindRoot)
 
     runtimeFilesPrepared =
       runtimeDirReady &&
         configDirReady &&
         stateDirReady &&
         mindRootReady &&
+        requiredMindReady &&
         executable.exists() &&
         executable.canExecute() &&
         File(configDir, "config.json").exists()
@@ -305,35 +326,43 @@ object XMiloclawSidecarProcessController {
     Log.i(TAG, "XMILO_RUNTIME_HOST config_written=true path=${configFile.absolutePath}")
   }
 
-  private fun copyMindAssetsIfPresent(context: Context, mindRoot: File) {
-    copyAssetTree(context, "runtime/mind/xMilo_v1", mindRoot)
-  }
+  private fun copyAndVerifyRequiredMindAssets(context: Context, mindRoot: File): Boolean {
+    lastRuntimeStage = "prepare_mind_root"
+    mindRootPrepared = false
+    requiredMindFilesPresent = false
+    missingMindFiles = emptyList()
 
-  private fun copyAssetTree(context: Context, assetPath: String, destination: File) {
-    val children =
+    val missing = mutableListOf<String>()
+    for (filename in requiredMindFiles) {
+      val destination = File(mindRoot, filename)
       try {
-        context.assets.list(assetPath) ?: emptyArray()
-      } catch (_: Exception) {
-        emptyArray()
-      }
-
-    if (children.isEmpty()) {
-      try {
-        context.assets.open(assetPath).use { input ->
-          destination.parentFile?.mkdirs()
+        context.assets.open("$MIND_ASSET_ROOT/$filename").use { input ->
+          mindRoot.mkdirs()
           FileOutputStream(destination).use { output ->
             input.copyTo(output)
           }
         }
-      } catch (_: Exception) {
+      } catch (error: Exception) {
+        missing.add(filename)
+        Log.e(TAG, "XMILO_RUNTIME_HOST mind_file_copy_failed filename=$filename")
+        continue
       }
-      return
+      if (!destination.exists() || destination.length() <= 0) {
+        missing.add(filename)
+      }
     }
 
-    destination.mkdirs()
-    for (child in children) {
-      copyAssetTree(context, "$assetPath/$child", File(destination, child))
+    missingMindFiles = missing.distinct()
+    requiredMindFilesPresent = missingMindFiles.isEmpty()
+    mindRootPrepared = requiredMindFilesPresent
+    Log.i(
+      TAG,
+      "XMILO_RUNTIME_HOST mindRootPrepared=$mindRootPrepared requiredMindFilesPresent=$requiredMindFilesPresent missingMindFiles=${missingMindFiles.joinToString(",")}"
+    )
+    if (!requiredMindFilesPresent) {
+      throw IllegalStateException("required xMilo mind files missing: ${missingMindFiles.joinToString(",")}")
     }
+    return true
   }
 
   private fun probeReady(context: Context): Boolean = probeEndpoint(context, "/ready")

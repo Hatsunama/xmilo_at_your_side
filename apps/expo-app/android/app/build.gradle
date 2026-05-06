@@ -3,10 +3,18 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+def xmiloRepoRoot = rootDir.getAbsoluteFile().getParentFile().getParentFile().getParentFile().getAbsolutePath()
 def xmiloRelayBaseUrl = System.getenv("EXPO_PUBLIC_RELAY_BASE_URL") ?: findProperty("EXPO_PUBLIC_RELAY_BASE_URL") ?: "http://127.0.0.1:8080"
 def xmiloBuildConfigString = { value ->
     "\"${(value ?: "").replace("\\", "\\\\").replace("\"", "\\\"")}\""
 }
+def xmiloRequiredMindFiles = [
+    "IDENTITY.md",
+    "SOUL.md",
+    "SECURITY.md",
+    "TOOLS.md",
+    "USER.md",
+]
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -263,6 +271,20 @@ dependencies {
     }
 }
 
+tasks.register("syncXmiloMindRootAssets", Copy) {
+    group = "xmilo"
+    description = "Copies the required xMilo_v1 authority markdown files into Android assets."
+    def sourceDir = file("${xmiloRepoRoot}/docs/authority/xMilo_v1")
+    def targetDir = file("src/main/assets/mind/xMilo_v1")
+
+    from(sourceDir) {
+        include xmiloRequiredMindFiles
+    }
+    into(targetDir)
+}
+
+preBuild.dependsOn("syncXmiloMindRootAssets")
+
 def castleForbiddenNativeMarkers = [
     "MILO DRAW",
     "PROP DRAW",
@@ -411,6 +433,51 @@ tasks.register("verifySidecarExecutableAssetInternalDebug") {
             println "Payload: ${sidecarPayload}"
             println "SHA-256: ${actualSha256}"
             println "APK entry: ${apkEntry} (${entry.size} bytes)"
+            println "APK: ${apkFile}"
+        } finally {
+            zip.close()
+        }
+    }
+}
+
+tasks.register("verifyXmiloMindRootAssetsInternalDebug") {
+    group = "verification"
+    description = "Verifies the internalDebug APK contains the required xMilo_v1 mind root markdown files."
+    dependsOn("packageInternalDebug")
+
+    doLast {
+        def sourceDir = file("${xmiloRepoRoot}/docs/authority/xMilo_v1")
+        def packagedAssetDir = file("src/main/assets/mind/xMilo_v1")
+        def apkFile = file("${buildDir}/outputs/apk/internal/debug/app-internal-debug.apk")
+
+        def zip = new java.util.zip.ZipFile(apkFile)
+        try {
+            xmiloRequiredMindFiles.each { filename ->
+                def sourceFile = new File(sourceDir, filename)
+                def packagedFile = new File(packagedAssetDir, filename)
+                def apkEntryName = "assets/mind/xMilo_v1/${filename}"
+                if (!sourceFile.exists()) {
+                    throw new GradleException("Required xMilo mind source file missing: ${sourceFile}")
+                }
+                if (sourceFile.length() <= 0) {
+                    throw new GradleException("Required xMilo mind source file is empty: ${sourceFile}")
+                }
+                if (!packagedFile.exists()) {
+                    throw new GradleException("Required xMilo mind packaged asset missing: ${packagedFile}")
+                }
+                if (packagedFile.length() <= 0) {
+                    throw new GradleException("Required xMilo mind packaged asset is empty: ${packagedFile}")
+                }
+                def entry = zip.getEntry(apkEntryName)
+                if (entry == null) {
+                    throw new GradleException("Required xMilo mind file not packaged in APK: ${apkEntryName}")
+                }
+                if (entry.size <= 0) {
+                    throw new GradleException("Required xMilo mind APK entry is empty: ${apkEntryName}")
+                }
+                println "PASS: xMilo mind file packaged: ${filename} (${entry.size} bytes)"
+            }
+            println "PASS: xMilo_v1 mind root assets verified."
             println "APK: ${apkFile}"
         } finally {
             zip.close()
