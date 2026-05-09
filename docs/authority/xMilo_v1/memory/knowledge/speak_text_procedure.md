@@ -1,35 +1,28 @@
 # Speak Text Procedure
 
-## Two separate speech layers — do not mix
+## Current speech authority
 
-### Layer 1 — On-phone runtime speech (this file)
-Used by xMilo Sidecar / Termux runtime when Milo needs to speak locally on the device.
+xMilo Phase 9 uses the app-owned runtime and app UI speech path.
+Speech must not depend on retired external tooling or externally installed wrappers.
 
-Primary command: `~/.local/bin/milo-say`
-Background command: `~/.local/bin/milo-say-bg`
-Fallback: `termux-tts-speak`
+## App UI speech
 
-Source: `milo-say` and `milo-say-bg` are installed during the xMilo Termux bootstrap.
-They are defined in the sidecar bootstrap scripts and installed to `~/.local/bin/` during setup.
-They are NOT part of Termux or the Play Store app — they are sidecar-installed wrappers.
+The Wizard Lair app owns Milo's app-visible voice output.
+If speech is available, it must be exposed through the app-owned UI/runtime contract.
 
-### Layer 2 — App UI speech (not this file)
-The Wizard Lair app uses expo-speech exclusively for Milo's voice output in the app.
-The app speech layer and the on-phone runtime speech layer do not share a path.
-Never call termux-tts-speak or milo-say from the app side.
-Never call expo-speech from the runtime side.
+## Runtime speech
 
----
+The native sidecar must not assume a shell speech command exists.
+If the sidecar needs speech and no approved app-owned speech capability is exposed, it must report `speech_capability_unavailable` instead of attempting an external fallback path.
 
-## On-phone runtime procedure
+## Procedure
 
-1. verify command availability (`command -v milo-say`)
-2. prefer background speech if active work is ongoing
-3. execute speech
-4. confirm success or capture the error
-5. if primary fails, use `termux-tts-speak` fallback
-6. log a durable lesson only if it changes future behavior
+1. Check whether the current app-owned runtime exposes a speech capability.
+2. Use the approved app-owned speech path only if present.
+3. If unavailable, report the missing capability truthfully.
+4. Log a durable lesson only if it changes future behavior.
 
 ## Speech must not derail the mission loop
-Use background speech for status when work is ongoing.
-Do not block execution to wait for speech to complete unless the output is critical.
+
+Use background speech only when the app-owned capability supports it.
+Do not block execution to wait for speech completion unless the output is critical.

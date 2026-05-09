@@ -2,13 +2,18 @@ package tasks
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"xmilo/sidecar-go/internal/config"
 	"xmilo/sidecar-go/internal/db"
+	"xmilo/sidecar-go/internal/llm"
 	"xmilo/sidecar-go/internal/relay"
 	"xmilo/sidecar-go/internal/runtime"
 	"xmilo/sidecar-go/internal/ws"
@@ -561,6 +566,296 @@ func TestEnforceIntakeCeilingAllowsAction(t *testing.T) {
 	}
 }
 
+func TestRunTaskLocalBYOKUsesLocalProviderWithoutRelay(t *testing.T) {
+	relayCalled := false
+	relayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relayCalled = true
+		t.Fatalf("relay must not be called in local BYOK mode")
+	}))
+	defer relayServer.Close()
+
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":[{"content":[{"type":"output_text","text":"{\"intent\":\"general\",\"target_room\":\"main_hall\",\"thought_text\":\"local\",\"summary\":\"local done\",\"report_text\":\"local done\",\"completion_status\":\"completed\",\"continuation_status\":\"completed\",\"requires_user_choice\":false,\"choices\":[]}"}]}]}`))
+	}))
+	defer providerServer.Close()
+
+	keyPath := filepath.Join(t.TempDir(), "provider.key")
+	if err := os.WriteFile(keyPath, []byte("local-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	engine, store := newTestEngine(t, relayServer.URL)
+	localClient, err := llm.NewLocalProvider(config.Config{
+		LLMMode:      "local_byok",
+		BYOKProvider: "xai",
+		BYOKKeyFile:  keyPath,
+		BYOKBaseURL:  providerServer.URL,
+	})
+	if err != nil {
+		t.Fatalf("new local provider: %v", err)
+	}
+	engine.turnClient = localClient
+
+	engine.runTaskWithPhase(context.Background(), runtime.TaskSnapshot{
+		TaskID:           "task_local_byok",
+		Prompt:           "Summarize this locally",
+		Intent:           "general",
+		RoomID:           "main_hall",
+		AnchorID:         "main_hall_center",
+		Status:           "running",
+		StartedAt:        time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		Slot:             "active",
+		EvidenceBoundary: &runtime.EvidenceBoundary{},
+	}, "intake", nil)
+
+	if relayCalled {
+		t.Fatalf("relay was called")
+	}
+	assertHistoryStatuses(t, store, []string{"completed"})
+}
+
+func TestRunTaskLocalBYOKMissingKeySticksWithPreciseReason(t *testing.T) {
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	localClient, err := llm.NewLocalProvider(config.Config{
+		LLMMode:      "local_byok",
+		BYOKProvider: "xai",
+		BYOKKeyFile:  filepath.Join(t.TempDir(), "missing.key"),
+	})
+	if err != nil {
+		t.Fatalf("new local provider: %v", err)
+	}
+	engine.turnClient = localClient
+
+	task := runtime.TaskSnapshot{
+		TaskID:           "task_missing_local_key",
+		Prompt:           "Use local key",
+		Intent:           "general",
+		RoomID:           "main_hall",
+		AnchorID:         "main_hall_center",
+		Status:           "running",
+		StartedAt:        time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		Slot:             "active",
+		EvidenceBoundary: &runtime.EvidenceBoundary{},
+	}
+	engine.runTaskWithPhase(context.Background(), task, "intake", nil)
+
+	active, err := store.GetTask("active")
+	if err != nil {
+		t.Fatalf("get active: %v", err)
+	}
+	if active != nil {
+		t.Fatalf("provider failure must clear active task lock, got %#v", active)
+	}
+	assertHistoryStatuses(t, store, []string{"stuck"})
+	assertPendingEventCount(t, store, "task.stuck", 1)
+}
+
+func TestProviderAuthFailureClearsActiveAndPreservesReason(t *testing.T) {
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	engine.turnClient = failingTurnClient{err: errors.New("local_provider_auth_failed")}
+	task := runtime.TaskSnapshot{
+		TaskID:           "task_bad_key",
+		Prompt:           "Try with bad key",
+		Intent:           "general",
+		RoomID:           "main_hall",
+		AnchorID:         "main_hall_center",
+		Status:           "running",
+		StartedAt:        time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		Slot:             "active",
+		EvidenceBoundary: &runtime.EvidenceBoundary{},
+	}
+	if err := store.UpsertTask("active", task); err != nil {
+		t.Fatalf("seed active: %v", err)
+	}
+
+	engine.runTaskWithPhase(context.Background(), task, "intake", nil)
+
+	active, err := store.GetTask("active")
+	if err != nil {
+		t.Fatalf("get active: %v", err)
+	}
+	if active != nil {
+		t.Fatalf("expected active task cleared after provider auth failure, got %#v", active)
+	}
+	assertHistoryStatuses(t, store, []string{"stuck"})
+	assertHistorySummary(t, store, "local_provider_auth_failed")
+	assertPendingEventCount(t, store, "task.stuck", 1)
+}
+
+func TestProviderFailureEmitsSafeDiagnostic(t *testing.T) {
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	engine.turnClient = failingTurnClient{err: &llm.ProviderError{
+		Code:         "local_provider_unreachable",
+		Provider:     "openai",
+		BaseURLHost:  "api.openai.com",
+		EndpointPath: "/responses",
+		NetworkClass: "dns",
+	}}
+
+	engine.runTaskWithPhase(context.Background(), runtime.TaskSnapshot{
+		TaskID:           "task_provider_diag",
+		Prompt:           "Try provider",
+		Intent:           "general",
+		RoomID:           "main_hall",
+		AnchorID:         "main_hall_center",
+		Status:           "running",
+		StartedAt:        time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		Slot:             "active",
+		EvidenceBoundary: &runtime.EvidenceBoundary{},
+	}, "intake", nil)
+
+	assertPendingEventCount(t, store, "local_provider.diagnostic", 1)
+	assertPendingEventCount(t, store, "task.stuck", 1)
+}
+
+func TestStaleActiveStuckClearedBeforeNewTaskStart(t *testing.T) {
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	stale := seedActiveTask(t, store, "task_stale_bad_key", "Failed before upgrade")
+	stale.Status = "stuck"
+	stale.StuckReason = "local_provider_auth_failed"
+	if err := store.UpsertTask("active", stale); err != nil {
+		t.Fatalf("seed stale active: %v", err)
+	}
+
+	blocker := blockingTurnClient{started: make(chan struct{}), release: make(chan struct{})}
+	engine.turnClient = blocker
+	defer close(blocker.release)
+
+	next, _, err := engine.StartTask(context.Background(), "Retry after replacing key")
+	if err != nil {
+		t.Fatalf("expected stale active recovery before start, got %v", err)
+	}
+	if next == nil || next.TaskID == stale.TaskID {
+		t.Fatalf("expected new task after stale recovery, got %#v", next)
+	}
+	<-blocker.started
+	assertHistoryStatuses(t, store, []string{"stuck"})
+	assertHistorySummary(t, store, "local_provider_auth_failed")
+	assertPendingEventCount(t, store, "task.stale_active_recovered", 1)
+}
+
+func TestTerminalActiveStatusesDoNotBlockNewTask(t *testing.T) {
+	statuses := []string{
+		"stuck",
+		"completed",
+		"cancelled",
+		"interrupted",
+		"blocked",
+		"failed",
+		"resumable",
+		"awaiting_user_choice",
+		"entitlement_lost",
+		"",
+	}
+	for _, status := range statuses {
+		t.Run("status_"+status, func(t *testing.T) {
+			engine, store := newTestEngine(t, "http://127.0.0.1:1")
+			task := seedActiveTask(t, store, "task_stale_"+strings.ReplaceAll(status, " ", "_"), "Old task")
+			task.Status = status
+			task.StuckReason = "stale_reason"
+			if err := store.UpsertTask("active", task); err != nil {
+				t.Fatalf("seed stale active: %v", err)
+			}
+
+			if err := engine.ReconcileStaleActiveTask(); err != nil {
+				t.Fatalf("reconcile stale active: %v", err)
+			}
+
+			active, err := store.GetTask("active")
+			if err != nil {
+				t.Fatalf("get active: %v", err)
+			}
+			if active != nil {
+				t.Fatalf("expected active cleared for non-running status %q, got %#v", status, active)
+			}
+			expectedStatus := status
+			if expectedStatus == "" {
+				expectedStatus = "stale_active"
+			}
+			assertHistoryStatuses(t, store, []string{expectedStatus})
+			assertHistorySummary(t, store, "stale_reason")
+			assertPendingEventCount(t, store, "task.stale_active_recovered", 1)
+		})
+	}
+}
+
+func TestSecondStartCanProceedAfterProviderFailure(t *testing.T) {
+	engine, store := newTestEngine(t, "http://127.0.0.1:1")
+	engine.turnClient = failingTurnClient{err: errors.New("local_provider_auth_failed")}
+
+	first, _, err := engine.StartTask(context.Background(), "Write a short note to test auth failure")
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	waitFor(t, time.Second, func() bool {
+		active, _ := store.GetTask("active")
+		return active == nil
+	})
+
+	engine.turnClient = blockingTurnClient{started: make(chan struct{}), release: make(chan struct{})}
+	second, _, err := engine.StartTask(context.Background(), "Write a short note after replacing key")
+	if err != nil {
+		t.Fatalf("second start should be accepted after provider failure cleanup: %v", err)
+	}
+	if second == nil || second.TaskID == first.TaskID {
+		t.Fatalf("expected new task after retry, got first=%#v second=%#v", first, second)
+	}
+}
+
+func TestActiveTaskProtectionStillBlocksTrueConcurrentTask(t *testing.T) {
+	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
+	blocker := blockingTurnClient{started: make(chan struct{}), release: make(chan struct{})}
+	engine.turnClient = blocker
+	defer close(blocker.release)
+
+	if _, _, err := engine.StartTask(context.Background(), "Keep this task running"); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	<-blocker.started
+
+	if _, _, err := engine.StartTask(context.Background(), "This should be blocked"); err == nil || !strings.Contains(err.Error(), "active task already running") {
+		t.Fatalf("expected active task already running, got %v", err)
+	}
+}
+
+type failingTurnClient struct {
+	err error
+}
+
+func (c failingTurnClient) Turn(context.Context, contracts.RelayTurnRequest) (contracts.RelayTurnResponse, error) {
+	return contracts.RelayTurnResponse{}, c.err
+}
+
+type blockingTurnClient struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c blockingTurnClient) Turn(ctx context.Context, req contracts.RelayTurnRequest) (contracts.RelayTurnResponse, error) {
+	close(c.started)
+	select {
+	case <-ctx.Done():
+		return contracts.RelayTurnResponse{}, ctx.Err()
+	case <-c.release:
+		return contracts.RelayTurnResponse{
+			Intent:             "general",
+			TargetRoom:         "main_hall",
+			ThoughtText:        "done",
+			Summary:            "done",
+			ReportText:         "done",
+			CompletionStatus:   "completed",
+			ContinuationStatus: "completed",
+			RequiresUserChoice: false,
+			Choices:            []string{},
+		}, nil
+	}
+}
+
 func seedResumeTask(t *testing.T, store *db.Store, slot, taskID, prompt string) runtime.TaskSnapshot {
 	t.Helper()
 	task := runtime.TaskSnapshot{
@@ -700,6 +995,17 @@ func assertHistoryStatuses(t *testing.T, store *db.Store, want []string) {
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("unexpected history statuses: got %v want %v", got, want)
+	}
+}
+
+func assertHistorySummary(t *testing.T, store *db.Store, want string) {
+	t.Helper()
+	var got string
+	if err := store.DB.QueryRow(`SELECT summary FROM task_history ORDER BY id DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("query latest history summary: %v", err)
+	}
+	if got != want {
+		t.Fatalf("unexpected latest history summary: got %q want %q", got, want)
 	}
 }
 

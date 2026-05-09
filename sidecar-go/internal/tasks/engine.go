@@ -14,18 +14,22 @@ import (
 	"github.com/google/uuid"
 
 	"xmilo/sidecar-go/internal/db"
+	"xmilo/sidecar-go/internal/llm"
 	"xmilo/sidecar-go/internal/movement"
-	"xmilo/sidecar-go/internal/relay"
 	"xmilo/sidecar-go/internal/rooms"
 	"xmilo/sidecar-go/internal/runtime"
 	"xmilo/sidecar-go/internal/ws"
 	"xmilo/sidecar-go/shared/contracts"
 )
 
+type TurnClient interface {
+	Turn(context.Context, contracts.RelayTurnRequest) (contracts.RelayTurnResponse, error)
+}
+
 type Engine struct {
 	mu            sync.Mutex
 	store         *db.Store
-	relay         *relay.Client
+	turnClient    TurnClient
 	hub           *ws.Hub
 	currentRoomID string
 	currentAnchor string
@@ -43,10 +47,10 @@ var injectionPhrases = []string{
 	"system override",
 }
 
-func New(store *db.Store, relayClient *relay.Client, hub *ws.Hub, systemPrompt string) *Engine {
+func New(store *db.Store, turnClient TurnClient, hub *ws.Hub, systemPrompt string) *Engine {
 	return &Engine{
 		store:         store,
-		relay:         relayClient,
+		turnClient:    turnClient,
 		hub:           hub,
 		currentRoomID: "main_hall",
 		currentAnchor: "main_hall_center",
@@ -55,6 +59,12 @@ func New(store *db.Store, relayClient *relay.Client, hub *ws.Hub, systemPrompt s
 		responseStyle: "balanced",
 		memoryStore:   make(map[string]string),
 	}
+}
+
+func (e *Engine) ReconcileStaleActiveTask() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.reconcileStaleActiveTaskLocked("startup")
 }
 
 func (e *Engine) Snapshot() runtime.RuntimeState {
@@ -86,6 +96,9 @@ func (e *Engine) StartTask(ctx context.Context, prompt string) (*runtime.TaskSna
 		return nil, assessment, errors.New(strings.ToLower(assessment.ChosenClosedAction))
 	}
 
+	if err := e.reconcileStaleActiveTaskLocked("before_start_task"); err != nil {
+		return nil, assessment, err
+	}
 	existing, err := e.store.GetTask("active")
 	if err != nil {
 		return nil, assessment, err
@@ -175,7 +188,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		}
 	}
 
-	relayResp, err := e.relay.Turn(timeoutCtx, contracts.RelayTurnRequest{
+	relayResp, err := e.turnClient.Turn(timeoutCtx, contracts.RelayTurnRequest{
 		TaskID:           task.TaskID,
 		Phase:            phase,
 		Prompt:           promptForRelay,
@@ -206,9 +219,15 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		task.Status = "stuck"
 		task.StuckReason = err.Error()
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		_ = e.store.UpsertTask("active", task)
+		_ = e.store.ClearTask("active")
+		_ = e.store.ClearApprovalState()
+		_ = e.store.AddTaskHistory(task.TaskID, task.Prompt, "stuck", err.Error())
 		e.transitionTo("idle")
 		e.emit("runtime.error", map[string]any{"message": err.Error(), "recoverable": true})
+		if diagnostic := llm.SafeDiagnostic(err); diagnostic != nil {
+			diagnostic["task_id"] = task.TaskID
+			e.emit("local_provider.diagnostic", diagnostic)
+		}
 		e.emit("task.stuck", map[string]any{"task_id": task.TaskID, "reason": err.Error(), "recovery_options": []string{"retry", "cancel"}})
 		return
 	}
@@ -318,6 +337,9 @@ func (e *Engine) ExecuteMovementIntent(plan movement.Plan) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if err := e.reconcileStaleActiveTaskLocked("before_movement_intent"); err != nil {
+		return err
+	}
 	active, err := e.store.GetTask("active")
 	if err != nil {
 		return err
@@ -1801,6 +1823,46 @@ func (e *Engine) invalidatePendingContinuationLocked(reason string) error {
 	_ = e.store.ClearTask("awaiting_user_choice")
 	_ = e.store.ClearTask("interrupted")
 	return nil
+}
+
+func (e *Engine) reconcileStaleActiveTaskLocked(reason string) error {
+	active, err := e.store.GetTask("active")
+	if err != nil || active == nil {
+		return err
+	}
+	if activeTaskStatusCanBeRunning(active.Status) {
+		return nil
+	}
+
+	status := strings.TrimSpace(active.Status)
+	if status == "" {
+		status = "stale_active"
+	}
+	summary := strings.TrimSpace(active.StuckReason)
+	if summary == "" {
+		summary = "stale_active_recovered:" + reason
+	}
+	if err := e.store.AddTaskHistory(active.TaskID, active.Prompt, status, summary); err != nil {
+		return err
+	}
+	if err := e.store.ClearTask("active"); err != nil {
+		return err
+	}
+	e.emit("task.stale_active_recovered", map[string]any{
+		"task_id": active.TaskID,
+		"status":  active.Status,
+		"reason":  reason,
+	})
+	return nil
+}
+
+func activeTaskStatusCanBeRunning(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "running", "accepted":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) validatedResumeTargetLocked() (*runtime.ResumeCheckpoint, *runtime.TaskSnapshot, error) {

@@ -41,24 +41,24 @@ Milo has broad local power, so security rules stay strict.
 May be used without asking:
 - local file inspection in safe working directories
 - status reads (battery, heartbeat, task state)
-- sensor listing (termux-sensor -l)
+- app-owned runtime status reads exposed by xMilo
 - non-destructive shell inspection
 - local memory reads and writes
 - local reasoning and planning
 
 ### Tier 2 — mission-gated
 Allowed only when clearly required by the active task:
-- vibration (termux-vibrate)
-- torch (termux-torch)
+- vibration through an approved xMilo app-owned capability
+- torch through an approved xMilo app-owned capability
 - notifications
 - app launch
-- camera metadata only (termux-camera-info, NOT photo capture)
+- camera metadata only through an approved xMilo app-owned capability, NOT photo capture
 - clipboard write for task-relevant output
 
 ### Tier 3 — consent-gated
 Requires explicit user request or standing user-granted permission per mission type:
-- camera capture (termux-camera-photo)
-- clipboard read (termux-clipboard-get)
+- camera capture through an approved xMilo app-owned capability
+- clipboard read through an approved xMilo app-owned capability
 - microphone or audio capture
 - external sharing or sending
 - messaging or calls

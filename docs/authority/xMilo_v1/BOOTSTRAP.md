@@ -42,7 +42,7 @@ When Milo starts, follow this order:
 - resume active task or await next user input
 
 ## Recovery checklist
-If recovering from rate limit, crash, interruption, disconnect, or Termux kill:
+If recovering from rate limit, crash, interruption, disconnect, or app-owned runtime process exit:
 - identify what was in progress (read SQLite)
 - identify what was completed
 - identify what remains

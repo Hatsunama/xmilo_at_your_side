@@ -8,12 +8,19 @@ type HealthResponse struct {
 }
 
 type ReadyResponse struct {
-	OK              bool   `json:"ok"`
-	WakeLockActive  bool   `json:"wake_lock_active"`
-	DBReady         bool   `json:"db_ready"`
-	RelayConfigured bool   `json:"relay_configured"`
-	MindLoaded      bool   `json:"mind_loaded"`
-	RuntimeID       string `json:"runtime_id"`
+	OK                    bool   `json:"ok"`
+	WakeLockActive        bool   `json:"wake_lock_active"`
+	DBReady               bool   `json:"db_ready"`
+	RelayConfigured       bool   `json:"relay_configured"`
+	MindLoaded            bool   `json:"mind_loaded"`
+	RuntimeID             string `json:"runtime_id"`
+	LLMMode               string `json:"llm_mode"`
+	SubscriptionEntitled  bool   `json:"subscription_entitled"`
+	BringYourOwnKeyActive bool   `json:"bring_your_own_key_active"`
+	Phase9APIKeyAccess    bool   `json:"phase9_api_key_access"`
+	FirstTaskEligible     bool   `json:"first_task_eligible"`
+	RelayLLMTurnAllowed   bool   `json:"relay_llm_turn_allowed"`
+	LocalLLMTurnAllowed   bool   `json:"local_llm_turn_allowed"`
 }
 
 type TaskSnapshot struct {
@@ -66,11 +73,11 @@ type ResumeCheckpoint struct {
 }
 
 type IntakeAssessment struct {
-	PrimaryClass       string   `json:"primary_class"`
-	SecondaryFlags     []string `json:"secondary_flags"`
-	TrustTier          int      `json:"trust_tier"`
-	ValidationState    string   `json:"validation_state"`
-	ChosenClosedAction string   `json:"chosen_closed_action"`
+	PrimaryClass       string        `json:"primary_class"`
+	SecondaryFlags     []string      `json:"secondary_flags"`
+	TrustTier          int           `json:"trust_tier"`
+	ValidationState    string        `json:"validation_state"`
+	ChosenClosedAction string        `json:"chosen_closed_action"`
 	MemoryIntent       *MemoryIntent `json:"memory_intent,omitempty"`
 }
 

@@ -14,9 +14,9 @@ Every item here is owned by the Go sidecar. None of these live in Mind v4 files 
 - [ ] Fixed-per-install bearer token auth on all HTTP + WebSocket endpoints
 - [ ] Port conflict detection on startup — fail fast with clear log, do not silently occupy
 - [ ] PID lockfile to prevent double-launch
-- [ ] Bearer token: app-generated on first launch, injected into xMilo Sidecar config during Termux bootstrap, loaded from config on every start
-- [ ] Termux wake-lock (`termux-wake-lock`) acquired immediately at startup
-- [ ] Termux wake-unlock on intentional shutdown
+- [ ] Bearer token: app-generated on first launch, injected into xMilo Sidecar config by the app-owned runtime host, loaded from config on every start
+- [ ] App-owned runtime host keeps the native sidecar process alive through approved Android lifecycle mechanisms
+- [ ] App-owned runtime host releases lifecycle resources on intentional shutdown
 
 ---
 

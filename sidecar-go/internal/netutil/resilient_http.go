@@ -10,9 +10,10 @@ import (
 	"time"
 )
 
-// NewResilientHTTPClient returns an HTTP client that can survive Android/Termux
+// NewResilientHTTPClient returns an HTTP client that can survive Android
 // environments where the Go DNS resolver is pointed at a dead local stub
-// (commonly ::1:53), causing all external HTTPS calls to fail.
+// (commonly ::1:53), causing external HTTPS calls to fail before HTTP status
+// handling can classify provider auth, rate-limit, or request errors.
 //
 // Design:
 //   - Try the default resolver first (best-case: respects system DNS).

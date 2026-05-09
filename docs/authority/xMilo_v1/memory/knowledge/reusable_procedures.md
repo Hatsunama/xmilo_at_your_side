@@ -1,24 +1,27 @@
 # Reusable Procedures
 
+These procedures describe current xMilo-owned runtime expectations only.
+They must not route work through retired external tooling.
+
+## Device capability requests
+
+Device capabilities are allowed only through approved xMilo app-owned capabilities or typed runtime contracts.
+If a capability is not exposed by the current app-owned runtime, Milo must report the missing capability as a runtime blocker instead of suggesting an external workaround.
+
 ## Camera
 
 **CONSENT GATE: Tier 3**
 Camera capture requires explicit user request or standing user-granted permission for the active mission type.
-Do not capture without it. Camera metadata checks (termux-camera-info) are Tier 2 / mission-gated.
+Do not capture without it.
 
-### Capture front image
-```bash
-termux-camera-photo -c 0 ~/photo_front.jpg
-```
-
-### Capture back image
-```bash
-termux-camera-photo -c 1 ~/photo_back.jpg
-```
+### Capture image
+- Use only an approved xMilo app-owned camera capability.
+- If no approved capability is available, report `camera_capability_unavailable`.
 
 ### Validation
-- confirm output file exists
-- confirm file size is non-zero
+- confirm the app-owned capability returned a successful result
+- confirm the output reference is present and task-scoped
+- do not infer camera capability from authority text alone
 
 ---
 
@@ -30,21 +33,19 @@ Clipboard read requires explicit user request.
 Clipboard may contain passwords, 2FA codes, banking details, and tokens.
 Never read clipboard autonomously.
 
-```bash
-termux-clipboard-get
-```
+- Use only an approved xMilo app-owned clipboard-read capability.
+- If no approved capability is available, report `clipboard_read_unavailable`.
 
 ### Write
 **CONSENT GATE: Tier 2 (mission-gated)**
 Clipboard write is allowed only when the task output was clearly intended for clipboard delivery.
 
-```bash
-printf 'output_value\n' | termux-clipboard-set
-```
+- Use only an approved xMilo app-owned clipboard-write capability.
+- If no approved capability is available, report `clipboard_write_unavailable`.
 
 ### Validation
-- only call clipboard broken after set/get was tested together
-- never infer clipboard availability from get alone
+- only report clipboard success after the app-owned capability confirms it
+- never infer clipboard availability from authority text alone
 
 ---
 
@@ -53,35 +54,19 @@ printf 'output_value\n' | termux-clipboard-set
 **CONSENT GATE: Tier 2 (mission-gated)**
 Torch is allowed only when clearly required by the active task.
 
-### Verify command exists
-```bash
-command -v termux-torch
-```
-
-### Test torch
-```bash
-termux-torch on
-sleep 2
-termux-torch off
-```
+- Use only an approved xMilo app-owned torch capability.
+- If no approved capability is available, report `torch_capability_unavailable`.
 
 ---
 
 ## Sensor testing
 
 **CONSENT GATE: Tier 1 for listing; Tier 2 for active reads**
-Listing sensors is always safe. Active continuous reads should be mission-relevant.
+Listing sensors is low-risk, but active reads should be mission-relevant.
 
-### List sensors
-```bash
-termux-sensor -l
-```
-
-### Single reading
-```bash
-termux-sensor -s "Exact Sensor Name" -n 1
-```
+- Use only approved xMilo app-owned sensor capabilities.
+- If no approved capability is available, report `sensor_capability_unavailable`.
 
 ### Validation
-- use exact sensor names from the live list
+- use exact sensor names returned by the live app-owned capability
 - empty output is not enough to prove absence

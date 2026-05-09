@@ -19,6 +19,7 @@ import (
 	"xmilo/sidecar-go/internal/config"
 	"xmilo/sidecar-go/internal/db"
 	"xmilo/sidecar-go/internal/legacy"
+	"xmilo/sidecar-go/internal/llm"
 	"xmilo/sidecar-go/internal/maintenance"
 	"xmilo/sidecar-go/internal/mind"
 	"xmilo/sidecar-go/internal/movement"
@@ -69,7 +70,18 @@ func NewApp(cfg config.Config) (*App, error) {
 	}
 
 	hub := ws.NewHub()
-	engine := tasks.New(store, relayClient, hub, prompt)
+	var turnClient tasks.TurnClient = relayClient
+	if cfg.LocalBYOKActive() {
+		localClient, err := llm.NewLocalProvider(cfg)
+		if err != nil {
+			return nil, err
+		}
+		turnClient = localClient
+	}
+	engine := tasks.New(store, turnClient, hub, prompt)
+	if err := engine.ReconcileStaleActiveTask(); err != nil {
+		return nil, err
+	}
 	planner := movement.NewPlanner()
 
 	return &App{
@@ -272,6 +284,10 @@ func (a *App) handleAuthInvite(w http.ResponseWriter, r *http.Request) {
 // handleAuthCheck forces an immediate relay refresh and returns the new entitled status.
 // The app calls this after user verifies email — gets entitled=true within seconds.
 func (a *App) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
+	if a.cfg.LocalBYOKActive() {
+		writeJSON(w, http.StatusOK, a.localAccessStatus())
+		return
+	}
 	newJWT, newExpiry, err := a.relayClient.Refresh(r.Context())
 	if err != nil {
 		// If the stored JWT is invalid (e.g., after reinstall), bootstrap a fresh session
@@ -449,12 +465,19 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runtime.ReadyResponse{
-		OK:              true,
-		WakeLockActive:  a.wakeLockActive,
-		DBReady:         true,
-		RelayConfigured: a.cfg.RelayBaseURL != "",
-		MindLoaded:      a.mindLoaded,
-		RuntimeID:       a.cfg.RuntimeID,
+		OK:                    true,
+		WakeLockActive:        a.wakeLockActive,
+		DBReady:               true,
+		RelayConfigured:       a.cfg.RelayBaseURL != "",
+		MindLoaded:            a.mindLoaded,
+		RuntimeID:             a.cfg.RuntimeID,
+		LLMMode:               a.cfg.LLMMode,
+		SubscriptionEntitled:  false,
+		BringYourOwnKeyActive: a.localBYOKKeyConfigured(),
+		Phase9APIKeyAccess:    a.localBYOKKeyConfigured(),
+		FirstTaskEligible:     a.localBYOKKeyConfigured(),
+		RelayLLMTurnAllowed:   !a.cfg.LocalBYOKActive(),
+		LocalLLMTurnAllowed:   a.cfg.LocalBYOKActive() && a.localBYOKKeyConfigured(),
 	})
 }
 
@@ -507,12 +530,22 @@ func (a *App) handleTaskStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt required"})
 		return
 	}
-	if sessionJWT, _ := a.store.GetRuntimeConfig("relay_session_jwt"); strings.TrimSpace(sessionJWT) == "" {
-		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error":      "entitlement_lost",
-			"error_code": "entitlement_lost",
-		})
-		return
+	if a.cfg.LocalBYOKActive() {
+		if !a.localBYOKKeyConfigured() {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":      "missing_local_provider_key",
+				"error_code": "missing_local_provider_key",
+			})
+			return
+		}
+	} else {
+		if sessionJWT, _ := a.store.GetRuntimeConfig("relay_session_jwt"); strings.TrimSpace(sessionJWT) == "" {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":      "entitlement_lost",
+				"error_code": "entitlement_lost",
+			})
+			return
+		}
 	}
 	snap, assessment, err := a.engine.StartTask(r.Context(), req.Prompt)
 	if err != nil {
@@ -534,12 +567,22 @@ func (a *App) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt required"})
 		return
 	}
-	if sessionJWT, _ := a.store.GetRuntimeConfig("relay_session_jwt"); strings.TrimSpace(sessionJWT) == "" {
-		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error":      "entitlement_lost",
-			"error_code": "entitlement_lost",
-		})
-		return
+	if a.cfg.LocalBYOKActive() {
+		if !a.localBYOKKeyConfigured() {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":      "missing_local_provider_key",
+				"error_code": "missing_local_provider_key",
+			})
+			return
+		}
+	} else {
+		if sessionJWT, _ := a.store.GetRuntimeConfig("relay_session_jwt"); strings.TrimSpace(sessionJWT) == "" {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":      "entitlement_lost",
+				"error_code": "entitlement_lost",
+			})
+			return
+		}
 	}
 
 	current := a.engine.Snapshot()
@@ -771,6 +814,25 @@ func (a *App) acquireWakeLock() error {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+func (a *App) localBYOKKeyConfigured() bool {
+	return llm.LocalProviderReady(a.cfg)
+}
+
+func (a *App) localAccessStatus() map[string]any {
+	active := a.localBYOKKeyConfigured()
+	return map[string]any{
+		"ok":                        true,
+		"entitled":                  false,
+		"subscription_entitled":     false,
+		"access_mode":               "local_byok",
+		"bring_your_own_key_active": active,
+		"phase9_api_key_access":     active,
+		"first_task_eligible":       active,
+		"relay_llm_turn_allowed":    false,
+		"local_llm_turn_allowed":    active,
+	}
+}
 
 func decodeJSON(r *http.Request, out interface{}) error {
 	defer r.Body.Close()
