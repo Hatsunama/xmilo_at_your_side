@@ -11,6 +11,7 @@ apps/expo-app/android/**/.externalNativeBuild/
 apps/expo-app/android/local.properties
 apps/expo-app/android/app/debug.keystore
 apps/expo-app/android/app/libs/
+apps/expo-app/_artifacts/
 
 # Build outputs
 dist/

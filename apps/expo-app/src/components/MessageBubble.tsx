@@ -1,9 +1,10 @@
 import * as Clipboard from "expo-clipboard";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { safeEventText } from "../lib/runtimeEvents";
 import type { EventEnvelope } from "../types/contracts";
 
 export function MessageBubble({ event, onReport }: { event: EventEnvelope; onReport?: (event: EventEnvelope) => void }) {
-  const text = event.payload?.report_text || event.payload?.text || event.payload?.message || JSON.stringify(event.payload);
+  const text = safeEventText(event);
 
   return (
     <Pressable style={styles.card} onLongPress={() => Clipboard.setStringAsync(String(text))}>

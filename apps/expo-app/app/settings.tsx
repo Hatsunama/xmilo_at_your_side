@@ -49,6 +49,14 @@ export default function SettingsScreen() {
     website_handoff_ready: false
   });
   const [accessConfig, setAccessConfig] = useState({
+    access_mode: "code_only",
+    byok_provider: "",
+    subscription_entitled: false,
+    bring_your_own_key_active: false,
+    phase9_api_key_access: false,
+    first_task_eligible: false,
+    relay_llm_turn_allowed: false,
+    local_llm_turn_allowed: false,
     access_code_only: true,
     subscription_allowed: false,
     access_code_grant_days: 30
@@ -59,6 +67,14 @@ export default function SettingsScreen() {
     authCheck()
       .then((result) => {
         setAccessConfig({
+          access_mode: result.access_mode ?? "code_only",
+          byok_provider: result.byok_provider ?? "",
+          subscription_entitled: result.subscription_entitled ?? result.entitled ?? false,
+          bring_your_own_key_active: result.bring_your_own_key_active ?? false,
+          phase9_api_key_access: result.phase9_api_key_access ?? false,
+          first_task_eligible: result.first_task_eligible ?? result.entitled ?? false,
+          relay_llm_turn_allowed: result.relay_llm_turn_allowed ?? false,
+          local_llm_turn_allowed: result.local_llm_turn_allowed ?? false,
           access_code_only: result.access_code_only ?? true,
           subscription_allowed: result.subscription_allowed ?? false,
           access_code_grant_days: result.access_code_grant_days ?? 30
@@ -426,15 +442,23 @@ export default function SettingsScreen() {
         <View style={styles.card}>
         <Text style={styles.title}>Settings</Text>
         <Text style={styles.body}>
-          This starter screen still focuses on bridge-driven actions first. Log out, access-code management, and deeper reset flows remain tracked separately.
+          Runtime access, account controls, and reset flows stay separated so local BYOK testing does not depend on commerce.
         </Text>
 
         <View style={styles.launchCard}>
           <Text style={styles.launchTitle}>Launch access</Text>
           <Text style={styles.launchBody}>
-            {accessConfig.access_code_only
+            {accessConfig.phase9_api_key_access
+              ? "Local API key access is active for this phone. First tasks use local BYOK, not subscription entitlement."
+              : accessConfig.access_code_only
               ? `xMilo is currently in access-code-only launch mode. Codes grant ${String(accessConfig.access_code_grant_days)} days during this stage.`
               : "Public access is enabled. Access codes still stack normally on top of standard access."}
+          </Text>
+          <Text style={styles.toggleHint}>
+            Mode: {accessConfig.access_mode || "unknown"} · BYOK provider: {accessConfig.byok_provider || "—"} · First task:{" "}
+            {accessConfig.first_task_eligible ? "eligible" : "not ready"} · Local turn:{" "}
+            {accessConfig.local_llm_turn_allowed ? "yes" : "no"} · Relay turn: {accessConfig.relay_llm_turn_allowed ? "yes" : "no"} · Subscription:{" "}
+            {accessConfig.subscription_entitled ? "yes" : "no"}
           </Text>
           <TextInput
             style={styles.codeInput}

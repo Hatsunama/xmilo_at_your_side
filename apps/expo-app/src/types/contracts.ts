@@ -4,6 +4,20 @@ export type EventEnvelope = {
   payload: Record<string, any>;
 };
 
+export type ProviderDiagnosticPayload = {
+  task_id?: string;
+  error_code?: string;
+  code?: string;
+  error_category?: string;
+  category?: string;
+  provider?: string;
+  base_url_host?: string;
+  endpoint_path?: string;
+  http_status?: number;
+  network_class?: string;
+  provider_error_class?: string;
+};
+
 export type TaskSnapshot = {
   task_id: string;
   prompt: string;
@@ -30,6 +44,15 @@ export type RuntimeState = {
   runtime_id: string;
   pending_approval?: boolean | null;
   resume_checkpoint?: string | null;
+};
+
+export type CommandSubmitResponse = {
+  handled?: boolean;
+  kind?: "task" | "movement" | string;
+  task_id?: string;
+  immediate_state?: TaskSnapshot | null;
+  intake_gate?: Record<string, unknown> | null;
+  plan?: Record<string, unknown> | null;
 };
 
 export type CueDescriptor = {

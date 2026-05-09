@@ -15,6 +15,14 @@ export type XMiloclawRuntimeStatus = {
   bridgeConnected: boolean;
   taskRouteSurfaceReady?: boolean;
   hostReady: boolean;
+  llmMode?: string;
+  byokProvider?: string;
+  subscriptionEntitled?: boolean;
+  bringYourOwnKeyActive?: boolean;
+  phase9ApiKeyAccess?: boolean;
+  firstTaskEligible?: boolean;
+  relayLlmTurnAllowed?: boolean;
+  localLlmTurnAllowed?: boolean;
   lastRuntimeStage?: string;
   lastHealthCode?: number;
   lastReadyCode?: number;
@@ -42,6 +50,8 @@ type XMiloclawRuntimeModuleShape = {
   openOverlaySettings?: () => Promise<boolean>;
   openBatteryOptimizationSettings?: () => Promise<boolean>;
   getLocalhostBearerToken?: () => Promise<string>;
+  saveLocalByokApiKey?: (provider: string, apiKey: string, baseUrl: string, model: string) => Promise<string>;
+  getLocalByokStatus?: () => Promise<string>;
 };
 
 const nativeModule = NativeModules.XMiloclawRuntimeModule as XMiloclawRuntimeModuleShape | undefined;
@@ -129,6 +139,48 @@ export async function getXMiloclawLocalhostBearerToken() {
   return token;
 }
 
+export type LocalByokStatus = {
+  provider: ByokProvider;
+  keyFileReady: boolean;
+  keyFilePath: string;
+  baseUrlReady: boolean;
+  model: string;
+  byokReady: boolean;
+};
+
+export type ByokProvider = "xai" | "openai" | "anthropic" | "ollama";
+
+function parseLocalByokStatus(raw: string): LocalByokStatus {
+  const parsed = JSON.parse(raw) as Partial<LocalByokStatus>;
+  return {
+    provider: parseByokProvider(parsed.provider),
+    keyFileReady: Boolean(parsed.keyFileReady),
+    keyFilePath: String(parsed.keyFilePath ?? ""),
+    baseUrlReady: Boolean(parsed.baseUrlReady),
+    model: String(parsed.model ?? ""),
+    byokReady: Boolean(parsed.byokReady),
+  };
+}
+
+function parseByokProvider(provider: unknown): ByokProvider {
+  if (provider === "openai" || provider === "anthropic" || provider === "ollama") return provider;
+  return "xai";
+}
+
+export async function saveXMiloclawLocalByokApiKey(provider: ByokProvider, apiKey: string, baseUrl = "", model = "") {
+  if (!nativeModule?.saveLocalByokApiKey) {
+    throw new Error("Native local API key storage is not available in this build yet.");
+  }
+  return parseLocalByokStatus(await nativeModule.saveLocalByokApiKey(provider, apiKey, baseUrl, model));
+}
+
+export async function getXMiloclawLocalByokStatus() {
+  if (!nativeModule?.getLocalByokStatus) {
+    return { provider: "xai", keyFileReady: false, keyFilePath: "", baseUrlReady: false, model: "", byokReady: false } satisfies LocalByokStatus;
+  }
+  return parseLocalByokStatus(await nativeModule.getLocalByokStatus());
+}
+
 export async function resolveLocalhostBearerToken() {
   if (!localhostBearerTokenPromise) {
     localhostBearerTokenPromise = (async () => {
@@ -137,7 +189,7 @@ export async function resolveLocalhostBearerToken() {
       }
 
       if (!LOCALHOST_TOKEN) {
-        throw new Error("Missing EXPO_PUBLIC_LOCALHOST_TOKEN");
+        throw new Error("Native localhost bearer source unavailable, and non-native EXPO_PUBLIC_LOCALHOST_TOKEN fallback is unset.");
       }
 
       return LOCALHOST_TOKEN;

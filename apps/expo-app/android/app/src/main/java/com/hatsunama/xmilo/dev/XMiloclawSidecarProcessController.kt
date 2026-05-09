@@ -16,11 +16,26 @@ object XMiloclawSidecarProcessController {
   private const val PORT = 42817
   private const val SIDECAR_NATIVE_LIBRARY_FILENAME = "libxmilo_sidecar.so"
   private const val MIND_ASSET_ROOT = "mind/xMilo_v1"
-  private const val EXPECTED_SIDECAR_SHA256 = "9FC73A183DABF33F463B8AEB46EF3D22472DFF9E3A12824BD1D78A1774DDC121"
   private const val PREFS_NAME = "xmilo_runtime_host"
   private const val PREFS_TOKEN_KEY = "localhost_bearer_token"
   private const val PREFS_RUNTIME_ID_KEY = "runtime_id"
+  private const val PREFS_BYOK_PROVIDER_KEY = "byok_provider"
+  private const val PREFS_BYOK_BASE_URL_KEY = "byok_base_url"
+  private const val PREFS_BYOK_MODEL_KEY = "byok_model"
   private const val TOKEN_FILENAME = "xmilo_localhost_bearer_token.txt"
+  private val BYOK_PROVIDER_DEFAULT_MODELS =
+    mapOf(
+      "xai" to "grok-4",
+      "openai" to "gpt-5.4",
+      "anthropic" to "claude-sonnet-4-5",
+      "ollama" to "llama3.2"
+    )
+  private val BYOK_PROVIDER_DEFAULT_BASE_URLS =
+    mapOf(
+      "xai" to "https://api.x.ai/v1",
+      "openai" to "https://api.openai.com/v1",
+      "anthropic" to "https://api.anthropic.com/v1"
+    )
   private const val CONNECT_TIMEOUT_MS = 1_000
   private const val READ_TIMEOUT_MS = 1_500
   private const val MAX_PROCESS_OUTPUT_LINE_CHARS = 220
@@ -30,7 +45,7 @@ object XMiloclawSidecarProcessController {
   private val jwtPattern = Regex("""eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}""")
   private val authHeaderPattern = Regex("""(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,"'}]+""")
   private val sensitiveKeyPattern =
-    Regex("""(?i)("?(?:bearer_token|localhost_bearer_token|authorization|api_key|secret|token|jwt|xai|openai|provider_key)"?\s*[:=]\s*")([^"]+)(")""")
+    Regex("""(?i)("?(?:bearer_token|localhost_bearer_token|authorization|api_key|secret|token|jwt|xai|openai|anthropic|provider_key|byok_key_file)"?\s*[:=]\s*")([^"]+)(")""")
   private val longSecretLikePattern = Regex("""(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])""")
 
   @Volatile
@@ -62,6 +77,30 @@ object XMiloclawSidecarProcessController {
 
   @Volatile
   private var lastReadyCategory = "unknown"
+
+  @Volatile
+  private var lastReadyLlmMode: String? = null
+
+  @Volatile
+  private var lastReadyByokProvider: String? = null
+
+  @Volatile
+  private var lastReadySubscriptionEntitled: Boolean? = null
+
+  @Volatile
+  private var lastReadyBringYourOwnKeyActive: Boolean? = null
+
+  @Volatile
+  private var lastReadyPhase9ApiKeyAccess: Boolean? = null
+
+  @Volatile
+  private var lastReadyFirstTaskEligible: Boolean? = null
+
+  @Volatile
+  private var lastReadyRelayLlmTurnAllowed: Boolean? = null
+
+  @Volatile
+  private var lastReadyLocalLlmTurnAllowed: Boolean? = null
 
   @Volatile
   private var mindRootPrepared = false
@@ -108,6 +147,7 @@ object XMiloclawSidecarProcessController {
 
       lastError = null
       lastReady = false
+      clearReadyAccessFields()
       runtimeFilesPrepared = false
       sidecarProcessLaunched = false
       mindRootPrepared = false
@@ -115,7 +155,6 @@ object XMiloclawSidecarProcessController {
       missingMindFiles = emptyList()
       clearProcessDiagnostics()
       lastRuntimeStage = "launch_start"
-      XMiloclawSidecarController.stop()
 
       return try {
         val paths = prepareRuntime(appContext)
@@ -149,6 +188,7 @@ object XMiloclawSidecarProcessController {
       val running = process
       process = null
       lastReady = false
+      clearReadyAccessFields()
       sidecarProcessLaunched = false
       if (running != null) {
         try {
@@ -178,6 +218,7 @@ object XMiloclawSidecarProcessController {
       setProbeResult("/ready", null, "process_not_alive")
       Log.i(TAG, "XMILO_RUNTIME_HOST ready code=none category=process_not_alive")
       lastReady = false
+      clearReadyAccessFields()
       return false
     }
     lastReady = probeReady(context.applicationContext)
@@ -220,6 +261,22 @@ object XMiloclawSidecarProcessController {
 
   fun lastProcessErrorSummary(): String? = lastProcessErrorSummary
 
+  fun lastReadyLlmMode(): String? = lastReadyLlmMode
+
+  fun lastReadyByokProvider(): String? = lastReadyByokProvider
+
+  fun lastReadySubscriptionEntitled(): Boolean? = lastReadySubscriptionEntitled
+
+  fun lastReadyBringYourOwnKeyActive(): Boolean? = lastReadyBringYourOwnKeyActive
+
+  fun lastReadyPhase9ApiKeyAccess(): Boolean? = lastReadyPhase9ApiKeyAccess
+
+  fun lastReadyFirstTaskEligible(): Boolean? = lastReadyFirstTaskEligible
+
+  fun lastReadyRelayLlmTurnAllowed(): Boolean? = lastReadyRelayLlmTurnAllowed
+
+  fun lastReadyLocalLlmTurnAllowed(): Boolean? = lastReadyLocalLlmTurnAllowed
+
   fun resolveBearerToken(context: Context): String {
     val appContext = context.applicationContext
     val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -234,6 +291,64 @@ object XMiloclawSidecarProcessController {
       Log.w(TAG, "failed to write localhost bearer token file", error)
     }
     return token
+  }
+
+  fun saveLocalBYOKConfig(context: Context, provider: String, apiKey: String, baseUrl: String, model: String): JSONObject {
+    val normalizedProvider = normalizeBYOKProvider(provider)
+    val trimmedKey = apiKey.trim()
+    if (normalizedProvider != "ollama" && trimmedKey.isBlank()) {
+      throw IllegalArgumentException("missing local provider key")
+    }
+    val trimmedBaseUrl = baseUrl.trim()
+    if (normalizedProvider == "ollama" && trimmedBaseUrl.isBlank()) {
+      throw IllegalArgumentException("missing local provider base URL")
+    }
+    val resolvedBaseUrl = trimmedBaseUrl.ifBlank { BYOK_PROVIDER_DEFAULT_BASE_URLS[normalizedProvider].orEmpty() }
+    val resolvedModel = model.trim().ifBlank { BYOK_PROVIDER_DEFAULT_MODELS.getValue(normalizedProvider) }
+    val appContext = context.applicationContext
+    val keyFile = localBYOKKeyFile(appContext, normalizedProvider)
+    if (trimmedKey.isBlank()) {
+      if (keyFile.exists() && !keyFile.delete()) {
+        throw IllegalStateException("could not clear local key file")
+      }
+    } else {
+      val parent = keyFile.parentFile
+      if (parent != null && !(parent.mkdirs() || parent.isDirectory)) {
+        throw IllegalStateException("could not prepare local key directory")
+      }
+      keyFile.writeText(trimmedKey)
+      keyFile.setReadable(false, false)
+      keyFile.setWritable(false, false)
+      keyFile.setExecutable(false, false)
+      keyFile.setReadable(true, true)
+      keyFile.setWritable(true, true)
+    }
+    appContext
+      .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putString(PREFS_BYOK_PROVIDER_KEY, normalizedProvider)
+      .putString(PREFS_BYOK_BASE_URL_KEY, resolvedBaseUrl)
+      .putString(PREFS_BYOK_MODEL_KEY, resolvedModel)
+      .apply()
+    return localBYOKStatus(appContext)
+  }
+
+  fun localBYOKStatus(context: Context): JSONObject {
+    val appContext = context.applicationContext
+    val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val provider = prefs.getString(PREFS_BYOK_PROVIDER_KEY, null)?.let { normalizeBYOKProviderOrNull(it) } ?: "xai"
+    val keyFile = localBYOKKeyFile(appContext, provider)
+    val baseUrl = prefs.getString(PREFS_BYOK_BASE_URL_KEY, null).orEmpty()
+    val model = prefs.getString(PREFS_BYOK_MODEL_KEY, null).orEmpty().ifBlank { BYOK_PROVIDER_DEFAULT_MODELS[provider].orEmpty() }
+    val keyFileReady = keyFile.exists() && keyFile.length() > 0
+    val baseUrlReady = provider != "ollama" || baseUrl.isNotBlank()
+    return JSONObject()
+      .put("provider", provider)
+      .put("keyFileReady", keyFileReady)
+      .put("keyFilePath", keyFile.absolutePath)
+      .put("baseUrlReady", baseUrlReady)
+      .put("model", model)
+      .put("byokReady", if (provider == "ollama") baseUrlReady else keyFileReady)
   }
 
   private fun prepareRuntime(context: Context): RuntimePaths {
@@ -281,21 +396,23 @@ object XMiloclawSidecarProcessController {
     val executable = File(nativeLibraryDir, SIDECAR_NATIVE_LIBRARY_FILENAME)
     val exists = executable.exists()
     val canExecute = executable.canExecute()
-    val shaMatches =
+    val actualSha256 =
       if (exists) {
-        sha256File(executable).equals(EXPECTED_SIDECAR_SHA256, ignoreCase = true)
+        sha256File(executable)
       } else {
-        false
+        null
       }
+    val expectedSha256 = BuildConfig.EXPECTED_SIDECAR_SHA256
+    val shaMatches = actualSha256?.equals(expectedSha256, ignoreCase = true) == true
     Log.i(
       TAG,
-      "XMILO_RUNTIME_HOST native_library pathCategory=nativeLibraryDir path=${executable.absolutePath} exists=$exists canExecute=$canExecute sha_match=$shaMatches"
+      "XMILO_RUNTIME_HOST native_library pathCategory=nativeLibraryDir path=${executable.absolutePath} exists=$exists canExecute=$canExecute sha_match=$shaMatches expected_sha_prefix=${shaPrefix(expectedSha256)} actual_sha_prefix=${shaPrefix(actualSha256)}"
     )
     if (!exists) {
       throw IllegalStateException("sidecar native-library payload missing")
     }
     if (!shaMatches) {
-      throw IllegalStateException("sidecar native-library payload SHA-256 mismatch")
+      throw IllegalStateException("sidecar native-library payload SHA-256 mismatch expected=${shaPrefix(expectedSha256)} actual=${shaPrefix(actualSha256)}")
     }
     if (!canExecute) {
       throw IllegalStateException("sidecar native-library payload is not executable")
@@ -312,6 +429,12 @@ object XMiloclawSidecarProcessController {
       prefs.edit().putString(PREFS_RUNTIME_ID_KEY, runtimeId).apply()
     }
 
+    val byokProvider = prefs.getString(PREFS_BYOK_PROVIDER_KEY, null)?.let { normalizeBYOKProviderOrNull(it) }
+    val byokKeyFile = byokProvider?.let { localBYOKKeyFile(context, it) }
+    val byokKeyReady = byokKeyFile?.let { it.exists() && it.length() > 0 } == true
+    val byokBaseUrl = prefs.getString(PREFS_BYOK_BASE_URL_KEY, null).orEmpty()
+    val byokModel = byokProvider?.let { prefs.getString(PREFS_BYOK_MODEL_KEY, null).orEmpty().ifBlank { BYOK_PROVIDER_DEFAULT_MODELS[it].orEmpty() } }.orEmpty()
+    val localBYOKActive = byokProvider != null && if (byokProvider == "ollama") byokBaseUrl.isNotBlank() else byokKeyReady
     val config =
       JSONObject()
         .put("host", HOST)
@@ -321,6 +444,17 @@ object XMiloclawSidecarProcessController {
         .put("relay_base_url", BuildConfig.DEFAULT_RELAY_BASE_URL)
         .put("mind_root", mindRoot.absolutePath)
         .put("runtime_id", runtimeId)
+        .put("llm_mode", if (localBYOKActive) "local_byok" else "relay")
+
+    if (localBYOKActive) {
+      config
+        .put("byok_provider", byokProvider)
+        .put("byok_base_url", byokBaseUrl)
+        .put("byok_model", byokModel)
+      if (byokKeyReady) {
+        config.put("byok_key_file", byokKeyFile?.absolutePath ?: throw IllegalStateException("local BYOK key path missing"))
+      }
+    }
 
     configFile.writeText(config.toString(2))
     Log.i(TAG, "XMILO_RUNTIME_HOST config_written=true path=${configFile.absolutePath}")
@@ -390,6 +524,9 @@ object XMiloclawSidecarProcessController {
       connection.disconnect()
       val ok = code in 200..299 && !body.contains("\"ok\":false", ignoreCase = true)
       val category = categorizeProbe(code, body)
+      if (path == "/ready") {
+        updateReadyAccessFields(body)
+      }
       setProbeResult(path, code, category)
       Log.i(TAG, "XMILO_RUNTIME_HOST ${path.removePrefix("/")} code=$code category=$category")
       if (!ok && path == "/ready") {
@@ -398,6 +535,9 @@ object XMiloclawSidecarProcessController {
       ok
     } catch (error: Exception) {
       setProbeResult(path, null, "probe_exception")
+      if (path == "/ready") {
+        clearReadyAccessFields()
+      }
       Log.w(TAG, "XMILO_RUNTIME_HOST ${path.removePrefix("/")} code=none category=probe_exception error=${error.message ?: ""}")
       if (path == "/ready") {
         lastError = error.message ?: "sidecar /ready probe failed"
@@ -414,6 +554,47 @@ object XMiloclawSidecarProcessController {
       lastHealthCode = code
       lastHealthCategory = category
     }
+  }
+
+  private fun localBYOKKeyFile(context: Context, provider: String): File = File(context.filesDir, "runtime/secrets/byok_${provider}.key")
+
+  private fun normalizeBYOKProvider(provider: String): String =
+    normalizeBYOKProviderOrNull(provider) ?: throw IllegalArgumentException("unsupported local BYOK provider")
+
+  private fun normalizeBYOKProviderOrNull(provider: String): String? =
+    when (provider.trim().lowercase()) {
+      "xai", "grok" -> "xai"
+      "openai", "gpt" -> "openai"
+      "anthropic", "claude" -> "anthropic"
+      "ollama" -> "ollama"
+      else -> null
+    }
+
+  private fun updateReadyAccessFields(body: String) {
+    try {
+      val json = JSONObject(body)
+      lastReadyLlmMode = json.optString("llm_mode", "").ifBlank { null }
+      lastReadyByokProvider = json.optString("byok_provider", "").ifBlank { null }
+      lastReadySubscriptionEntitled = json.optBoolean("subscription_entitled", false)
+      lastReadyBringYourOwnKeyActive = json.optBoolean("bring_your_own_key_active", false)
+      lastReadyPhase9ApiKeyAccess = json.optBoolean("phase9_api_key_access", false)
+      lastReadyFirstTaskEligible = json.optBoolean("first_task_eligible", false)
+      lastReadyRelayLlmTurnAllowed = json.optBoolean("relay_llm_turn_allowed", false)
+      lastReadyLocalLlmTurnAllowed = json.optBoolean("local_llm_turn_allowed", false)
+    } catch (_: Exception) {
+      clearReadyAccessFields()
+    }
+  }
+
+  private fun clearReadyAccessFields() {
+    lastReadyLlmMode = null
+    lastReadyByokProvider = null
+    lastReadySubscriptionEntitled = null
+    lastReadyBringYourOwnKeyActive = null
+    lastReadyPhase9ApiKeyAccess = null
+    lastReadyFirstTaskEligible = null
+    lastReadyRelayLlmTurnAllowed = null
+    lastReadyLocalLlmTurnAllowed = null
   }
 
   private fun categorizeProbe(code: Int, body: String): String =
@@ -545,6 +726,9 @@ object XMiloclawSidecarProcessController {
     }
 
   private fun ByteArray.toHex(): String = joinToString("") { "%02X".format(it) }
+
+  private fun shaPrefix(sha256: String?): String =
+    sha256?.take(12)?.ifBlank { "unknown" } ?: "unknown"
 
   private data class RuntimePaths(
     val runtimeDir: File,

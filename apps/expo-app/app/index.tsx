@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Modal,
@@ -14,8 +14,20 @@ import {
 import { MessageBubble } from "../src/components/MessageBubble";
 import { StarterChips } from "../src/components/StarterChips";
 import { clearStagedInputs, listStagedInputs } from "../src/lib/archiveDb";
-import { authCheck, clearContext, connectBridge, getState, getTaskCurrent, getHealth, setContext, submitAIReport, submitCommand, taskInterrupt } from "../src/lib/bridge";
+import { authCheck, clearContext, getHealth, getReady, setContext, submitAIReport, submitCommand, taskInterrupt, type SidecarReadyStatus } from "../src/lib/bridge";
 import { formatStagedInputsForContext, stageDocumentPick, stageImagePick, type StagedInputRecord } from "../src/lib/externalIntake";
+import {
+  firstTaskAccessMessage,
+  firstTaskErrorMessage,
+  formatActiveTaskStatus,
+  formatRuntimeEventForUser,
+  latestRelevantTaskEvent,
+  safeEventText,
+  safeLogSubmitResponse,
+  submitResponseMessage,
+  taskIdFromEvent,
+  taskIdFromSubmitResponse,
+} from "../src/lib/runtimeEvents";
 import { useApp } from "../src/state/AppContext";
 import type { EventEnvelope } from "../src/types/contracts";
 
@@ -30,52 +42,58 @@ const REPORT_REASONS = [
 
 export default function MainHallScreen() {
   const router = useRouter();
-  const { state, setState, events, pushEvent, tokenMissing, nightlyRitual, artPresentation } = useApp();
+  const { state, events, pushEvent, nightlyRitual, artPresentation, refreshRuntimeState, taskProofResetVersion } = useApp();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<string>("Unknown");
+  const [readyStatus, setReadyStatus] = useState<SidecarReadyStatus | null>(null);
+  const [sendStatus, setSendStatus] = useState("");
+  const [sendError, setSendError] = useState("");
+  const [currentSubmitTaskId, setCurrentSubmitTaskId] = useState("");
   const [stagedInputs, setStagedInputs] = useState<StagedInputRecord[]>([]);
   const [verifiedEmail, setVerifiedEmail] = useState("");
   const [reportTarget, setReportTarget] = useState<EventEnvelope | null>(null);
   const [reportReason, setReportReason] = useState<(typeof REPORT_REASONS)[number]>("Harmful or unsafe");
   const [reportNote, setReportNote] = useState("");
 
+  const refreshReadyStatus = useCallback(async () => {
+    try {
+      const nextReady = await getReady();
+      setReadyStatus(nextReady);
+      return nextReady;
+    } catch {
+      setReadyStatus(null);
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
-    let cleanup: (() => void) | undefined;
+    let disposed = false;
 
     async function boot() {
       try {
-        const [healthResp, runtimeResp, taskResp] = await Promise.all([
-          getHealth(),
-          getState(),
-          getTaskCurrent()
-        ]);
+        const healthResp = await getHealth();
+        if (disposed) return;
         setHealth(healthResp.service ?? "xmilo-sidecar");
-        setState(runtimeResp);
-        if (taskResp?.task) {
-          setState((prev) => ({ ...prev, active_task: taskResp.task }));
-        }
+        await Promise.all([refreshReadyStatus(), refreshRuntimeState()]);
         authCheck().then((result) => setVerifiedEmail(result?.verified_email ?? "")).catch(() => null);
         const staged = await listStagedInputs();
+        if (disposed) return;
         setStagedInputs(staged);
       } catch (error: any) {
+        if (disposed) return;
         setHealth(error?.message ?? "Unavailable");
       }
 
-      cleanup = connectBridge((event) => {
-        pushEvent(event);
-        if (event.type === "task.accepted" || event.type === "task.completed" || event.type === "task.stuck" || event.type === "task.cancelled" || event.type === "milo.state_changed" || event.type === "milo.room_changed") {
-          getState().then(setState).catch(() => null);
-          getTaskCurrent().then((data) => {
-            setState((prev) => ({ ...prev, active_task: data?.task ?? null }));
-          }).catch(() => null);
-        }
-      });
     }
 
-    boot();
-    return () => cleanup?.();
-  }, [pushEvent, setState]);
+    void boot();
+    const interval = setInterval(() => void refreshReadyStatus(), 3000);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, [refreshReadyStatus, refreshRuntimeState]);
 
   const starterPrompts = useMemo(
     () => [
@@ -92,15 +110,39 @@ export default function MainHallScreen() {
   async function submit(nextPrompt: string) {
     if (!nextPrompt.trim()) return;
     setBusy(true);
+    setSendError("");
+    setSendStatus("Checking current task state...");
+    await refreshRuntimeState();
+    const latestReady = await refreshReadyStatus();
+    const accessMessage = firstTaskAccessMessage(latestReady ?? readyStatus);
+    if (accessMessage) {
+      setSendStatus("");
+      setSendError(accessMessage);
+      setBusy(false);
+      return;
+    }
+    setCurrentSubmitTaskId("");
+    setSendStatus("Sending...");
     try {
-      await submitCommand(nextPrompt.trim());
+      const response = await submitCommand(nextPrompt.trim());
+      safeLogSubmitResponse(response);
+      const taskId = taskIdFromSubmitResponse(response);
+      if (taskId) {
+        setCurrentSubmitTaskId(taskId);
+      }
+      setSendStatus(submitResponseMessage(response));
       setPrompt("");
+      await refreshRuntimeState();
     } catch (error: any) {
+      const message = firstTaskErrorMessage(error?.message ?? "Failed to start task");
+      setSendStatus("");
+      setSendError(message);
       pushEvent({
         type: "runtime.error",
         timestamp: new Date().toISOString(),
-        payload: { message: error?.message ?? "Failed to start task", recoverable: true }
+        payload: { message, recoverable: true }
       });
+      await refreshRuntimeState();
     } finally {
       setBusy(false);
     }
@@ -110,10 +152,35 @@ export default function MainHallScreen() {
     setBusy(true);
     try {
       await taskInterrupt();
+      await refreshRuntimeState();
     } finally {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    const event = events.length > 0 ? events[events.length - 1] : null;
+    if (!event) return;
+    const eventTaskId = taskIdFromEvent(event);
+    if (event.type === "task.accepted" && eventTaskId && (currentSubmitTaskId || state.active_task?.task_id === eventTaskId)) {
+      setCurrentSubmitTaskId(eventTaskId);
+      setSendError("");
+      setSendStatus(formatRuntimeEventForUser(event));
+      return;
+    }
+    if (eventTaskId && currentSubmitTaskId && eventTaskId === currentSubmitTaskId) {
+      setSendStatus(formatRuntimeEventForUser(event));
+      if (event.type !== "runtime.error") {
+        setSendError("");
+      }
+    }
+  }, [currentSubmitTaskId, events, state.active_task?.task_id]);
+
+  useEffect(() => {
+    setSendError("");
+    setSendStatus("");
+    setCurrentSubmitTaskId("");
+  }, [taskProofResetVersion]);
 
   async function refreshStagedInputs() {
     const staged = await listStagedInputs();
@@ -163,11 +230,7 @@ export default function MainHallScreen() {
 
   async function submitReport() {
     if (!reportTarget) return;
-    const outputText =
-      reportTarget.payload?.report_text ||
-      reportTarget.payload?.text ||
-      reportTarget.payload?.message ||
-      JSON.stringify(reportTarget.payload);
+    const outputText = safeEventText(reportTarget);
 
     try {
       await submitAIReport({
@@ -177,7 +240,7 @@ export default function MainHallScreen() {
         report_note: reportNote.trim(),
         output_text: String(outputText),
         prompt_text: state.active_task?.prompt ?? "",
-        model_name: "xAI"
+        model_name: readyStatus?.byok_provider ? `local_byok:${readyStatus.byok_provider}` : "local_byok"
       });
       setReportTarget(null);
       setReportNote("");
@@ -187,23 +250,39 @@ export default function MainHallScreen() {
     }
   }
 
+  const latestCurrentTaskEvent = useMemo(
+    () => (currentSubmitTaskId ? latestRelevantTaskEvent(events, currentSubmitTaskId) : null),
+    [currentSubmitTaskId, events]
+  );
+  const lifecycleStatus = latestCurrentTaskEvent
+    ? formatRuntimeEventForUser(latestCurrentTaskEvent)
+    : formatActiveTaskStatus(state.active_task);
+  const sendBlockedMessage = firstTaskAccessMessage(readyStatus);
+  const sendDisabled = busy || Boolean(sendBlockedMessage);
+  const visibleSendError = sendError || (readyStatus && sendBlockedMessage ? sendBlockedMessage : "");
+  const visibleSendStatus = sendStatus || (!readyStatus ? sendBlockedMessage : lifecycleStatus);
+  const firstTaskValue =
+    readyStatus?.first_task_eligible && readyStatus?.local_llm_turn_allowed
+      ? "eligible"
+      : readyStatus
+      ? "not ready"
+      : "checking";
+
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heroCard}>
           <Text style={styles.kicker}>Main Hall</Text>
-          <Text style={styles.title}>xMilo Main Hall — starter shell</Text>
+          <Text style={styles.title}>xMilo Main Hall</Text>
           <Text style={styles.subtitle}>
-            Fixed dark theme, localhost bridge, sidecar events, and a real task input loop. Setup, access, and world-view polish are still tracked separately.
+            App-owned sidecar runtime, local BYOK access, and global task events are active for Phase 9 proof.
           </Text>
           <View style={styles.statsRow}>
             <InfoPill label="Bridge" value={health} />
             <InfoPill label="State" value={state.milo_state || "idle"} />
             <InfoPill label="Room" value={state.current_room_id || "main_hall"} />
+            <InfoPill label="First task" value={firstTaskValue} />
           </View>
-          {tokenMissing ? (
-            <Text style={styles.warning}>Missing EXPO_PUBLIC_LOCALHOST_TOKEN. The app shell can load, but localhost calls will fail until you set it.</Text>
-          ) : null}
         </View>
 
         <View style={styles.footerRow}>
@@ -251,6 +330,13 @@ export default function MainHallScreen() {
 
         <View style={styles.composerCard}>
           <Text style={styles.sectionTitle}>Send Milo a prompt</Text>
+          {visibleSendStatus || visibleSendError ? (
+            <View style={[styles.sendStatusBox, visibleSendError ? styles.sendStatusBoxError : null]}>
+              <Text style={[styles.sendStatusText, visibleSendError ? styles.sendStatusTextError : null]}>
+                {visibleSendError || visibleSendStatus}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.attachRow}>
             <Pressable style={styles.attachButton} onPress={attachFile}>
               <Text style={styles.attachButtonText}>Attach file</Text>
@@ -288,7 +374,7 @@ export default function MainHallScreen() {
           />
           <Text style={styles.charCount}>{prompt.length}/8000</Text>
           <View style={styles.buttonRow}>
-            <Pressable style={[styles.primaryButton, busy && styles.disabled]} disabled={busy} onPress={() => submit(prompt)}>
+            <Pressable style={[styles.primaryButton, sendDisabled && styles.disabled]} disabled={sendDisabled} onPress={() => submit(prompt)}>
               <Text style={styles.primaryButtonText}>{busy ? "Working..." : "Send prompt"}</Text>
             </Pressable>
             <Pressable style={styles.secondaryButton} onPress={interrupt}>
@@ -326,7 +412,7 @@ export default function MainHallScreen() {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Report AI output</Text>
             <Text style={styles.modalBody}>
-              This sends the exact xMilo output for review so safety and truthfulness can improve.
+              This sends safe xMilo output details for review so safety and truthfulness can improve.
             </Text>
             {verifiedEmail ? <Text style={styles.modalHint}>Signed-in email: {verifiedEmail}</Text> : null}
             <View style={styles.reasonList}>
@@ -382,7 +468,6 @@ const styles = StyleSheet.create({
   kicker: { color: "#93C5FD", fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1 },
   title: { color: "#F8FAFC", fontSize: 24, fontWeight: "700", marginTop: 6 },
   subtitle: { color: "#CBD5E1", marginTop: 8, lineHeight: 20 },
-  warning: { color: "#FCA5A5", marginTop: 12, lineHeight: 18 },
   statsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 14 },
   ritualCard: { borderRadius: 18, padding: 16, borderWidth: 1 },
   ritualCard_deferred: { backgroundColor: "#1A1528", borderColor: "#57406E" },
@@ -403,6 +488,10 @@ const styles = StyleSheet.create({
   composerCard: { backgroundColor: "#111827", borderRadius: 18, padding: 16, borderWidth: 1, borderColor: "#1F2937" },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   sectionTitle: { color: "#F8FAFC", fontSize: 18, fontWeight: "700" },
+  sendStatusBox: { marginTop: 12, borderRadius: 12, borderWidth: 1, borderColor: "#1D4ED8", backgroundColor: "#0F1E3A", padding: 12 },
+  sendStatusBoxError: { borderColor: "#7F1D1D", backgroundColor: "#2A1218" },
+  sendStatusText: { color: "#BFDBFE", lineHeight: 18 },
+  sendStatusTextError: { color: "#FCA5A5" },
   link: { color: "#93C5FD", fontWeight: "600" },
   attachRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
   attachButton: { backgroundColor: "#1F2937", borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12 },

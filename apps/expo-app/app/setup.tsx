@@ -14,7 +14,6 @@ import {
   TextInput,
   View
 } from "react-native";
-import * as SecureStore from "expo-secure-store";
 import {
   authCheck,
   authRedeemInvite,
@@ -38,17 +37,20 @@ import {
   openXMiloclawNotificationSettings,
   openXMiloclawOverlaySettings,
   restartXMiloclawRuntimeHost,
+  saveXMiloclawLocalByokApiKey,
   startXMiloclawRuntimeHost,
+  type ByokProvider,
   type XMiloclawRuntimeStatus
 } from "../src/lib/xmiloRuntimeHost";
 import { hasSetupCompletedOnce, markSetupCompletedOnce } from "../src/lib/setupCompletion";
+import { useApp } from "../src/state/AppContext";
 
 // ─── Step machine ─────────────────────────────────────────────────────────────
-// checking           → silent boot check (already entitled? skip wizard)
+// checking           → silent boot check for completed local runtime setup
 // waiting_sidecar    → hidden runtime-host startup flow
 // email              → collect email address
 // email_sent         → "check your inbox" + "I verified" polling
-// access_choice      → access code only during launch, public choices later
+// access_choice      → non-commerce launch access choices, including local BYOK
 // invite_input       → enter access code
 type Step =
   | "checking"
@@ -61,7 +63,45 @@ type Step =
   | "byok_choose_provider"
   | "byok_enter_key";
 
-type ByokProvider = "Grok" | "OpenAI" | "Claude";
+const BYOK_PROVIDER_OPTIONS: Array<{ provider: ByokProvider; label: string; model: string; baseUrl: string; keyRequired: boolean; copy: string }> = [
+  {
+    provider: "xai",
+    label: "xAI",
+    model: "grok-4",
+    baseUrl: "https://api.x.ai/v1",
+    keyRequired: true,
+    copy: "Uses xAI locally through the sidecar. The default model and base URL are handled automatically."
+  },
+  {
+    provider: "openai",
+    label: "OpenAI / GPT",
+    model: "gpt-5.4",
+    baseUrl: "https://api.openai.com/v1",
+    keyRequired: true,
+    copy: "Uses OpenAI locally through the sidecar. The default model and base URL are handled automatically."
+  },
+  {
+    provider: "anthropic",
+    label: "Claude / Anthropic",
+    model: "claude-sonnet-4-5",
+    baseUrl: "https://api.anthropic.com/v1",
+    keyRequired: true,
+    copy: "Uses Anthropic locally through the sidecar. The default model and base URL are handled automatically."
+  },
+  {
+    provider: "ollama",
+    label: "Ollama",
+    model: "llama3.2",
+    baseUrl: "",
+    keyRequired: false,
+    copy: "Ollama must be reachable from this phone. PC localhost will not work unless Ollama runs on the phone. Use a LAN URL like http://192.168.x.x:11434."
+  }
+];
+
+const BYOK_PROVIDER_BY_ID = Object.fromEntries(BYOK_PROVIDER_OPTIONS.map((option) => [option.provider, option])) as Record<
+  ByokProvider,
+  (typeof BYOK_PROVIDER_OPTIONS)[number]
+>;
 
 type AccessConfig = {
   access_mode?: string;
@@ -128,7 +168,6 @@ function getFreshPage3Snapshot(): Page3Snapshot | null {
 }
 
 type AllowBasicRowId =
-  | "run_commands_terminal_environment"
   | "modify_delete_shared_storage"
   | "read_shared_storage"
   | "read_audio_files"
@@ -204,11 +243,9 @@ const CLR = {
   inputBorder: "#374151"
 };
 
-const BYOK_SECURESTORE_SELECTED_PROVIDER_KEY = "xmilo.byok.selectedProvider";
-const BYOK_SECURESTORE_API_KEY_PREFIX = "xmilo.byok.apiKey.";
-
 export default function SetupScreen() {
   const router = useRouter();
+  const { resetRuntimeTaskProof, refreshRuntimeState } = useApp();
   const [step, setStep] = useState<Step>("checking");
   const [email, setEmail] = useState("");
   const [inviteCode, setInviteCode] = useState("");
@@ -222,6 +259,8 @@ export default function SetupScreen() {
   const [trustIntroDismissed, setTrustIntroDismissed] = useState(false);
   const [byokProvider, setByokProvider] = useState<ByokProvider | "">("");
   const [byokKey, setByokKey] = useState("");
+  const [byokBaseUrl, setByokBaseUrl] = useState("");
+  const [byokModel, setByokModel] = useState("");
   const [byokBusy, setByokBusy] = useState(false);
   const [runtimeStep, setRuntimeStep] = useState<
     Page3RuntimeStep
@@ -293,7 +332,7 @@ export default function SetupScreen() {
     return true;
   }
 
-  // ── Boot: check if already entitled, or wait for sidecar ─────────────────────
+  // ── Boot: confirm local runtime setup seam, or wait for sidecar ───────────────
   useEffect(() => {
     async function boot() {
       const setupCompleted = await hasSetupCompletedOnce().catch(() => false);
@@ -303,7 +342,7 @@ export default function SetupScreen() {
         return;
       }
 
-      // Start with setup-seam truth, then entitlement/auth after the seam is satisfied.
+      // Start with setup-seam truth, then access-contract checks after the seam is satisfied.
       let status: XMiloclawRuntimeStatus | null = null;
       try {
         status = await getXMiloclawRuntimeStatus();
@@ -547,8 +586,6 @@ export default function SetupScreen() {
     set("unrestricted_battery_access", snapshot.batteryUnrestricted ? "granted" : "missing");
     set("ask_ignore_battery_optimizations", snapshot.batteryUnrestricted ? "granted" : "missing");
     set("accessibility_service_enabled", snapshot.accessibilityEnabled ? "granted" : "missing");
-    set("run_commands_terminal_environment", snapshot.hostReady ? "granted" : "missing");
-
     // Shared storage/media mapping (Android version dependent).
     // Note: WRITE_EXTERNAL_STORAGE is deprecated and not grantable on modern Android targets; we still check it
     // to truthfully reflect that the current row label is not satisfiable without a canon-level replacement.
@@ -805,23 +842,37 @@ export default function SetupScreen() {
   async function handleByokSaveAndContinue() {
     if (!byokProvider) return;
 
+    const providerConfig = BYOK_PROVIDER_BY_ID[byokProvider];
     const trimmedKey = byokKey.trim();
-    if (!trimmedKey) {
-      Alert.alert("BYOK key not saved");
+    const trimmedBaseUrl = byokBaseUrl.trim();
+    const trimmedModel = byokModel.trim();
+    if (providerConfig.keyRequired && !trimmedKey) {
+      Alert.alert("BYOK key not saved", "This provider requires an API key.");
+      return;
+    }
+    if (byokProvider === "ollama" && !trimmedBaseUrl) {
+      Alert.alert("BYOK config not saved", "Ollama needs a reachable base URL from this phone.");
       return;
     }
 
     setByokBusy(true);
     try {
-      await SecureStore.setItemAsync(BYOK_SECURESTORE_SELECTED_PROVIDER_KEY, byokProvider);
-      await SecureStore.setItemAsync(`${BYOK_SECURESTORE_API_KEY_PREFIX}${byokProvider}`, trimmedKey);
+      const localStatus = await saveXMiloclawLocalByokApiKey(byokProvider, trimmedKey, trimmedBaseUrl, trimmedModel);
+      if (!localStatus.byokReady) {
+        throw new Error("Local BYOK configuration was not ready after save.");
+      }
+      resetRuntimeTaskProof();
+      await restartXMiloclawRuntimeHost();
+      await refreshRuntimeState().catch(() => null);
       await markSetupCompletedOnce().catch(() => null);
       setByokKey("");
+      setByokBaseUrl("");
+      setByokModel("");
       // Continue straight into the Lair shell without leaving a modal over the live scene
       // and without preserving setup in the back stack.
       router.replace("/lair");
-    } catch {
-      Alert.alert("BYOK key not saved");
+    } catch (error: any) {
+      Alert.alert("BYOK key not saved", error?.message ?? "Could not save local API key.");
     } finally {
       setByokBusy(false);
     }
@@ -1544,6 +1595,11 @@ export default function SetupScreen() {
                   Process exit: {runtimeProof.lastProcessExitCode ?? "—"} · stderr: {runtimeProof.firstSafeStderrCategory || "none"} · stdout:{" "}
                   {runtimeProof.firstSafeStdoutCategory || "none"}
                 </Text>
+                <Text style={styles.fine}>
+                  LLM: {runtimeProof.llmMode || "unknown"} · BYOK provider: {runtimeProof.byokProvider || "—"} · First task:{" "}
+                  {runtimeProof.firstTaskEligible ? "ELIGIBLE" : "NOT READY"} · Local turn:{" "}
+                  {runtimeProof.localLlmTurnAllowed ? "YES" : "NO"} · Subscription: {runtimeProof.subscriptionEntitled ? "YES" : "NO"}
+                </Text>
                 {runtimeProof.lastProcessErrorSummary ? <Text style={styles.fine}>Process summary: {runtimeProof.lastProcessErrorSummary}</Text> : null}
                 {runtimeError ? <Text style={styles.error}>{runtimeError}</Text> : null}
                 <View style={styles.actionStack}>
@@ -1665,6 +1721,13 @@ export default function SetupScreen() {
                   Process exit: {runtimeProof.lastProcessExitCode ?? "—"} · Uptime: {runtimeProof.lastProcessUptimeMillis ?? "—"} ms · stderr:{" "}
                   {runtimeProof.firstSafeStderrCategory || "none"} · stdout: {runtimeProof.firstSafeStdoutCategory || "none"}
                 </Text>
+                <Text style={styles.fine}>
+                  LLM: {runtimeProof.llmMode || "unknown"} · BYOK provider: {runtimeProof.byokProvider || "—"} · BYOK active:{" "}
+                  {runtimeProof.bringYourOwnKeyActive ? "YES" : "NO"} · Phase 9 key access:{" "}
+                  {runtimeProof.phase9ApiKeyAccess ? "YES" : "NO"} · First task: {runtimeProof.firstTaskEligible ? "ELIGIBLE" : "NOT READY"} · Relay turn:{" "}
+                  {runtimeProof.relayLlmTurnAllowed ? "YES" : "NO"} · Local turn: {runtimeProof.localLlmTurnAllowed ? "YES" : "NO"} · Subscription:{" "}
+                  {runtimeProof.subscriptionEntitled ? "YES" : "NO"}
+                </Text>
                 {runtimeProof.lastProcessErrorSummary ? <Text style={styles.fine}>Process summary: {runtimeProof.lastProcessErrorSummary}</Text> : null}
 
                 {runtimeError ? <Text style={styles.error}>{runtimeError}</Text> : null}
@@ -1698,24 +1761,26 @@ export default function SetupScreen() {
   }
 
   if (step === "byok_choose_provider") {
-    const options: ByokProvider[] = ["Grok", "OpenAI", "Claude"];
-
     return (
       <ScrollView style={styles.scroll} contentContainerStyle={styles.padded}>
         <Text style={styles.title}>Choose provider</Text>
+        <Text style={styles.body}>Your provider key stays local on this phone. Hosted access stays separate.</Text>
 
         <View style={styles.card}>
-          {options.map((provider) => (
+          {BYOK_PROVIDER_OPTIONS.map((option) => (
             <Pressable
-              key={provider}
+              key={option.provider}
               style={[styles.linkButton, { marginTop: 10 }]}
               onPress={() => {
                 setError("");
-                setByokProvider(provider);
+                setByokProvider(option.provider);
+                setByokKey("");
+                setByokBaseUrl(option.provider === "ollama" ? "" : option.baseUrl);
+                setByokModel(option.model);
                 setStep("byok_enter_key");
               }}
             >
-              <Text style={styles.linkButtonText}>{provider}</Text>
+              <Text style={styles.linkButtonText}>{option.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -1728,16 +1793,19 @@ export default function SetupScreen() {
   }
 
   if (step === "byok_enter_key") {
+    const providerConfig = byokProvider ? BYOK_PROVIDER_BY_ID[byokProvider] : null;
+    const keyRequired = providerConfig?.keyRequired ?? true;
     return (
       <ScrollView style={styles.scroll} contentContainerStyle={styles.padded}>
-        <Text style={styles.title}>Enter your API key</Text>
+        <Text style={styles.title}>{keyRequired ? "Enter your API key" : "Configure local provider"}</Text>
         <Text style={styles.body}>
-          Provider: <Text style={styles.inlineAccent}>{byokProvider || "—"}</Text>
+          Provider: <Text style={styles.inlineAccent}>{providerConfig?.label ?? "—"}</Text>
         </Text>
+        {providerConfig?.copy ? <Text style={styles.body}>{providerConfig.copy}</Text> : null}
 
         <TextInput
           style={styles.input}
-          placeholder="API key"
+          placeholder={keyRequired ? "API key" : "API key (optional)"}
           placeholderTextColor={CLR.muted}
           value={byokKey}
           onChangeText={setByokKey}
@@ -1745,6 +1813,23 @@ export default function SetupScreen() {
           autoCorrect={false}
           secureTextEntry
         />
+
+        {byokProvider === "ollama" ? (
+          <TextInput
+            style={styles.input}
+            placeholder="Base URL, e.g. http://192.168.x.x:11434"
+            placeholderTextColor={CLR.muted}
+            value={byokBaseUrl}
+            onChangeText={setByokBaseUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+        ) : (
+          <Text style={styles.fine}>Base URL: {providerConfig?.baseUrl || "default"}</Text>
+        )}
+
+        <Text style={styles.fine}>Model: {providerConfig?.model || "default"}</Text>
 
         <Btn label="Save & continue" onPress={handleByokSaveAndContinue} busy={byokBusy} />
 
@@ -1786,6 +1871,8 @@ export default function SetupScreen() {
             setError("");
             setByokProvider("");
             setByokKey("");
+            setByokBaseUrl("");
+            setByokModel("");
             setStep("byok_choose_provider");
           }}
           busy={false}

@@ -16,6 +16,14 @@ data class XMiloclawRuntimeStatus(
   val bridgeConnected: Boolean,
   val taskRouteSurfaceReady: Boolean,
   val hostReady: Boolean,
+  val llmMode: String? = null,
+  val byokProvider: String? = null,
+  val subscriptionEntitled: Boolean? = null,
+  val bringYourOwnKeyActive: Boolean? = null,
+  val phase9ApiKeyAccess: Boolean? = null,
+  val firstTaskEligible: Boolean? = null,
+  val relayLlmTurnAllowed: Boolean? = null,
+  val localLlmTurnAllowed: Boolean? = null,
   val lastRuntimeStage: String = "unknown",
   val lastHealthCode: Int? = null,
   val lastReadyCode: Int? = null,
@@ -47,6 +55,30 @@ data class XMiloclawRuntimeStatus(
       putBoolean("bridgeConnected", bridgeConnected)
       putBoolean("taskRouteSurfaceReady", taskRouteSurfaceReady)
       putBoolean("hostReady", hostReady)
+      if (llmMode != null) {
+        putString("llmMode", llmMode)
+      }
+      if (byokProvider != null) {
+        putString("byokProvider", byokProvider)
+      }
+      if (subscriptionEntitled != null) {
+        putBoolean("subscriptionEntitled", subscriptionEntitled)
+      }
+      if (bringYourOwnKeyActive != null) {
+        putBoolean("bringYourOwnKeyActive", bringYourOwnKeyActive)
+      }
+      if (phase9ApiKeyAccess != null) {
+        putBoolean("phase9ApiKeyAccess", phase9ApiKeyAccess)
+      }
+      if (firstTaskEligible != null) {
+        putBoolean("firstTaskEligible", firstTaskEligible)
+      }
+      if (relayLlmTurnAllowed != null) {
+        putBoolean("relayLlmTurnAllowed", relayLlmTurnAllowed)
+      }
+      if (localLlmTurnAllowed != null) {
+        putBoolean("localLlmTurnAllowed", localLlmTurnAllowed)
+      }
       putString("lastRuntimeStage", lastRuntimeStage)
       if (lastHealthCode != null) {
         putInt("lastHealthCode", lastHealthCode)

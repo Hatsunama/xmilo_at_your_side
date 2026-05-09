@@ -5,6 +5,7 @@ apply plugin: "com.facebook.react"
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 def xmiloRepoRoot = rootDir.getAbsoluteFile().getParentFile().getParentFile().getParentFile().getAbsolutePath()
 def xmiloRelayBaseUrl = System.getenv("EXPO_PUBLIC_RELAY_BASE_URL") ?: findProperty("EXPO_PUBLIC_RELAY_BASE_URL") ?: "http://127.0.0.1:8080"
+def xmiloExpectedSidecarSha256 = "750A02BFF683A97E0122C04704DA73D5235961A75D5ED6728E3E9271DE60AC7E"
 def xmiloBuildConfigString = { value ->
     "\"${(value ?: "").replace("\\", "\\\\").replace("\"", "\\\"")}\""
 }
@@ -109,6 +110,7 @@ android {
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
         buildConfigField "String", "DEFAULT_RELAY_BASE_URL", xmiloBuildConfigString(xmiloRelayBaseUrl)
+        buildConfigField "String", "EXPECTED_SIDECAR_SHA256", xmiloBuildConfigString(xmiloExpectedSidecarSha256)
     }
     signingConfigs {
         debug {
@@ -145,8 +147,8 @@ android {
             applicationIdSuffix ".internal"
             versionNameSuffix "-internal"
             signingConfig signingConfigs.debug
-            // Internal builds use a fixed local token to simplify phone validation.
-            // This is NOT used for Play builds.
+            // Internal builds use the app-owned native localhost bearer path for phone validation.
+            // No static shared localhost token is embedded here.
             buildConfigField "String", "DEFAULT_CASTLE_WS_URL", "\"ws://127.0.0.1:42817/ws\""
         }
         play {
@@ -385,7 +387,7 @@ tasks.register("verifySidecarExecutableAssetInternalDebug") {
     dependsOn("packageInternalDebug")
 
     doLast {
-        def expectedSha256 = "9FC73A183DABF33F463B8AEB46EF3D22472DFF9E3A12824BD1D78A1774DDC121"
+        def expectedSha256 = xmiloExpectedSidecarSha256
         def sidecarPayload = file("src/main/jniLibs/arm64-v8a/libxmilo_sidecar.so")
         def apkFile = file("${buildDir}/outputs/apk/internal/debug/app-internal-debug.apk")
         def apkEntry = "lib/arm64-v8a/libxmilo_sidecar.so"

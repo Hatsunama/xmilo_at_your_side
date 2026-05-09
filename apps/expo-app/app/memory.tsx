@@ -4,7 +4,8 @@ import * as Clipboard from "expo-clipboard";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useApp } from "../src/state/AppContext";
-import { startTask } from "../src/lib/bridge";
+import { getReady, submitCommand } from "../src/lib/bridge";
+import { firstTaskAccessMessage, taskIdFromSubmitResponse } from "../src/lib/runtimeEvents";
 
 const MEMORY_CLASSES = [
   "user_preference",
@@ -37,7 +38,7 @@ function safeJson(value: any) {
 
 export default function MemoryScreen() {
   const router = useRouter();
-  const { events, state } = useApp();
+  const { events, state, refreshRuntimeState } = useApp();
   const [selectedClass, setSelectedClass] = useState<MemoryClass>("user_preference");
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
@@ -119,9 +120,16 @@ export default function MemoryScreen() {
     setBusy(true);
     setLastStartErrorCode("");
     try {
-      const resp = (await startTask(prompt.trim())) as TaskStartOk;
-      setLastTaskId(String(resp?.task_id ?? ""));
+      await refreshRuntimeState();
+      const ready = await getReady();
+      const accessMessage = firstTaskAccessMessage(ready);
+      if (accessMessage) {
+        throw new Error(accessMessage);
+      }
+      const resp = (await submitCommand(prompt.trim())) as TaskStartOk;
+      setLastTaskId(taskIdFromSubmitResponse(resp) || String(resp?.task_id ?? ""));
       setLastIntakeGate(resp?.intake_gate ?? null);
+      await refreshRuntimeState();
     } catch (err: any) {
       const error = err as TaskStartError;
       setLastStartErrorCode(String(error?.error_code ?? ""));

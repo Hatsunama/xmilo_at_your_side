@@ -14,7 +14,7 @@
  */
 
 import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BackHandler,
   Keyboard,
@@ -29,18 +29,32 @@ import {
 
 import { usePersistentCastleSurface } from "../src/components/PersistentCastleSurface";
 import { useApp } from "../src/state/AppContext";
-import { submitCommand, taskInterrupt, setContext, clearContext } from "../src/lib/bridge";
+import { getReady, submitCommand, taskInterrupt, setContext, clearContext, type SidecarReadyStatus } from "../src/lib/bridge";
+import type { EventEnvelope } from "../src/types/contracts";
+import {
+  formatActiveTaskStatus,
+  firstTaskAccessMessage,
+  firstTaskErrorMessage,
+  formatRuntimeEventForUser,
+  latestRelevantTaskEvent,
+  safeLogSubmitResponse,
+  submitResponseMessage,
+  taskIdFromEvent,
+  taskIdFromSubmitResponse,
+} from "../src/lib/runtimeEvents";
 
 const ANDROID_KEYBOARD_CLEARANCE = 56;
 
 export default function WizardLairScreen() {
   const router = useRouter();
-  const { state, events, nightlyRitual, pushEvent } = useApp();
+  const { state, events, nightlyRitual, pushEvent, refreshRuntimeState, taskProofResetVersion } = useApp();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [inputVisible, setInputVisible] = useState(false);
   const [sendStatus, setSendStatus] = useState("");
   const [sendError, setSendError] = useState("");
+  const [readyStatus, setReadyStatus] = useState<SidecarReadyStatus | null>(null);
+  const [currentSubmitTaskId, setCurrentSubmitTaskId] = useState("");
   const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
   const promptLenRef = useRef(0);
@@ -57,6 +71,33 @@ export default function WizardLairScreen() {
     return () => subscription.remove();
   }, []);
 
+  const refreshReadyStatus = useCallback(async () => {
+    try {
+      const nextReady = await getReady();
+      setReadyStatus(nextReady);
+      return nextReady;
+    } catch {
+      setReadyStatus(null);
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function refreshLairRuntimeState() {
+      if (disposed) return;
+      await Promise.all([refreshReadyStatus(), refreshRuntimeState()]);
+    }
+
+    void refreshLairRuntimeState();
+    const interval = setInterval(() => void refreshReadyStatus(), 3000);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, [refreshReadyStatus, refreshRuntimeState]);
+
   useEffect(() => {
     const showSubscription = Keyboard.addListener("keyboardDidShow", (event) => {
       setKeyboardOffset(Platform.OS === "android" ? event.endCoordinates.height + ANDROID_KEYBOARD_CLEARANCE : 0);
@@ -69,6 +110,12 @@ export default function WizardLairScreen() {
       hideSubscription.remove();
     };
   }, []);
+
+  useEffect(() => {
+    setSendError("");
+    setSendStatus("");
+    setCurrentSubmitTaskId("");
+  }, [taskProofResetVersion]);
 
   function leaveLair() {
     router.replace("/");
@@ -102,18 +149,36 @@ export default function WizardLairScreen() {
 
   async function submit(nextPrompt: string) {
     if (!nextPrompt.trim()) return;
-    setSendError("");
-    setSendStatus("Sending...");
     setBusy(true);
+    setSendError("");
+    setSendStatus("Checking current task state...");
+    await refreshRuntimeState();
+    const latestReady = await refreshReadyStatus();
+    const accessMessage = firstTaskAccessMessage(latestReady ?? readyStatus);
+    if (accessMessage) {
+      setInputVisible(true);
+      setSendStatus("");
+      setSendError(accessMessage);
+      setBusy(false);
+      return;
+    }
+    setSendStatus("Sending...");
+    setCurrentSubmitTaskId("");
     try {
-      await submitCommand(nextPrompt.trim());
+      const response = await submitCommand(nextPrompt.trim());
+      safeLogSubmitResponse(response);
+      const taskId = taskIdFromSubmitResponse(response);
+      if (taskId) {
+        setCurrentSubmitTaskId(taskId);
+      }
       setPrompt("");
       promptLenRef.current = 0;
       setInputVisible(false);
-      setSendStatus("Sent to Milo");
+      setSendStatus(submitResponseMessage(response));
+      await refreshRuntimeState();
       // Context persists in sidecar until user explicitly dismisses the chip
     } catch (error: any) {
-      const message = error?.message ?? "Failed to send prompt";
+      const message = firstTaskErrorMessage(error?.message ?? "Failed to send prompt");
       setInputVisible(true);
       setSendStatus("");
       setSendError(message);
@@ -122,6 +187,7 @@ export default function WizardLairScreen() {
         timestamp: new Date().toISOString(),
         payload: { message, recoverable: true }
       });
+      await refreshRuntimeState();
     } finally {
       setBusy(false);
     }
@@ -131,14 +197,43 @@ export default function WizardLairScreen() {
     setBusy(true);
     try {
       await taskInterrupt();
+      await refreshRuntimeState();
     } finally {
       setBusy(false);
     }
   }
 
+  useEffect(() => {
+    const event = events.length > 0 ? events[events.length - 1] : null;
+    if (!event) return;
+    const eventTaskId = taskIdFromEvent(event);
+    if (event.type === "task.accepted" && eventTaskId && (currentSubmitTaskId || state.active_task?.task_id === eventTaskId)) {
+      setCurrentSubmitTaskId(eventTaskId);
+      setSendError("");
+      setSendStatus(formatRuntimeEventForUser(event));
+      return;
+    }
+    if (eventTaskId && currentSubmitTaskId && eventTaskId === currentSubmitTaskId) {
+      setSendStatus(formatRuntimeEventForUser(event));
+      if (event.type !== "runtime.error") {
+        setSendError("");
+      }
+    }
+  }, [currentSubmitTaskId, events, state.active_task?.task_id]);
+
   const roomLabel = ROOM_LABELS[state.current_room_id ?? "main_hall"] ?? "Main Hall";
   const miloStateLabel = STATE_LABELS[state.milo_state ?? "idle"] ?? "Idle";
-  const lastEvent = events.length > 0 ? events[events.length - 1] : null;
+  const latestCurrentTaskEvent = useMemo(
+    () => (currentSubmitTaskId ? latestRelevantTaskEvent(events, currentSubmitTaskId) : null),
+    [currentSubmitTaskId, events]
+  );
+  const lifecycleStatus = latestCurrentTaskEvent
+    ? formatEvent(latestCurrentTaskEvent)
+    : formatActiveTaskStatus(state.active_task);
+  const sendBlockedMessage = firstTaskAccessMessage(readyStatus);
+  const sendDisabled = busy || Boolean(sendBlockedMessage);
+  const visibleSendError = sendError || (inputVisible ? sendBlockedMessage ?? "" : "");
+  const visibleSendStatus = sendStatus || lifecycleStatus;
 
   return (
     <KeyboardAvoidingView
@@ -178,15 +273,6 @@ export default function WizardLairScreen() {
         </View>
       </View>
 
-      {/* Last event ticker — shows what Milo is doing */}
-      {lastEvent && (
-        <View style={styles.tickerBar} pointerEvents="none">
-          <Text style={styles.tickerText} numberOfLines={1}>
-            {formatEvent(lastEvent)}
-          </Text>
-        </View>
-      )}
-
       {nightlyRitual ? (
         <View style={[styles.ritualBanner, styles[`ritualBanner_${nightlyRitual.status}` as const]]} pointerEvents="none">
           <Text style={styles.ritualBannerEyebrow}>Nightly Ritual</Text>
@@ -203,14 +289,14 @@ export default function WizardLairScreen() {
           Platform.OS === "android" ? { bottom: keyboardOffset } : null,
         ]}
       >
-        {sendStatus || sendError ? (
+        {visibleSendStatus || visibleSendError ? (
           <View style={[
             styles.sendStatusBox,
-            sendError ? styles.sendStatusBoxError : null,
+            visibleSendError ? styles.sendStatusBoxError : null,
             !inputVisible ? styles.sendStatusBoxClosed : null,
           ]}>
-            <Text style={[styles.sendStatusText, sendError ? styles.sendStatusTextError : null]} numberOfLines={2}>
-              {sendError ? `Send failed: ${sendError}` : sendStatus}
+            <Text style={[styles.sendStatusText, visibleSendError ? styles.sendStatusTextError : null]} numberOfLines={2}>
+              {visibleSendError ? visibleSendError : visibleSendStatus}
             </Text>
           </View>
         ) : null}
@@ -268,8 +354,8 @@ export default function WizardLairScreen() {
               maxLength={8000}
             />
             <Pressable
-              style={[styles.sendButton, busy && styles.disabled]}
-              disabled={busy}
+              style={[styles.sendButton, sendDisabled && styles.disabled]}
+              disabled={sendDisabled}
               onPress={() => submit(prompt)}
             >
               <Text style={styles.sendButtonText}>
@@ -334,7 +420,7 @@ const STATE_ICONS: Record<string, string> = {
   working: "⚡",
 };
 
-function formatEvent(event: { type: string; payload?: any }): string {
+function formatEvent(event: EventEnvelope): string {
   switch (event.type) {
     case "maintenance.nightly_deferred":
       return "⏳ Nightly upkeep is waiting for the current task to finish";
@@ -346,10 +432,15 @@ function formatEvent(event: { type: string; payload?: any }): string {
       return `Milo is heading to ${ROOM_LABELS[event.payload?.to_room] ?? event.payload?.to_room}...`;
     case "milo.room_changed":
       return `Milo arrived at ${ROOM_LABELS[event.payload?.room_id] ?? event.payload?.room_id}`;
+    case "task.accepted":
     case "task.completed":
-      return `✓ Done: ${event.payload?.summary ?? "Task complete"}`;
     case "task.stuck":
-      return `⚠ Stuck: ${event.payload?.reason ?? "Unknown error"}`;
+    case "task.stale_active_recovered":
+    case "runtime.error":
+    case "local_provider.diagnostic":
+      return formatRuntimeEventForUser(event);
+    case "task.entitlement_lost":
+      return "Local API key access is not ready yet. Choose an access path in setup.";
     case "milo.thought":
       return `💭 ${event.payload?.text ?? ""}`;
     case "report.ready":
@@ -408,23 +499,6 @@ const styles = StyleSheet.create({
   hudPillText: {
     color: "#C8B8FF",
     fontWeight: "600",
-    fontSize: 13,
-  },
-  tickerBar: {
-    position: "absolute",
-    bottom: 110,
-    left: 16,
-    right: 16,
-    backgroundColor: "rgba(13, 10, 26, 0.75)",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: "rgba(200, 184, 255, 0.15)",
-    zIndex: 10,
-  },
-  tickerText: {
-    color: "#B8A8D8",
     fontSize: 13,
   },
   ritualBanner: {

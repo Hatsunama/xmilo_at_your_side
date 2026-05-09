@@ -113,4 +113,22 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
       promise.reject("XMILO_RUNTIME_LOCALHOST_TOKEN_FAILED", error)
     }
   }
+
+  @ReactMethod
+  fun saveLocalByokApiKey(provider: String, apiKey: String, baseUrl: String, model: String, promise: Promise) {
+    try {
+      promise.resolve(XMiloclawSidecarProcessController.saveLocalBYOKConfig(reactContext, provider, apiKey, baseUrl, model).toString())
+    } catch (error: Exception) {
+      promise.reject("XMILO_RUNTIME_SAVE_BYOK_KEY_FAILED", error)
+    }
+  }
+
+  @ReactMethod
+  fun getLocalByokStatus(promise: Promise) {
+    try {
+      promise.resolve(XMiloclawSidecarProcessController.localBYOKStatus(reactContext).toString())
+    } catch (error: Exception) {
+      promise.reject("XMILO_RUNTIME_BYOK_STATUS_FAILED", error)
+    }
+  }
 }
