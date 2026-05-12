@@ -4,7 +4,7 @@ apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 def xmiloRepoRoot = rootDir.getAbsoluteFile().getParentFile().getParentFile().getParentFile().getAbsolutePath()
-def xmiloRelayBaseUrl = System.getenv("EXPO_PUBLIC_RELAY_BASE_URL") ?: findProperty("EXPO_PUBLIC_RELAY_BASE_URL") ?: "http://127.0.0.1:8080"
+def xmiloRelayBaseUrl = System.getenv("EXPO_PUBLIC_RELAY_BASE_URL") ?: findProperty("EXPO_PUBLIC_RELAY_BASE_URL") ?: "https://xmiloatyourside.com"
 def xmiloExpectedSidecarSha256 = "750A02BFF683A97E0122C04704DA73D5235961A75D5ED6728E3E9271DE60AC7E"
 def xmiloBuildConfigString = { value ->
     "\"${(value ?: "").replace("\\", "\\\\").replace("\"", "\\\"")}\""
@@ -102,7 +102,7 @@ android {
 
     namespace 'com.hatsunama.xmilo.dev'
     defaultConfig {
-        applicationId 'com.hatsunama.xmilo.dev'
+        applicationId 'com.hatsunama.xmilo'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
           versionCode 6
@@ -151,9 +151,9 @@ android {
             // No static shared localhost token is embedded here.
             buildConfigField "String", "DEFAULT_CASTLE_WS_URL", "\"ws://127.0.0.1:42817/ws\""
         }
-        play {
+        opensource {
             dimension "dist"
-            // Play build must not be debug-signed. This is enforced below.
+            // Public open-source release builds must not be debug-signed. This is enforced below.
             signingConfig signingConfigs.release
             buildConfigField "String", "DEFAULT_CASTLE_WS_URL", "\"\""
         }
@@ -197,12 +197,12 @@ android {
 
 afterEvaluate {
     def requested = gradle.startParameter.taskNames.join(" ").toLowerCase()
-    def playReleaseRequested =
-        requested.contains("playrelease") ||
-        requested.contains("bundleplayrelease") ||
-        requested.contains("assembleplayrelease")
+    def openSourceReleaseRequested =
+        requested.contains("opensourcerelease") ||
+        requested.contains("bundleopensourcerelease") ||
+        requested.contains("assembleopensourcerelease")
 
-    if (playReleaseRequested) {
+    if (openSourceReleaseRequested) {
         def hasSigning =
             (System.getenv("XMILO_RELEASE_STORE_FILE") ?: findProperty("XMILO_RELEASE_STORE_FILE")) &&
             (System.getenv("XMILO_RELEASE_STORE_PASSWORD") ?: findProperty("XMILO_RELEASE_STORE_PASSWORD")) &&
@@ -210,7 +210,7 @@ afterEvaluate {
             (System.getenv("XMILO_RELEASE_KEY_PASSWORD") ?: findProperty("XMILO_RELEASE_KEY_PASSWORD"))
 
         if (!hasSigning) {
-            throw new GradleException("Play release signing is not configured. Set XMILO_RELEASE_STORE_FILE, XMILO_RELEASE_STORE_PASSWORD, XMILO_RELEASE_KEY_ALIAS, XMILO_RELEASE_KEY_PASSWORD.")
+            throw new GradleException("Open-source release signing is not configured. Set XMILO_RELEASE_STORE_FILE, XMILO_RELEASE_STORE_PASSWORD, XMILO_RELEASE_KEY_ALIAS, XMILO_RELEASE_KEY_PASSWORD.")
         }
     }
 }

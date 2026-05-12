@@ -1,103 +1,108 @@
 {
   "generated_at": "IMPORT_TIMESTAMP_PLACEHOLDER",
-  "profile_version": 1,
-  "profile_status": "baseline_recovered_and_cleaned",
-  "revalidation_queued": ["Torch", "Clipboard", "Proximity Sensor"],
-  "revalidation_note": "Capabilities listed in revalidation_queued must be re-tested live on first healthy xMilo Sidecar startup after migration. Do not treat them as available until re-tested.",
-  "device_identity": "Android Device",
-  "commands_tested": [
-    "termux-tts-speak",
-    "termux-camera-info",
-    "termux-camera-photo",
-    "termux-battery-status",
-    "termux-vibrate",
-    "termux-torch",
-    "termux-clipboard-get",
-    "termux-clipboard-set",
-    "termux-sensor"
+  "profile_version": 2,
+  "profile_status": "requires_xmilo_runtime_host_revalidation",
+  "runtime_truth": "Current capability claims must be proven through the xMilo-owned backend terminal/runtime host. Legacy external-terminal command baselines are not active runtime truth.",
+  "revalidation_queued": [
+    "TTS",
+    "Camera",
+    "Battery",
+    "Vibration",
+    "Gravity Sensor",
+    "Orientation Sensor",
+    "Light Sensor",
+    "Step Counter",
+    "Torch",
+    "Clipboard",
+    "Proximity Sensor",
+    "Tilt Detector",
+    "Environmental Sensors"
   ],
+  "revalidation_note": "Do not mark any device capability available from historical command evidence. Re-test live through the current xMilo runtime host before claiming support.",
+  "device_identity": "Android Device",
+  "commands_tested": [],
   "capabilities": {
     "TTS": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-tts-speak"],
-      "notes": "Worked reliably in the recovered baseline."
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
+      "notes": "Removed stale external-terminal command claim."
     },
     "Camera": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-camera-info", "termux-camera-photo"],
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
       "consent_gate": "Tier 3 for capture, Tier 2 for info only",
-      "notes": "Permissions granted previously. Validate by file existence and non-zero size. Capture requires explicit user consent."
+      "notes": "Capture requires explicit user consent and live xMilo runtime-host proof."
     },
     "Battery": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-battery-status"],
-      "notes": "Worked reliably in the recovered baseline."
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
+      "notes": "Removed stale external-terminal command claim."
     },
     "Vibration": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-vibrate"],
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
       "consent_gate": "Tier 2",
-      "notes": "Worked reliably in the recovered baseline."
+      "notes": "Removed stale external-terminal command claim."
     },
     "Gravity Sensor": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-sensor -s gravity"],
-      "notes": "Worked reliably in the recovered baseline."
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
+      "notes": "Removed stale external-terminal command claim."
     },
     "Orientation Sensor": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-sensor -s \"Orientation Sensor\""],
-      "notes": "Worked reliably in the recovered baseline."
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
+      "notes": "Removed stale external-terminal command claim."
     },
     "Light Sensor": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-sensor -s light"],
-      "notes": "Worked reliably in the recovered baseline."
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
+      "notes": "Removed stale external-terminal command claim."
     },
     "Step Counter": {
-      "available": true,
-      "confidence": "historical_verified",
-      "commands": ["termux-sensor -s step_counter"],
-      "notes": "Worked reliably in the recovered baseline."
+      "available": null,
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
+      "notes": "Removed stale external-terminal command claim."
     },
     "Torch": {
       "available": null,
-      "confidence": "needs_revalidation",
-      "commands": ["command -v termux-torch", "termux-torch on", "termux-torch off"],
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
       "consent_gate": "Tier 2",
-      "notes": "Older baseline used the wrong command name. Must be re-tested live."
+      "notes": "Must be re-tested live through the current xMilo runtime host."
     },
     "Clipboard": {
       "available": null,
-      "confidence": "needs_revalidation",
-      "commands": ["termux-clipboard-set", "termux-clipboard-get"],
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
       "consent_gate": "Tier 3 for read, Tier 2 for write",
-      "notes": "Must be tested with set-then-get, not get alone. Read requires explicit user consent."
+      "notes": "Read requires explicit user consent and live xMilo runtime-host proof."
     },
     "Proximity Sensor": {
       "available": null,
-      "confidence": "needs_revalidation",
-      "commands": ["termux-sensor -s \"Proximity Sensor\" -n 1"],
-      "notes": "Older baseline had no valid readings. Re-test live before concluding unavailable."
+      "confidence": "needs_xmilo_runtime_host_revalidation",
+      "commands": [],
+      "notes": "Must be re-tested live through the current xMilo runtime host."
     },
     "Tilt Detector": {
       "available": null,
       "confidence": "not_yet_tested_in_canonical_pack",
       "commands": [],
-      "notes": "Use exact live sensor name only if it appears in termux-sensor -l."
+      "notes": "Use exact live sensor name only after xMilo runtime-host enumeration proves it."
     },
     "Environmental Sensors": {
       "available": null,
       "confidence": "not_yet_tested_in_canonical_pack",
       "commands": [],
-      "notes": "Use exact live sensor names only if they appear in termux-sensor -l."
+      "notes": "Use exact live sensor names only after xMilo runtime-host enumeration proves them."
     }
   },
   "recommended_upgrades": []

@@ -1,4 +1,9 @@
 XMILO MASTER PHASE LIST (SOURCE OF TRUTH)
+
+CURRENT OPEN-SOURCE RUNTIME TRUTH OVERRIDE (2026-05-11):
+- xMilo uses its own backend terminal/runtime host.
+- Retired external-terminal bridge language in older phase notes is historical only and must not be treated as active setup, bootstrap, fallback, runtime-host, or release truth.
+- Public/open-source release materials must degrade unsupported capabilities honestly instead of routing users to an external terminal.
 Last updated: 2026-03-24
 Owner: MAIN HUB (this chat)
 
@@ -340,13 +345,13 @@ PHASE 2: Distribution Lock
 
 PHASE 3: Build Flavor Split (MANDATORY)
 - Maintain two Android realities:
-  - internal/dev build for fast iteration and Termux bridge experiments.
+  - internal/dev build for fast iteration and retired external runtime bridge experiments.
   - play/release build for Play submission (review-safe permissions/networking).
 
 PHASE 4: Play-Safe Manifest Hardening
 - Remove/restrict Play-risk permissions and flags in play/release:
   - SYSTEM_ALERT_WINDOW
-  - com.termux.permission.RUN_COMMAND
+  - legacy external-command permission
   - legacy storage permissions
   - cleartext traffic in release
 
@@ -371,12 +376,12 @@ PHASE 7A: Sidecar Lifecycle Recovery Lock (MANDATORY, APP-OWNED)
 - Final recommended architecture:
   - xMilo app owns sidecar lifecycle authority.
   - Restart authority must be narrow, explicit, and allowlisted.
-  - Normal recovery must not depend on ad hoc ADB or manual Termux interaction.
-  - If Termux remains the sidecar host in v1, the app may invoke only one approved restart entrypoint for sidecar recovery.
-  - No arbitrary shell execution and no broad Termux control surface are permitted.
+  - Normal recovery must not depend on ad hoc ADB, manual shell interaction, or an external terminal path.
+  - The current runtime host is xMilo-owned; restart and recovery actions must use the owned sidecar/runtime-host surface.
+  - No arbitrary shell execution and no broad terminal control surface are permitted.
 - V1 decision:
   - Use a single owned restart entrypoint / service action.
-  - If a bridge into Termux is required, it must expose only that single approved restart action and nothing broader.
+  - If a runtime bridge is required, it must expose only that single approved restart action and nothing broader.
 - Ownership lock:
   - Main App Builder lane owns the lifecycle controller, restart trigger, restart-state UX, and recovery verification surface.
   - Milo Mind lane owns only sidecar health/ready/auth semantics and must not own restart authority.
@@ -407,7 +412,7 @@ PHASE 7A: Sidecar Lifecycle Recovery Lock (MANDATORY, APP-OWNED)
 - Lane behavior rule:
   - Worker lanes may detect sidecar-down state.
   - Worker lanes may report proof and request app-owned restart.
-  - Worker lanes may not invent new Termux commands.
+  - Worker lanes may not invent new terminal commands.
   - Worker lanes may not invent new ADB commands as the normal recovery path.
   - Worker lanes may not turn this into self-authored governance or architecture change.
   - If autonomous restart is unavailable, only the single approved operator fallback command template may be surfaced.
@@ -416,35 +421,30 @@ PHASE 7A: Sidecar Lifecycle Recovery Lock (MANDATORY, APP-OWNED)
   - Operator fallback must use one canonical command template owned by Main Hub.
   - Operator fallback is not the normal recovery path.
 
-PHASE 7B: Termux Bridge Prerequisite + Guided Repair Lock (MANDATORY, BUILD-BLOCKING)
-- Scope rule:
-  - This is a product/runtime hardening requirement, not a one-device patch.
-  - A single-device Termux edit may unblock testing, but it does not close the production issue by itself.
+PHASE 7B: Runtime Host Prerequisite + Guided Repair Lock (MANDATORY, BUILD-BLOCKING)
+- Status:
+  - Supersedes the retired external runtime bridge prerequisite for current open-source release truth.
 - Hard prerequisite rule:
-  - If xMilo depends on Termux-hosted external-app execution for bootstrap, restart, or recovery, that bridge capability is a hard prerequisite.
-  - Do not treat Termux external-app execution enablement as an assumed environment detail.
-- End-to-end bridge verification rule:
-  - Setup must include an explicit end-to-end bridge verification step before setup may report completion.
+  - If xMilo depends on the app-owned backend terminal/runtime host for bootstrap, restart, or recovery, that xMilo-owned capability is a hard prerequisite.
+  - Do not treat runtime-host availability as an assumed environment detail.
+- End-to-end verification rule:
+  - Setup/recovery must include explicit runtime-host verification before reporting completion.
   - Package presence, permission presence, API presence, or bootstrap artifact presence alone are insufficient.
-  - Verification must prove the app can invoke the owned bridge action and receive the expected runtime proof.
+  - Verification must prove the app can invoke the owned runtime action and receive expected runtime proof.
 - Failure classification rule:
-  - Add and preserve the explicit failure class `TERMUX_EXTERNAL_APPS_DISABLED`.
-  - This class means the app-owned bridge is blocked because Termux external-app execution is disabled, unavailable, or not yet applied.
-  - Do not collapse this into generic retry, generic sidecar-down, or generic setup-failed wording.
+  - Use bounded, explicit unavailable/degraded states such as `EXTERNAL_RUNTIME_HOST_UNAVAILABLE`.
+  - Do not collapse runtime-host unavailability into generic retry, generic sidecar-down, or generic setup-failed wording.
 - Guided repair rule:
-  - If `TERMUX_EXTERNAL_APPS_DISABLED` is detected, the app must block normal setup completion and show a specific guided repair path.
+  - If the xMilo-owned runtime host is unavailable, normal completion must not pretend success.
   - Recovery must be actionable and specific, not generic retry-only behavior.
-  - If compliant auto-repair is technically possible, prefer a one-tap or minimal-tap repair path.
-  - If compliant auto-repair is not technically possible, provide the simplest allowed user-facing guided fix plus a visible re-check action.
   - Hidden terminal editing must not be treated as the normal recovery path.
 - Ownership lock:
   - Main App Builder lane owns detection, failure classification, guided repair UX, blocking setup behavior, and re-check flow.
-  - Milo Mind lane owns only the runtime success semantics needed for verification and must not redefine the repair UX.
+  - Milo Mind lane owns only runtime success semantics needed for verification and must not redefine repair UX.
   - Testing Grounds owns validation that this condition is caught, named, blocked, and recoverable.
-  - Main Hub owns the governance and release-gate wording.
+  - Main Hub owns governance and release-gate wording.
 - Release gate rule:
-  - No build may pass release readiness if this condition can survive setup or recovery without explicit in-app diagnosis and recoverability.
-  - A build fails the gate if `TERMUX_EXTERNAL_APPS_DISABLED` can leave the user in a broken bridge state with no specific guided repair path.
+  - No build may pass release readiness if runtime-host unavailability can survive setup or recovery without explicit diagnosis and recoverability.
   - Internal operator steps may unblock a test device, but they do not satisfy production hardening by themselves.
 
 PHASE 8: Native Castle Closure
@@ -455,15 +455,16 @@ PHASE 9: Non-Commerce Launch Path
 - Keep payment out of core phone launch/testing.
 - Ensure setup -> main hall -> first task works without commerce.
 
-PHASE 9A: Setup UX Copy Lock (MANDATORY, NO DRIFT)
-- Required setup gates:
-  - Termux is required.
-  - Termux:API is required.
-  - Setup cannot proceed if either required dependency is missing.
-  - If the Termux-hosted bridge is part of the runtime path, setup cannot complete until the app-owned bridge verification step passes.
-  - Setup must detect and block `TERMUX_EXTERNAL_APPS_DISABLED` as a named repair state, not a generic retry state.
+PHASE 9A: Setup UX Runtime Truth Lock (MANDATORY, NO DRIFT)
+- Status:
+  - Supersedes the retired external runtime setup copy lock for current open-source release truth.
+- Required setup/runtime truth:
+  - xMilo uses its own backend terminal/runtime host.
+  - Public setup must not require an external terminal app, external terminal add-on, manual shell bootstrap, or copy/paste terminal fallback as the normal runtime path.
+  - Setup/recovery must detect xMilo runtime-host availability and must not pretend success when required capabilities are unavailable.
+  - If a capability is not available through the xMilo-owned runtime host, the product must report a bounded unsupported/degraded state.
 - Walkthrough voice lock:
-  - All setup, install, permission, bootstrap, and add-on prompts must read like one continuous xMilo-guided walkthrough.
+  - All setup, install, permission, bootstrap, and capability prompts must read like one continuous xMilo-guided walkthrough.
   - Use magical framing where possible, but never hide the real system action.
   - Every prompt must clearly state:
     - what will open, install, or run
@@ -472,99 +473,18 @@ PHASE 9A: Setup UX Copy Lock (MANDATORY, NO DRIFT)
     - what will not work if declined
   - Do not mix warm xMilo copy with abrupt dev-only wording in user-facing setup surfaces.
 - Optional advanced lane:
-  - "Extra magic ✨" is optional and must never block core setup completion.
-  - If user chooses "Maybe later", setup continues normally.
-  - Extra magic remains discoverable in Settings after onboarding.
-- Feature-triggered plugin prompting:
-  - If user invokes a feature requiring a missing add-on, prompt only for that exact missing add-on.
-  - Use a direct install link for that single add-on.
-  - Provide a secondary text hint to open "Extra magic ✨" for full advanced pack.
-
-Locked setup screen copy (exact text):
-- Section title: `Required for xMilo`
-- Required item 1: `Install Termux`
-- Required item 2: `Install Termux:API`
-- Required trust-warning intro before Termux setup:
-  - 2 to 3 very short click-through pages
-  - large-letter presentation
-  - must appear before the user reaches the Termux / Termux:API install and permission steps
-  - tagline locked: `Magic requires trust`
-  - purpose: explain in calm language that Android and Termux show strong warnings because local runtime and device features require elevated trust, and xMilo is warning the user ahead of time for the same reason
-  - user must explicitly continue through the pages
-  - disclosure requirements inside the flow:
-    - explain what xMilo is asking the user to install or open
-    - explain why xMilo needs it
-    - explain that nothing installs or runs silently
-    - explain what will not work if the user declines
-    - keep tone magical, but do not obscure the real consent meaning
-  - propagation rule:
-    - the same trust framing must continue in later install prompts, plugin prompts, settings prompts, and walkthrough helper text
-    - every "install this additional thing" message should feel like the same xMilo voice, not a separate cold system voice
-    - the same framing must also apply to:
-      - direct-link buttons
-      - permission-setting buttons
-      - bootstrap launch buttons
-      - fallback copy/paste instructions
-      - future single-plugin install prompts
-  - walkthrough structure lock:
-    - trust intro first
-    - required installs second
-    - artifact/check explanation third
-    - guided handoff fourth
-    - optional fallback/manual instruction last
-- Optional section title: `Optional`
-- Optional primary action label: `Extra magic ✨`
-- Optional subtitle: `Adds advanced Termux plug-ins for expanded capabilities`
-- Optional helper text: `You can do this now or later`
-- Optional choice labels:
-  - `Yes, set up Extra magic ✨`
-  - `Maybe later`
-
-Locked feature-level missing-plugin prompt (exact text):
-- Title: `To use this feature, Milo needs: {PluginName}`
-- Primary button: `Install Plug-in`
-- Secondary helper text: `Want all advanced plug-ins? Extra magic ✨`
-
-Locked extra-magic package structure (exact text):
-- Title: `Extra magic package`
-- Description: `Advanced plug-ins for expanded Milo abilities`
-- List items and labels:
-  - `Termux:Boot` - `Recommended`
-  - `Termux:Widget` - `Recommended`
-  - `Termux:Float` - `Optional`
-  - `Termux:Tasker` - `Power user`
-  - `Termux:Styling` - `Optional`
-  - `Termux:GUI` - `Power user`
-
-Locked setup behavior sequence:
-- 1) Check Termux.
-- 2) Check Termux:API.
-- 3) Complete core bootstrap.
-- 3A) Run the end-to-end app-owned bridge verification.
-- 3B) If bridge verification detects `TERMUX_EXTERNAL_APPS_DISABLED`, block completion and show the specific guided repair path plus re-check control.
-- 4) Ask: `Want extra magic ✨?`
-- 5) If yes, guide add-ons one-by-one with return-check after each.
-- 6) If later feature requires one add-on, deep-link only that add-on.
+  - "Extra magic" is optional and must never block core setup completion unless Main Hub defines a concrete xMilo-owned capability gate.
+  - If user chooses "Maybe later", setup continues normally for available capabilities.
+  - Advanced capability management remains discoverable in Settings after onboarding.
 - Direct-link and no-search rule:
   - Setup must send users directly to the exact install destination whenever possible.
-  - Do not ask users to search app stores, browse long plugin lists, or discover package names manually.
-  - If a direct app/page deep-link is available and compliant, use it.
-  - If direct linking is unavailable or less reliable than terminal copy-paste, provide the exact one-shot command instead.
+  - Do not ask users to browse long plugin lists or discover package names manually.
   - Every setup action must include a short warning/explanation covering what will be installed or launched.
-  - Play-facing setup copy must remain accurate and must not imply hidden installs, background sideloading, or policy-unsafe behavior.
-
-Locked settings menu structure (exact IA labels):
-- `Settings`
-- `Runtime`
-- `Termux setup`
-- `Extra magic ✨`
-- `Advanced plug-ins`
-- `Installed add-ons`
-- `Missing add-ons`
-- `Run core bootstrap again`
-- `Open Termux`
-- `Open Termux permissions`
-- `Diagnostic checks`
+- Locked settings menu concepts:
+  - `Settings`
+  - `Runtime`
+  - `Advanced capabilities`
+  - `Diagnostic checks`
 
 PHASE 9B: Best-in-Class Onboarding Architecture Lock (MANDATORY)
 - Primary recommendation is HYBRID, not library-only:
@@ -944,7 +864,7 @@ PHASE 18A: Weekly Runtime Integrity Check (PHASE 1, MANDATORY, READ-ONLY, NO DRI
   - other apps' directories
   - repo source trees
   - developer worktrees / checkouts
-  - generic Termux home paths outside explicitly declared xMiloClaw-managed subtrees
+  - generic retired external runtime home paths outside explicitly declared xMiloClaw-managed subtrees
 
 - Definitions that may not drift:
   - `registry_mismatch`
@@ -1526,7 +1446,7 @@ PHASE 24: Play Listing and Review Packet
 - Permission explanation.
 - Listing/review truth locks:
   - Do not imply autonomous device powers beyond implemented consented behavior.
-  - Do not market sideload/internal Termux behavior as the Play-distributed truth.
+  - Do not market sideload/internal retired external runtime behavior as the Play-distributed truth.
   - Screenshots, description, and safety form must match the Play flavor, not the internal build.
   - If generative chat is central, listing must reflect safety/reporting availability and user control.
 
@@ -1601,7 +1521,7 @@ PHASE 25: Quality and Stability Gate
 - Stable main hall / native flow.
 - Acceptable crash/ANR posture.
 - Magical-helper UX preserved (not generic chatbot shell).
-- No releasable build may leave `TERMUX_EXTERNAL_APPS_DISABLED` uncaught, unnamed, or unrecoverable from inside the app.
+- No releasable build may leave `EXTERNAL_RUNTIME_HOST_UNAVAILABLE` uncaught, unnamed, or unrecoverable from inside the app.
 
 PHASE 26: Final Cross-Lane Acceptance Gate
 - Phone evidence: native or honest fallback proven.

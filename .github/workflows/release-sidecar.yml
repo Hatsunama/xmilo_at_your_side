@@ -33,9 +33,15 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Ensure go.sum exists
+      - name: Validate open-source release hygiene
+        shell: pwsh
+        run: ./scripts/android/validate_open_source_release.ps1
+
+      - name: Verify Go module files are tidy
         working-directory: sidecar-go
-        run: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
 
       - name: Build
         working-directory: sidecar-go
@@ -59,14 +65,6 @@ jobs:
           sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
           cat ${{ matrix.asset_name }}.sha256
 
-      - name: Prepare installer script
-        if: matrix.arch == 'arm64'
-        run: |
-          mkdir -p dist
-          cp scripts/termux/install.sh dist/install.sh
-          chmod +x dist/install.sh
-          sha256sum dist/install.sh > dist/install.sh.sha256
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -74,8 +72,6 @@ jobs:
           path: |
             dist/${{ matrix.asset_name }}
             dist/${{ matrix.asset_name }}.sha256
-            dist/install.sh
-            dist/install.sh.sha256
           retention-days: 1
 
   release:
@@ -101,11 +97,9 @@ jobs:
           body: |
             ## xMilo Sidecar ${{ github.ref_name }}
 
-            ### Install
-            On your Android phone in Termux:
-            ```bash
-            curl -fsSL https://github.com/Hatsunama/xmilo_at_your_side/releases/latest/download/install.sh | bash
-            ```
+            This release publishes the sidecar binary and checksum for the xMilo
+            app-owned backend terminal/runtime host. No standalone user install
+            script is published from this workflow.
 
             ### Manual download
             | Architecture | File | Notes |
@@ -119,7 +113,5 @@ jobs:
           files: |
             dist/xmilo-sidecar-arm64
             dist/xmilo-sidecar-arm64.sha256
-            dist/install.sh
-            dist/install.sh.sha256
           draft: false
           prerelease: false

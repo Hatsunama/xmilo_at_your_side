@@ -1,6 +1,6 @@
 param(
   [string]$Serial = "",
-  [string]$PackageName = "com.hatsunama.xmilo.dev",
+  [string]$PackageName = "com.hatsunama.xmilo",
   [string]$NativeActivity = "com.hatsunama.xmilo.dev.NativeCastleActivity",
   [string]$OutputRoot = "C:\xMilo\xmilo_at_your_side\validation-artifacts\native-castle",
   [switch]$AllowEmulator

@@ -1,11 +1,13 @@
 import type { ExpoConfig } from "expo/config";
 
-const androidPackage = process.env.XMILO_ANDROID_PACKAGE ?? "com.hatsunama.xmilo.dev";
+const appVersion = "0.1.5";
+const androidPackage = process.env.XMILO_ANDROID_PACKAGE ?? "com.hatsunama.xmilo";
+const publicRelayBaseUrl = process.env.EXPO_PUBLIC_RELAY_BASE_URL || "https://xmiloatyourside.com";
 
 const config: ExpoConfig = {
   name: "xMilo",
   slug: "xmilo",
-  version: "0.1.0",
+  version: appVersion,
   scheme: "xmilo",
   orientation: "portrait",
   userInterfaceStyle: "dark",
@@ -34,7 +36,7 @@ const config: ExpoConfig = {
     // Treat empty-string env vars as "unset" so builds don't accidentally ship with missing config.
     sidecarBaseUrl: process.env.EXPO_PUBLIC_SIDECAR_BASE_URL || "http://localhost:42817",
     localhostToken: process.env.EXPO_PUBLIC_LOCALHOST_TOKEN || "",
-    relayBaseUrl: process.env.EXPO_PUBLIC_RELAY_BASE_URL || "http://localhost:8080",
+    relayBaseUrl: publicRelayBaseUrl,
     websiteBaseUrl: process.env.EXPO_PUBLIC_WEBSITE_BASE_URL || "https://sol.xmiloatyourside.com",
     revenueCatAndroidApiKey: process.env.EXPO_PUBLIC_RC_ANDROID_API_KEY || "",
     revenueCatEntitlementId: process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || "xmilo_pro"

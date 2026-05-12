@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,6 +39,7 @@ type App struct {
 	startedAt      time.Time
 	mindLoaded     bool
 	wakeLockActive bool
+	wakeLockStatus string
 }
 
 func NewApp(cfg config.Config) (*App, error) {
@@ -85,21 +85,20 @@ func NewApp(cfg config.Config) (*App, error) {
 	planner := movement.NewPlanner()
 
 	return &App{
-		cfg:         cfg,
-		store:       store,
-		hub:         hub,
-		engine:      engine,
-		planner:     planner,
-		relayClient: relayClient,
-		startedAt:   time.Now().UTC(),
-		mindLoaded:  true,
+		cfg:            cfg,
+		store:          store,
+		hub:            hub,
+		engine:         engine,
+		planner:        planner,
+		relayClient:    relayClient,
+		startedAt:      time.Now().UTC(),
+		mindLoaded:     true,
+		wakeLockStatus: "unsupported_by_sidecar_runtime_host",
 	}, nil
 }
 
 func (a *App) Start(ctx context.Context) error {
-	if err := a.acquireWakeLock(); err != nil {
-		// keep going on non-Termux hosts
-	}
+	a.markWakeLockUnsupported()
 
 	if err := a.store.SetRuntimeConfig("last_meaningful_user_action_at", time.Now().UTC().Format(time.RFC3339)); err != nil {
 		return err
@@ -162,14 +161,13 @@ func (a *App) Start(ctx context.Context) error {
 	a.hub.Broadcast("runtime.ready", map[string]any{
 		"ready":            true,
 		"wake_lock_active": a.wakeLockActive,
+		"wake_lock_status": a.wakeLockStatus,
+		"runtime_host":     "xmilo_owned",
 	})
 
 	go func() {
 		<-ctx.Done()
 		_ = server.Shutdown(context.Background())
-		if a.wakeLockActive {
-			_, _ = exec.Command("termux-wake-unlock").CombinedOutput()
-		}
 		_ = a.store.Close()
 	}()
 
@@ -467,6 +465,8 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runtime.ReadyResponse{
 		OK:                    true,
 		WakeLockActive:        a.wakeLockActive,
+		WakeLockStatus:        a.wakeLockStatus,
+		RuntimeHost:           "xmilo_owned",
 		DBReady:               true,
 		RelayConfigured:       a.cfg.RelayBaseURL != "",
 		MindLoaded:            a.mindLoaded,
@@ -804,13 +804,9 @@ func (a *App) stub(message string) func(http.ResponseWriter, *http.Request) {
 	}
 }
 
-func (a *App) acquireWakeLock() error {
-	cmd := exec.Command("termux-wake-lock")
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	a.wakeLockActive = true
-	return nil
+func (a *App) markWakeLockUnsupported() {
+	a.wakeLockActive = false
+	a.wakeLockStatus = "unsupported_by_sidecar_runtime_host"
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

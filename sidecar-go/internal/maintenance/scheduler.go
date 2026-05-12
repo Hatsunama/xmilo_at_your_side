@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -107,7 +106,8 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		"latest_release_url":  update.URL,
 		"update_check_status": update.Status,
 		"voice_cue":           "Milo is beginning his nightly upkeep.",
-		"physical_cue":        "termux_vibrate",
+		"voice_cue_status":    "unsupported_by_sidecar_runtime_host",
+		"physical_cue":        "unsupported_by_sidecar_runtime_host",
 	})
 	s.signalCue("Milo is beginning his nightly upkeep.")
 
@@ -139,7 +139,8 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		"latest_release_url":  update.URL,
 		"update_check_status": update.Status,
 		"voice_cue":           "Milo has finished his nightly upkeep.",
-		"physical_cue":        "termux_vibrate",
+		"voice_cue_status":    "unsupported_by_sidecar_runtime_host",
+		"physical_cue":        "unsupported_by_sidecar_runtime_host",
 		"message":             "Nightly upkeep is complete. Archive sealed and update check finished.",
 	})
 	s.signalCue("Milo has finished his nightly upkeep.")
@@ -199,10 +200,14 @@ func (s *Scheduler) checkLatestRelease(ctx context.Context) releaseCheck {
 }
 
 func (s *Scheduler) signalCue(phrase string) {
-	_, _ = exec.Command("termux-vibrate", "-d", "350").CombinedOutput()
-	if strings.TrimSpace(phrase) != "" {
-		_, _ = exec.Command("termux-tts-speak", phrase).CombinedOutput()
+	if strings.TrimSpace(phrase) == "" {
+		return
 	}
+	s.emit("runtime.capability_degraded", map[string]any{
+		"capability": "nightly_cue",
+		"status":     "unsupported_by_sidecar_runtime_host",
+		"reason":     "sidecar_runtime_host_has_no_native_voice_or_physical_cue_provider",
+	})
 }
 
 func (s *Scheduler) emit(eventType string, payload map[string]any) {

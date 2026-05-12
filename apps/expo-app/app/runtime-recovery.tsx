@@ -46,7 +46,7 @@ export default function RuntimeRecoveryScreen() {
 
   async function attemptRestart() {
     if (!nativeRuntimeAvailable) {
-      Alert.alert("Unavailable", "This build does not include the app-owned hidden runtime host.");
+      Alert.alert("Unavailable", "This build does not include the app-owned runtime host.");
       return;
     }
 
@@ -90,7 +90,7 @@ export default function RuntimeRecoveryScreen() {
       <View style={styles.card}>
         <Text style={styles.title}>Hidden Runtime Recovery</Text>
         <Text style={styles.body}>
-          This screen uses the app-owned hidden runtime host only. No Termux path is active here.
+          This screen uses the app-owned runtime host only. No external terminal path is active here.
         </Text>
 
         <View style={styles.row}>

@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # daily_rollover.sh
 # Maintenance utility only. Not runtime authority.
 # Creates today's daily log file if it doesn't exist.

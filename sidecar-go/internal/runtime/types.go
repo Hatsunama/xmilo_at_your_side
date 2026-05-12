@@ -10,6 +10,8 @@ type HealthResponse struct {
 type ReadyResponse struct {
 	OK                    bool   `json:"ok"`
 	WakeLockActive        bool   `json:"wake_lock_active"`
+	WakeLockStatus        string `json:"wake_lock_status"`
+	RuntimeHost           string `json:"runtime_host"`
 	DBReady               bool   `json:"db_ready"`
 	RelayConfigured       bool   `json:"relay_configured"`
 	MindLoaded            bool   `json:"mind_loaded"`

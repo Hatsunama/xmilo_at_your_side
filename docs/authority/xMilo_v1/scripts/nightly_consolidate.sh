@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # nightly_consolidate.sh
 # Maintenance utility only. Not runtime authority.
 # Wire into xMilo Sidecar's nightly maintenance scheduler or run via cron.
@@ -66,7 +66,7 @@ for line in lines:
     lower = line.lower()
     if any(k in lower for k in ["learned", "lesson", "worked", "failed", "fix", "issue", "warning", "recovery"]):
         lessons.append(line)
-    if any(k in lower for k in ["tool", "script", "termux", "api", "json", "bridge", "runtime"]):
+    if any(k in lower for k in ["tool", "script", "api", "json", "bridge", "runtime"]):
         tools.append(line)
     if any(k in lower for k in ["project", "mission", "task", "workflow", "build"]):
         projects.append(line)
