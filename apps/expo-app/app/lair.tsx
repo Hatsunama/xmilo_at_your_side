@@ -19,11 +19,14 @@ import {
   BackHandler,
   Keyboard,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -42,15 +45,31 @@ import {
   taskIdFromEvent,
   taskIdFromSubmitResponse,
 } from "../src/lib/runtimeEvents";
+import {
+  appendLairChatMessage,
+  chatProjectionFromRuntimeEvent,
+  clearLairChatForDate,
+  listTodayLairChatMessages,
+  localChatDate,
+  removeLairChatMessagesForTaskSource,
+  resetLairChatAfterNightlyArchive,
+  updateLairChatMessageTaskIdentity,
+  type LairDailyChatMessage,
+} from "../src/lib/lairDailyChat";
 
 const ANDROID_KEYBOARD_CLEARANCE = 56;
+const CHAT_SWIPE_THRESHOLD = 28;
+const CHAT_BOTTOM_THRESHOLD = 48;
 
 export default function WizardLairScreen() {
   const router = useRouter();
+  const { height: windowHeight } = useWindowDimensions();
   const { state, events, nightlyRitual, pushEvent, refreshRuntimeState, taskProofResetVersion } = useApp();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [inputVisible, setInputVisible] = useState(false);
+  const [chatExpanded, setChatExpanded] = useState(false);
+  const [chatMessages, setChatMessages] = useState<LairDailyChatMessage[]>([]);
   const [sendStatus, setSendStatus] = useState("");
   const [sendError, setSendError] = useState("");
   const [readyStatus, setReadyStatus] = useState<SidecarReadyStatus | null>(null);
@@ -58,10 +77,60 @@ export default function WizardLairScreen() {
   const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
   const promptLenRef = useRef(0);
+  const inputRef = useRef<TextInput>(null);
+  const chatScrollRef = useRef<ScrollView>(null);
+  const currentChatDateRef = useRef(localChatDate());
+  const processedEventIdsRef = useRef(new Set<string>());
+  const reportReadyTaskIdsRef = useRef(new Set<string>());
+  const chatNearBottomRef = useRef(true);
+  const forceNextChatScrollRef = useRef(false);
   const castleSurface = usePersistentCastleSurface();
+  const expandedChatMaxHeight = Math.round(windowHeight * 0.75);
 
   // Chars added in a single onChangeText that signals a paste rather than typing.
   const PASTE_THRESHOLD = 800;
+
+  const chatPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > CHAT_SWIPE_THRESHOLD && Math.abs(gestureState.dy) > Math.abs(gestureState.dx),
+        onPanResponderRelease: (_, gestureState) => {
+          if (gestureState.dy < -CHAT_SWIPE_THRESHOLD) {
+            setChatExpanded(true);
+          } else if (gestureState.dy > CHAT_SWIPE_THRESHOLD) {
+            setChatExpanded(false);
+            Keyboard.dismiss();
+          }
+        },
+      }),
+    []
+  );
+
+  const loadDailyChat = useCallback(async () => {
+    const today = localChatDate();
+    currentChatDateRef.current = today;
+    const messages = await listTodayLairChatMessages(today);
+    setChatMessages(messages);
+    reportReadyTaskIdsRef.current = new Set(
+      messages
+        .filter((message) => message.source_event_type === "report.ready" && message.task_id)
+        .map((message) => String(message.task_id))
+    );
+  }, []);
+
+  const appendProjectedChat = useCallback(async (message: Parameters<typeof appendLairChatMessage>[0], forceScroll = false) => {
+    const saved = await appendLairChatMessage(message, currentChatDateRef.current);
+    if (!saved) return;
+    setChatMessages((prev) => (prev.some((item) => item.id === saved.id) ? prev : [...prev, saved]));
+    if (forceScroll || chatNearBottomRef.current) {
+      forceNextChatScrollRef.current = true;
+    }
+  }, []);
+
+  function openComposer() {
+    setInputVisible(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -70,6 +139,21 @@ export default function WizardLairScreen() {
     });
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    async function load() {
+      try {
+        await loadDailyChat();
+      } catch {
+        if (!disposed) setChatMessages([]);
+      }
+    }
+    void load();
+    return () => {
+      disposed = true;
+    };
+  }, [loadDailyChat]);
 
   const refreshReadyStatus = useCallback(async () => {
     try {
@@ -159,7 +243,8 @@ export default function WizardLairScreen() {
   }
 
   async function submit(nextPrompt: string) {
-    if (!nextPrompt.trim()) return;
+    const trimmedPrompt = nextPrompt.trim();
+    if (!trimmedPrompt) return;
     setBusy(true);
     setSendError("");
     setSendStatus("Checking current task state...");
@@ -175,12 +260,30 @@ export default function WizardLairScreen() {
     }
     setSendStatus("Sending...");
     setCurrentSubmitTaskId("");
+    const userMessageId = `user:${new Date().toISOString()}:${Math.random().toString(36).slice(2)}`;
+    await appendProjectedChat(
+      {
+        id: userMessageId,
+        role: "user",
+        text: trimmedPrompt,
+        source_event_type: "ui.prompt_submitted",
+      },
+      true
+    );
     try {
-      const response = await submitCommand(nextPrompt.trim());
+      const response = await submitCommand(trimmedPrompt);
       safeLogSubmitResponse(response);
       const taskId = taskIdFromSubmitResponse(response);
       if (taskId) {
         setCurrentSubmitTaskId(taskId);
+        await updateLairChatMessageTaskIdentity(userMessageId, taskId, response.attempt_id || response.immediate_state?.attempt_id);
+        setChatMessages((prev) =>
+          prev.map((message) =>
+            message.id === userMessageId
+              ? { ...message, task_id: taskId, attempt_id: response.attempt_id || response.immediate_state?.attempt_id || null }
+              : message
+          )
+        );
       }
       setPrompt("");
       promptLenRef.current = 0;
@@ -233,6 +336,51 @@ export default function WizardLairScreen() {
       }
     }
   }, [currentSubmitTaskId, events, state.active_task?.task_id]);
+
+  useEffect(() => {
+    let disposed = false;
+    async function projectEvents() {
+      for (const event of events) {
+        const taskId = taskIdFromEvent(event);
+        const eventKey = `${event.type}:${event.timestamp}:${taskId}:${String(event.payload?.attempt_id ?? "")}`;
+        if (processedEventIdsRef.current.has(eventKey)) continue;
+        processedEventIdsRef.current.add(eventKey);
+
+        if (event.type === "maintenance.nightly_completed") {
+          await resetLairChatAfterNightlyArchive(event.payload?.archive_date);
+          if (disposed) return;
+          await loadDailyChat();
+          continue;
+        }
+
+        if (event.type === "report.ready" && taskId) {
+          reportReadyTaskIdsRef.current.add(taskId);
+          await removeLairChatMessagesForTaskSource(taskId, "task.completed");
+          if (!disposed) {
+            setChatMessages((prev) => prev.filter((message) => !(message.task_id === taskId && message.source_event_type === "task.completed")));
+          }
+        }
+
+        const projection = chatProjectionFromRuntimeEvent(event, {
+          reportReadyTaskIds: reportReadyTaskIdsRef.current,
+          currentTaskId: currentSubmitTaskId || state.active_task?.task_id,
+        });
+        if (projection) {
+          await appendProjectedChat(projection);
+        }
+      }
+    }
+    void projectEvents();
+    return () => {
+      disposed = true;
+    };
+  }, [appendProjectedChat, currentSubmitTaskId, events, loadDailyChat, state.active_task?.task_id]);
+
+  useEffect(() => {
+    if (!chatExpanded || !forceNextChatScrollRef.current) return;
+    forceNextChatScrollRef.current = false;
+    requestAnimationFrame(() => chatScrollRef.current?.scrollToEnd({ animated: true }));
+  }, [chatExpanded, chatMessages.length]);
 
   const roomLabel = ROOM_LABELS[state.current_room_id ?? "main_hall"] ?? "Main Hall";
   const miloStateLabel = STATE_LABELS[state.milo_state ?? "idle"] ?? "Idle";
@@ -295,89 +443,161 @@ export default function WizardLairScreen() {
         </View>
       ) : null}
 
-      {/* Bottom controls */}
       <View
         style={[
           styles.bottomControls,
           Platform.OS === "android" ? { bottom: keyboardOffset } : null,
         ]}
       >
-        {visibleSendStatus || visibleSendError ? (
-          <View style={[
-            styles.sendStatusBox,
-            visibleSendError ? styles.sendStatusBoxError : null,
-            !inputVisible ? styles.sendStatusBoxClosed : null,
-          ]}>
-            <Text style={[styles.sendStatusText, visibleSendError ? styles.sendStatusTextError : null]} numberOfLines={2}>
-              {visibleSendError ? visibleSendError : visibleSendStatus}
-            </Text>
-          </View>
-        ) : null}
-        <View style={styles.controlRow}>
-          <Pressable
-            style={styles.controlButton}
-            onPress={leaveLair}
-          >
-            <Text style={styles.controlButtonText}>← Back</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.primaryButton, busy && styles.disabled]}
-            disabled={busy}
-            onPress={() => {
-              if (inputVisible) {
-                hidePrompt();
-              } else {
-                setInputVisible(true);
-              }
-            }}
-          >
-            <Text style={styles.primaryButtonText}>
-              {busy ? "Working..." : inputVisible ? "Hide prompt" : "✦ Send Milo a prompt"}
-            </Text>
-          </Pressable>
-          {busy && (
-            <Pressable style={styles.controlButton} onPress={interrupt}>
-              <Text style={styles.controlButtonText}>Stop</Text>
+        <View
+          style={[
+            styles.chatPanel,
+            chatExpanded ? [styles.chatPanelExpanded, { maxHeight: expandedChatMaxHeight }] : styles.chatPanelCollapsed,
+          ]}
+        >
+          <View style={styles.chatHeader} {...chatPanResponder.panHandlers}>
+            <Pressable style={styles.controlButton} onPress={leaveLair}>
+              <Text style={styles.controlButtonText}>← Back</Text>
             </Pressable>
-          )}
-        </View>
-        {inputVisible ? (
-          <View
-            style={styles.inputRow}
-          >
-            {pastedContext && (
-              <View style={styles.pasteChip}>
-                <Text style={styles.pasteChipText} numberOfLines={1}>
-                  📎 {pastedContext.charCount.toLocaleString()} chars · "{pastedContext.preview}…"
-                </Text>
-                <Pressable onPress={dismissPaste} hitSlop={8} style={styles.pasteChipDismiss}>
-                  <Text style={styles.pasteChipDismissText}>✕</Text>
-                </Pressable>
-              </View>
+            <Pressable style={styles.chatTitleWrap} onPress={() => setChatExpanded(true)}>
+              <Text style={styles.chatTitle}>Daily Lair chat</Text>
+              <Text style={styles.chatSubtitle}>{chatMessages.length ? `${chatMessages.length} messages today` : "Ready when you are"}</Text>
+            </Pressable>
+            {chatExpanded ? (
+              <Pressable
+                style={styles.collapseButton}
+                onPress={() => {
+                  setChatExpanded(false);
+                  Keyboard.dismiss();
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.collapseButtonText}>⌄</Text>
+              </Pressable>
+            ) : (
+              <Pressable style={styles.collapseButton} onPress={() => setChatExpanded(true)} hitSlop={8}>
+                <Text style={styles.collapseButtonText}>⌃</Text>
+              </Pressable>
             )}
-            <View style={styles.pasteInputRow}>
-            <TextInput
-              autoFocus
-              multiline
-              placeholder={pastedContext ? "Now give Milo a prompt for this content…" : "Give Milo a prompt or send him somewhere..."}
-              placeholderTextColor="#6B5A8A"
-              style={styles.input}
-              value={prompt}
-              onChangeText={handleTextChange}
-              maxLength={8000}
-            />
-            <Pressable
-              style={[styles.sendButton, sendDisabled && styles.disabled]}
-              disabled={sendDisabled}
-              onPress={() => submit(prompt)}
+          </View>
+
+          {chatExpanded ? (
+            <ScrollView
+              ref={chatScrollRef}
+              style={styles.chatScroll}
+              contentContainerStyle={styles.chatScrollContent}
+              keyboardShouldPersistTaps="handled"
+              onScroll={({ nativeEvent }) => {
+                const distanceFromBottom = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
+                chatNearBottomRef.current = distanceFromBottom < CHAT_BOTTOM_THRESHOLD;
+              }}
+              scrollEventThrottle={80}
+              onContentSizeChange={() => {
+                if (forceNextChatScrollRef.current || chatNearBottomRef.current) {
+                  forceNextChatScrollRef.current = false;
+                  chatScrollRef.current?.scrollToEnd({ animated: true });
+                }
+              }}
             >
-              <Text style={styles.sendButtonText}>
-                {busy ? "..." : "▶"}
+              {chatMessages.length === 0 ? (
+                <View style={styles.chatEmpty}>
+                  <Text style={styles.chatEmptyTitle}>No chat yet today</Text>
+                  <Text style={styles.chatEmptyBody}>Send Milo a prompt when you want to start the conversation.</Text>
+                </View>
+              ) : (
+                chatMessages.map((message) => (
+                  <View
+                    key={message.id}
+                    style={[
+                      styles.chatBubble,
+                      message.role === "user" ? styles.chatBubbleUser : null,
+                      message.role === "system" ? styles.chatBubbleSystem : null,
+                    ]}
+                  >
+                    <Text style={styles.chatRole}>{message.role === "user" ? "You" : message.role === "milo" ? "Milo" : "System"}</Text>
+                    <Text style={styles.chatText}>{message.text}</Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          ) : (
+            <Pressable style={styles.chatPreview} onPress={() => setChatExpanded(true)} {...chatPanResponder.panHandlers}>
+              <Text style={styles.chatPreviewText} numberOfLines={2}>
+                {chatMessages.length ? chatMessages[chatMessages.length - 1].text : "Chat is minimized. Swipe up to open today’s conversation."}
               </Text>
             </Pressable>
+          )}
+
+          {visibleSendStatus || visibleSendError ? (
+            <View style={[
+              styles.sendStatusBox,
+              visibleSendError ? styles.sendStatusBoxError : null,
+            ]}>
+              <Text style={[styles.sendStatusText, visibleSendError ? styles.sendStatusTextError : null]} numberOfLines={2}>
+                {visibleSendError ? visibleSendError : visibleSendStatus}
+              </Text>
             </View>
+          ) : null}
+
+          <View style={styles.controlRow}>
+            <Pressable
+              style={[styles.primaryButton, busy && styles.disabled]}
+              disabled={busy}
+              onPress={() => {
+                if (inputVisible) {
+                  hidePrompt();
+                } else {
+                  openComposer();
+                }
+              }}
+            >
+              <Text style={styles.primaryButtonText}>
+                {busy ? "Working..." : inputVisible ? "Hide prompt" : "✦ Send Milo a prompt"}
+              </Text>
+            </Pressable>
+            {busy && (
+              <Pressable style={styles.controlButton} onPress={interrupt}>
+                <Text style={styles.controlButtonText}>Stop</Text>
+              </Pressable>
+            )}
           </View>
-        ) : null}
+
+          {inputVisible ? (
+            <View style={styles.inputRow}>
+              {pastedContext && (
+                <View style={styles.pasteChip}>
+                  <Text style={styles.pasteChipText} numberOfLines={1}>
+                    📎 {pastedContext.charCount.toLocaleString()} chars · "{pastedContext.preview}…"
+                  </Text>
+                  <Pressable onPress={dismissPaste} hitSlop={8} style={styles.pasteChipDismiss}>
+                    <Text style={styles.pasteChipDismissText}>✕</Text>
+                  </Pressable>
+                </View>
+              )}
+              <View style={styles.pasteInputRow}>
+                <TextInput
+                  ref={inputRef}
+                  multiline
+                  placeholder={pastedContext ? "Now give Milo a prompt for this content…" : "Give Milo a prompt or send him somewhere..."}
+                  placeholderTextColor="#6B5A8A"
+                  style={styles.input}
+                  value={prompt}
+                  onChangeText={handleTextChange}
+                  maxLength={8000}
+                />
+                <Pressable
+                  style={[styles.sendButton, sendDisabled && styles.disabled]}
+                  disabled={sendDisabled}
+                  onPress={() => submit(prompt)}
+                >
+                  <Text style={styles.sendButtonText}>
+                    {busy ? "..." : "▶"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -574,6 +794,132 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     borderTopWidth: 0,
     zIndex: 20,
+  },
+  chatPanel: {
+    borderRadius: 24,
+    backgroundColor: "rgba(15, 10, 30, 0.94)",
+    borderWidth: 1,
+    borderColor: "rgba(200, 184, 255, 0.22)",
+    padding: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.28,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  chatPanelCollapsed: {
+    minHeight: 116,
+  },
+  chatPanelExpanded: {
+    minHeight: 320,
+  },
+  chatHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  chatTitleWrap: {
+    flex: 1,
+  },
+  chatTitle: {
+    color: "#F3ECFF",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  chatSubtitle: {
+    color: "#AFA0D1",
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  collapseButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(91, 63, 166, 0.34)",
+    borderWidth: 1,
+    borderColor: "rgba(123, 95, 214, 0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  collapseButtonText: {
+    color: "#E8D5FF",
+    fontSize: 20,
+    fontWeight: "800",
+    lineHeight: 22,
+  },
+  chatPreview: {
+    marginTop: 10,
+    borderRadius: 16,
+    backgroundColor: "rgba(30, 21, 53, 0.72)",
+    borderWidth: 1,
+    borderColor: "rgba(123, 95, 214, 0.24)",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  chatPreviewText: {
+    color: "#D7CAEE",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  chatScroll: {
+    flexGrow: 0,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  chatScrollContent: {
+    gap: 10,
+    paddingBottom: 8,
+  },
+  chatEmpty: {
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: "rgba(30, 21, 53, 0.58)",
+    borderWidth: 1,
+    borderColor: "rgba(123, 95, 214, 0.2)",
+  },
+  chatEmptyTitle: {
+    color: "#F3ECFF",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  chatEmptyBody: {
+    color: "#AFA0D1",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  chatBubble: {
+    maxWidth: "88%",
+    alignSelf: "flex-start",
+    borderRadius: 18,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    backgroundColor: "rgba(36, 28, 64, 0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(123, 95, 214, 0.24)",
+  },
+  chatBubbleUser: {
+    alignSelf: "flex-end",
+    backgroundColor: "rgba(91, 63, 166, 0.94)",
+    borderColor: "rgba(200, 184, 255, 0.34)",
+  },
+  chatBubbleSystem: {
+    backgroundColor: "rgba(58, 45, 84, 0.86)",
+    borderColor: "rgba(255, 221, 154, 0.24)",
+  },
+  chatRole: {
+    color: "#C8B8FF",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  chatText: {
+    color: "#F4EEFF",
+    fontSize: 14,
+    lineHeight: 20,
   },
   gestureSurface: {
     position: "absolute",
