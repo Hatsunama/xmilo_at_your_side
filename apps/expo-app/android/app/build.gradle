@@ -5,7 +5,14 @@ apply plugin: "com.facebook.react"
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 def xmiloRepoRoot = rootDir.getAbsoluteFile().getParentFile().getParentFile().getParentFile().getAbsolutePath()
 def xmiloRelayBaseUrl = System.getenv("EXPO_PUBLIC_RELAY_BASE_URL") ?: findProperty("EXPO_PUBLIC_RELAY_BASE_URL") ?: "https://xmiloatyourside.com"
-def xmiloExpectedSidecarSha256 = "750A02BFF683A97E0122C04704DA73D5235961A75D5ED6728E3E9271DE60AC7E"
+def xmiloExpectedSidecarSha256File = file("SIDECAR_NATIVE_PAYLOAD.sha256")
+if (!xmiloExpectedSidecarSha256File.exists()) {
+    throw new GradleException("Missing expected sidecar payload hash file: ${xmiloExpectedSidecarSha256File}")
+}
+def xmiloExpectedSidecarSha256 = xmiloExpectedSidecarSha256File.text.trim().toUpperCase()
+if (!(xmiloExpectedSidecarSha256 ==~ /[A-F0-9]{64}/)) {
+    throw new GradleException("Malformed expected sidecar payload hash file: ${xmiloExpectedSidecarSha256File}")
+}
 def xmiloBuildConfigString = { value ->
     "\"${(value ?: "").replace("\\", "\\\\").replace("\"", "\\\"")}\""
 }
@@ -348,141 +355,215 @@ def castleReadFileBytes = { File nativeFile, String label ->
     return nativeFile.bytes
 }
 
-tasks.register("verifyCastleNativeArtifactsInternalDebug") {
-    group = "verification"
-    description = "Verifies internalDebug castle native artifacts do not contain stale Go probe/log markers."
-    dependsOn("packageInternalDebug")
+def xmiloInternalValidationVariants = [
+    [
+        name: "internalDebug",
+        taskSuffix: "InternalDebug",
+        outputDir: "debug",
+        outputName: "app-internal-debug.apk",
+    ],
+    [
+        name: "internalPhone",
+        taskSuffix: "InternalPhone",
+        outputDir: "phone",
+        outputName: "app-internal-phone.apk",
+    ],
+]
 
-    doLast {
-        def aarFile = file("libs/castle.aar")
-        def mergedLib = file("${buildDir}/intermediates/merged_native_libs/internalDebug/mergeInternalDebugNativeLibs/out/lib/arm64-v8a/libgojni.so")
-        def strippedLib = file("${buildDir}/intermediates/stripped_native_libs/internalDebug/stripInternalDebugDebugSymbols/out/lib/arm64-v8a/libgojni.so")
-        def apkFile = file("${buildDir}/outputs/apk/internal/debug/app-internal-debug.apk")
-
-        println "Verifying castle native artifacts for internalDebug..."
-        castleAssertNoForbiddenMarkers(
-            castleReadZipEntryBytes(aarFile, "jni/arm64-v8a/libgojni.so", "castle.aar jni/arm64-v8a/libgojni.so"),
-            "castle.aar jni/arm64-v8a/libgojni.so"
-        )
-        castleAssertNoForbiddenMarkers(
-            castleReadFileBytes(mergedLib, "merged native lib arm64-v8a/libgojni.so"),
-            "merged native lib arm64-v8a/libgojni.so"
-        )
-        castleAssertNoForbiddenMarkers(
-            castleReadFileBytes(strippedLib, "stripped native lib arm64-v8a/libgojni.so"),
-            "stripped native lib arm64-v8a/libgojni.so"
-        )
-        castleAssertNoForbiddenMarkers(
-            castleReadZipEntryBytes(apkFile, "lib/arm64-v8a/libgojni.so", "final APK lib/arm64-v8a/libgojni.so"),
-            "final APK lib/arm64-v8a/libgojni.so"
-        )
-        println "PASS: castle native artifact integrity verified."
-        println "APK: ${apkFile}"
-    }
+def xmiloHashBytes = { byte[] bytes ->
+    def digest = java.security.MessageDigest.getInstance("SHA-256")
+    digest.update(bytes)
+    return digest.digest().collect { String.format("%02X", it) }.join("")
 }
 
-tasks.register("verifySidecarExecutableAssetInternalDebug") {
-    group = "verification"
-    description = "Verifies the internalDebug sidecar native-library payload is present and packaged."
-    dependsOn("packageInternalDebug")
+xmiloInternalValidationVariants.each { variant ->
+    def variantName = variant.name
+    def taskSuffix = variant.taskSuffix
+    def packageTaskName = "package${taskSuffix}"
+    def apkFileProvider = { file("${buildDir}/outputs/apk/internal/${variant.outputDir}/${variant.outputName}") }
 
-    doLast {
-        def expectedSha256 = xmiloExpectedSidecarSha256
-        def sidecarPayload = file("src/main/jniLibs/arm64-v8a/libxmilo_sidecar.so")
-        def apkFile = file("${buildDir}/outputs/apk/internal/debug/app-internal-debug.apk")
-        def apkEntry = "lib/arm64-v8a/libxmilo_sidecar.so"
+    tasks.register("verifyCastleNativeArtifacts${taskSuffix}") {
+        group = "verification"
+        description = "Verifies ${variantName} castle native artifacts do not contain stale Go probe/log markers."
+        dependsOn(packageTaskName)
 
-        if (!sidecarPayload.exists()) {
-            throw new GradleException("Sidecar native-library payload missing: ${sidecarPayload}")
-        }
-        if (sidecarPayload.length() <= 0) {
-            throw new GradleException("Sidecar native-library payload is empty: ${sidecarPayload}")
-        }
+        doLast {
+            def aarFile = file("libs/castle.aar")
+            def mergedLib = file("${buildDir}/intermediates/merged_native_libs/${variantName}/merge${taskSuffix}NativeLibs/out/lib/arm64-v8a/libgojni.so")
+            def strippedLib = file("${buildDir}/intermediates/stripped_native_libs/${variantName}/strip${taskSuffix}DebugSymbols/out/lib/arm64-v8a/libgojni.so")
+            def apkFile = apkFileProvider()
 
-        def hashBytes = { byte[] bytes ->
-            def digest = java.security.MessageDigest.getInstance("SHA-256")
-            digest.update(bytes)
-            return digest.digest().collect { String.format("%02X", it) }.join("")
-        }
-
-        def digest = java.security.MessageDigest.getInstance("SHA-256")
-        sidecarPayload.withInputStream { input ->
-            byte[] buffer = new byte[8192]
-            int read
-            while ((read = input.read(buffer)) != -1) {
-                digest.update(buffer, 0, read)
-            }
-        }
-        def actualSha256 = digest.digest().collect { String.format("%02X", it) }.join("")
-        if (actualSha256 != expectedSha256) {
-            throw new GradleException("Sidecar executable SHA-256 mismatch. Expected ${expectedSha256}, got ${actualSha256}.")
-        }
-
-        def zip = new java.util.zip.ZipFile(apkFile)
-        try {
-            def entry = zip.getEntry(apkEntry)
-            if (entry == null) {
-                throw new GradleException("Sidecar native-library payload not packaged in APK: ${apkEntry}")
-            }
-            if (entry.size <= 0) {
-                throw new GradleException("Packaged sidecar native-library payload is empty: ${apkEntry}")
-            }
-            def packagedSha256 = hashBytes(zip.getInputStream(entry).bytes)
-            if (packagedSha256 != expectedSha256) {
-                throw new GradleException("Packaged sidecar native-library SHA-256 mismatch. Expected ${expectedSha256}, got ${packagedSha256}.")
-            }
-            println "PASS: sidecar native-library payload verified."
-            println "Payload: ${sidecarPayload}"
-            println "SHA-256: ${actualSha256}"
-            println "APK entry: ${apkEntry} (${entry.size} bytes)"
+            println "Verifying castle native artifacts for ${variantName}..."
+            castleAssertNoForbiddenMarkers(
+                castleReadZipEntryBytes(aarFile, "jni/arm64-v8a/libgojni.so", "castle.aar jni/arm64-v8a/libgojni.so"),
+                "castle.aar jni/arm64-v8a/libgojni.so"
+            )
+            castleAssertNoForbiddenMarkers(
+                castleReadFileBytes(mergedLib, "merged native lib arm64-v8a/libgojni.so"),
+                "merged native lib arm64-v8a/libgojni.so"
+            )
+            castleAssertNoForbiddenMarkers(
+                castleReadFileBytes(strippedLib, "stripped native lib arm64-v8a/libgojni.so"),
+                "stripped native lib arm64-v8a/libgojni.so"
+            )
+            castleAssertNoForbiddenMarkers(
+                castleReadZipEntryBytes(apkFile, "lib/arm64-v8a/libgojni.so", "final APK lib/arm64-v8a/libgojni.so"),
+                "final APK lib/arm64-v8a/libgojni.so"
+            )
+            println "PASS: castle native artifact integrity verified for ${variantName}."
             println "APK: ${apkFile}"
-        } finally {
-            zip.close()
         }
     }
-}
 
-tasks.register("verifyXmiloMindRootAssetsInternalDebug") {
-    group = "verification"
-    description = "Verifies the internalDebug APK contains the required xMilo_v1 mind root markdown files."
-    dependsOn("packageInternalDebug")
+    tasks.register("verifySidecarExecutableAsset${taskSuffix}") {
+        group = "verification"
+        description = "Verifies the ${variantName} sidecar native-library payload is present and packaged."
+        dependsOn(packageTaskName)
 
-    doLast {
-        def sourceDir = file("${xmiloRepoRoot}/docs/authority/xMilo_v1")
-        def packagedAssetDir = file("src/main/assets/mind/xMilo_v1")
-        def apkFile = file("${buildDir}/outputs/apk/internal/debug/app-internal-debug.apk")
+        doLast {
+            def expectedSha256 = xmiloExpectedSidecarSha256
+            def sidecarPayload = file("src/main/jniLibs/arm64-v8a/libxmilo_sidecar.so")
+            def apkFile = apkFileProvider()
+            def apkEntry = "lib/arm64-v8a/libxmilo_sidecar.so"
 
-        def zip = new java.util.zip.ZipFile(apkFile)
-        try {
-            xmiloRequiredMindFiles.each { filename ->
-                def sourceFile = new File(sourceDir, filename)
-                def packagedFile = new File(packagedAssetDir, filename)
-                def apkEntryName = "assets/mind/xMilo_v1/${filename}"
-                if (!sourceFile.exists()) {
-                    throw new GradleException("Required xMilo mind source file missing: ${sourceFile}")
+            if (!sidecarPayload.exists()) {
+                throw new GradleException("Sidecar native-library payload missing: ${sidecarPayload}")
+            }
+            if (sidecarPayload.length() <= 0) {
+                throw new GradleException("Sidecar native-library payload is empty: ${sidecarPayload}")
+            }
+
+            def digest = java.security.MessageDigest.getInstance("SHA-256")
+            sidecarPayload.withInputStream { input ->
+                byte[] buffer = new byte[8192]
+                int read
+                while ((read = input.read(buffer)) != -1) {
+                    digest.update(buffer, 0, read)
                 }
-                if (sourceFile.length() <= 0) {
-                    throw new GradleException("Required xMilo mind source file is empty: ${sourceFile}")
-                }
-                if (!packagedFile.exists()) {
-                    throw new GradleException("Required xMilo mind packaged asset missing: ${packagedFile}")
-                }
-                if (packagedFile.length() <= 0) {
-                    throw new GradleException("Required xMilo mind packaged asset is empty: ${packagedFile}")
-                }
-                def entry = zip.getEntry(apkEntryName)
+            }
+            def actualSha256 = digest.digest().collect { String.format("%02X", it) }.join("")
+            if (actualSha256 != expectedSha256) {
+                throw new GradleException("Sidecar executable SHA-256 mismatch. Expected ${expectedSha256}, got ${actualSha256}.")
+            }
+
+            def zip = new java.util.zip.ZipFile(apkFile)
+            try {
+                def entry = zip.getEntry(apkEntry)
                 if (entry == null) {
-                    throw new GradleException("Required xMilo mind file not packaged in APK: ${apkEntryName}")
+                    throw new GradleException("Sidecar native-library payload not packaged in APK: ${apkEntry}")
                 }
                 if (entry.size <= 0) {
-                    throw new GradleException("Required xMilo mind APK entry is empty: ${apkEntryName}")
+                    throw new GradleException("Packaged sidecar native-library payload is empty: ${apkEntry}")
                 }
-                println "PASS: xMilo mind file packaged: ${filename} (${entry.size} bytes)"
+                def packagedSha256 = xmiloHashBytes(zip.getInputStream(entry).bytes)
+                if (packagedSha256 != expectedSha256) {
+                    throw new GradleException("Packaged sidecar native-library SHA-256 mismatch. Expected ${expectedSha256}, got ${packagedSha256}.")
+                }
+                println "PASS: sidecar native-library payload verified for ${variantName}."
+                println "Payload: ${sidecarPayload}"
+                println "SHA-256: ${actualSha256}"
+                println "APK entry: ${apkEntry} (${entry.size} bytes)"
+                println "APK: ${apkFile}"
+            } finally {
+                zip.close()
             }
-            println "PASS: xMilo_v1 mind root assets verified."
-            println "APK: ${apkFile}"
-        } finally {
-            zip.close()
         }
+    }
+
+    tasks.register("verifyXmiloMindRootAssets${taskSuffix}") {
+        group = "verification"
+        description = "Verifies the ${variantName} APK contains the required xMilo_v1 mind root markdown files."
+        dependsOn(packageTaskName)
+
+        doLast {
+            def sourceDir = file("${xmiloRepoRoot}/docs/authority/xMilo_v1")
+            def packagedAssetDir = file("src/main/assets/mind/xMilo_v1")
+            def apkFile = apkFileProvider()
+
+            def zip = new java.util.zip.ZipFile(apkFile)
+            try {
+                xmiloRequiredMindFiles.each { filename ->
+                    def sourceFile = new File(sourceDir, filename)
+                    def packagedFile = new File(packagedAssetDir, filename)
+                    def apkEntryName = "assets/mind/xMilo_v1/${filename}"
+                    if (!sourceFile.exists()) {
+                        throw new GradleException("Required xMilo mind source file missing: ${sourceFile}")
+                    }
+                    if (sourceFile.length() <= 0) {
+                        throw new GradleException("Required xMilo mind source file is empty: ${sourceFile}")
+                    }
+                    if (!packagedFile.exists()) {
+                        throw new GradleException("Required xMilo mind packaged asset missing: ${packagedFile}")
+                    }
+                    if (packagedFile.length() <= 0) {
+                        throw new GradleException("Required xMilo mind packaged asset is empty: ${packagedFile}")
+                    }
+                    def entry = zip.getEntry(apkEntryName)
+                    if (entry == null) {
+                        throw new GradleException("Required xMilo mind file not packaged in APK: ${apkEntryName}")
+                    }
+                    if (entry.size <= 0) {
+                        throw new GradleException("Required xMilo mind APK entry is empty: ${apkEntryName}")
+                    }
+                    println "PASS: xMilo mind file packaged for ${variantName}: ${filename} (${entry.size} bytes)"
+                }
+                println "PASS: xMilo_v1 mind root assets verified for ${variantName}."
+                println "APK: ${apkFile}"
+            } finally {
+                zip.close()
+            }
+        }
+    }
+
+    tasks.register("verifyXmiloAndroidEntrypoints${taskSuffix}") {
+        group = "verification"
+        description = "Verifies the ${variantName} APK contains Android manifest entrypoint classes."
+        dependsOn(packageTaskName)
+
+        doLast {
+            def apkFile = apkFileProvider()
+            def requiredDescriptors = [
+                "Lcom/hatsunama/xmilo/dev/MainApplication;",
+                "Lcom/hatsunama/xmilo/dev/MainActivity;",
+            ]
+            def zip = new java.util.zip.ZipFile(apkFile)
+            try {
+                def dexEntries = zip.entries().findAll { entry ->
+                    entry.name ==~ /classes\d*\.dex/
+                }.toList()
+                if (dexEntries.isEmpty()) {
+                    throw new GradleException("No dex files found in APK: ${apkFile}")
+                }
+                requiredDescriptors.each { descriptor ->
+                    def found = dexEntries.any { entry ->
+                        def input = zip.getInputStream(entry)
+                        try {
+                            castleBytesContain(input.bytes, descriptor.getBytes("US-ASCII"))
+                        } finally {
+                            input.close()
+                        }
+                    }
+                    if (!found) {
+                        throw new GradleException("Required Android entrypoint class missing from ${variantName} APK dex: ${descriptor}")
+                    }
+                    println "PASS: Android entrypoint present for ${variantName}: ${descriptor}"
+                }
+                println "PASS: Android manifest entrypoint classes verified for ${variantName}."
+                println "APK: ${apkFile}"
+            } finally {
+                zip.close()
+            }
+        }
+    }
+
+    tasks.register("verifyXmiloInternalValidationArtifacts${taskSuffix}") {
+        group = "verification"
+        description = "Runs all xMilo native/runtime artifact checks for ${variantName}."
+        dependsOn(
+            "verifyCastleNativeArtifacts${taskSuffix}",
+            "verifySidecarExecutableAsset${taskSuffix}",
+            "verifyXmiloMindRootAssets${taskSuffix}",
+            "verifyXmiloAndroidEntrypoints${taskSuffix}"
+        )
     }
 }

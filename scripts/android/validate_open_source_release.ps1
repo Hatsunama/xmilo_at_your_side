@@ -1,6 +1,7 @@
 param(
   [switch]$AllowDirty,
-  [switch]$RequireNativeArtifacts
+  [switch]$RequireNativeArtifacts,
+  [switch]$RebuildSidecarPayload
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +38,29 @@ function Get-GitLines([string[]]$CommandArgs) {
   return @($output)
 }
 
+function Test-GitIgnored([string]$RelativePath) {
+  & git -C $RepoRoot check-ignore -q -- $RelativePath
+  return $LASTEXITCODE -eq 0
+}
+
+function Get-FileSha256Upper([string]$Path) {
+  return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToUpperInvariant()
+}
+
+function Read-ExpectedSha256([string]$RelativePath) {
+  $path = Join-Path $RepoRoot $RelativePath
+  if (-not (Test-Path $path)) {
+    Add-Error "Expected SHA file is missing: $RelativePath"
+    return $null
+  }
+  $raw = Get-Content -Raw -Path $path
+  if ($raw -notmatch "^[A-Fa-f0-9]{64}(\r?\n)?$") {
+    Add-Error "Expected SHA file is malformed: $RelativePath"
+    return $null
+  }
+  return $raw.Trim().ToUpperInvariant()
+}
+
 function Normalize-Path([string]$Path) {
   return ($Path -replace "\\", "/").Trim()
 }
@@ -66,12 +90,35 @@ $changed += Get-GitLines @("diff", "--name-only", "--cached")
 $changed += Get-GitLines @("ls-files", "--others", "--exclude-standard")
 $changed = @($changed | Where-Object { $_ } | ForEach-Object { Normalize-Path $_ } | Sort-Object -Unique)
 
-$allowedTruthCleanupPaths = @(
-  "apps/expo-app/app/runtime-recovery.tsx",
-  "docs/authority/xMilo_v1/core/startup/XMILO_STARTUP_AND_SETUP_FLOW_SOURCE_OF_TRUTH_2026-03-29.txt",
-  "docs/authority/xMilo_v1/core/master/XMILO_MASTER_PHASE_LIST_2026-03-24.txt",
-  "docs/authority/xMilo_v1/memory/knowledge/device_capability_profile.json"
-)
+$contractDriftValidator = Join-Path $RepoRoot "scripts/validate_contract_drift.ps1"
+if (-not (Test-Path $contractDriftValidator)) {
+  Add-Error "Contract drift validator is missing: scripts/validate_contract_drift.ps1"
+} else {
+  & $contractDriftValidator
+  if ($LASTEXITCODE -ne 0) {
+    Add-Error "Contract drift validation failed. Run scripts/validate_contract_drift.ps1 for details."
+  }
+}
+
+$castleRuntimeBoundaryValidator = Join-Path $RepoRoot "scripts/validate_castle_runtime_boundary.ps1"
+if (-not (Test-Path $castleRuntimeBoundaryValidator)) {
+  Add-Error "Castle runtime boundary validator is missing: scripts/validate_castle_runtime_boundary.ps1"
+} else {
+  & $castleRuntimeBoundaryValidator
+  if ($LASTEXITCODE -ne 0) {
+    Add-Error "Castle runtime boundary validation failed. Run scripts/validate_castle_runtime_boundary.ps1 for details."
+  }
+}
+
+$approvedTruthCleanupReasons = @{
+  "apps/expo-app/app/index.tsx" = "approved_runtime_truth_repair_ui_local_error_source_tagging"
+  "apps/expo-app/app/lair.tsx" = "approved_runtime_context_truth_repair_structured_context_and_ui_local_error_source_tagging"
+  "apps/expo-app/app/runtime-recovery.tsx" = "approved_recovery_classification_truth_repair_source_tagged_recovery_outcomes"
+  "apps/expo-app/app/setup.tsx" = "approved_provider_policy_repair_sidecar_options_resolve_save_gate"
+  "docs/authority/xMilo_v1/core/startup/XMILO_STARTUP_AND_SETUP_FLOW_SOURCE_OF_TRUTH_2026-03-29.txt" = "approved_terminal_truth_cleanup_stale_authority_runtime_host_wording"
+  "docs/authority/xMilo_v1/core/master/XMILO_MASTER_PHASE_LIST_2026-03-24.txt" = "approved_terminal_truth_cleanup_stale_authority_runtime_host_wording"
+  "docs/authority/xMilo_v1/memory/knowledge/device_capability_profile.json" = "approved_terminal_truth_cleanup_stale_authority_runtime_host_wording"
+}
 $uiPatterns = @(
   "^apps/expo-app/app/",
   "^apps/expo-app/src/components/",
@@ -87,12 +134,12 @@ $prePhasePatterns = @(
 
 foreach ($path in $changed) {
   foreach ($pattern in $uiPatterns) {
-    if (($path -match $pattern) -and ($allowedTruthCleanupPaths -notcontains $path)) {
+    if (($path -match $pattern) -and (-not $approvedTruthCleanupReasons.ContainsKey($path))) {
       Add-Error "Unexpected UI file modified in release-truth validation scope: $path"
     }
   }
   foreach ($pattern in $prePhasePatterns) {
-    if (($path -match $pattern) -and ($allowedTruthCleanupPaths -notcontains $path)) {
+    if (($path -match $pattern) -and (-not $approvedTruthCleanupReasons.ContainsKey($path))) {
       Add-Error "Unexpected pre-Phase-9/setup authority file modified in release-truth validation scope: $path"
     }
   }
@@ -228,11 +275,65 @@ if ($trackedGeneratedSidecarPayloads.Count) {
 }
 
 $artifactDocPath = Join-Path $RepoRoot "apps/expo-app/android/app/RELEASE_ARTIFACTS.md"
+$artifactDoc = ""
+if (Test-Path $artifactDocPath) {
+  $artifactDoc = Get-Content -Raw -Path $artifactDocPath
+}
+
+if ($RequireNativeArtifacts) {
+  $sidecarPayloadRel = "apps/expo-app/android/app/src/main/jniLibs/arm64-v8a/libxmilo_sidecar.so"
+  $sidecarExpectedHashRel = "apps/expo-app/android/app/SIDECAR_NATIVE_PAYLOAD.sha256"
+  $sidecarBuildScriptRel = "scripts/android/build_sidecar_native_payload.ps1"
+  $sidecarPayload = Join-Path $RepoRoot $sidecarPayloadRel
+  $sidecarBuildScript = Join-Path $RepoRoot $sidecarBuildScriptRel
+  $expectedSidecarSha = Read-ExpectedSha256 $sidecarExpectedHashRel
+
+  if (-not (Test-Path $sidecarBuildScript)) {
+    Add-Error "Sidecar native payload build script is missing: $sidecarBuildScriptRel"
+  }
+  if (-not (Test-Path $sidecarPayload)) {
+    Add-Error "Required ignored native artifact missing: $sidecarPayloadRel"
+  } else {
+    $sidecarItem = Get-Item $sidecarPayload
+    if ($sidecarItem.Length -le 0) {
+      Add-Error "Required ignored native artifact is empty: $sidecarPayloadRel"
+    }
+    $trackedSidecarPayload = @(Get-GitLines @("ls-files", $sidecarPayloadRel))
+    if ($trackedSidecarPayload.Count) {
+      Add-Error "Generated sidecar native payload must remain untracked: $sidecarPayloadRel"
+    }
+    if (-not (Test-GitIgnored $sidecarPayloadRel)) {
+      Add-Error "Generated sidecar native payload must remain ignored: $sidecarPayloadRel"
+    }
+    if ($expectedSidecarSha) {
+      $actualSidecarSha = Get-FileSha256Upper $sidecarPayload
+      if ($actualSidecarSha -ne $expectedSidecarSha) {
+        Add-Error "Sidecar native payload SHA does not match expected SHA. Expected $expectedSidecarSha, got $actualSidecarSha."
+      }
+    }
+  }
+  if ($artifactDoc -notmatch "build_sidecar_native_payload\.ps1" -or
+      $artifactDoc -notmatch "SIDECAR_NATIVE_PAYLOAD\.sha256" -or
+      $artifactDoc -notmatch "libxmilo_sidecar\.so") {
+    Add-Error "Release artifact doc must describe sidecar payload build script, expected SHA file, and generated payload path."
+  }
+
+  if ($RebuildSidecarPayload -and $expectedSidecarSha -and (Test-Path $sidecarBuildScript)) {
+    try {
+      & $sidecarBuildScript -CheckOnly
+      if ($LASTEXITCODE -ne 0) {
+        Add-Error "Sidecar check-only rebuild provenance check failed."
+      }
+    } catch {
+      Add-Error "Sidecar check-only rebuild provenance check failed: $($_.Exception.Message)"
+    }
+  }
+}
+
 if ($buildGradle -match 'implementation\(name:\s*"castle"') {
   if (-not (Test-Path $artifactDocPath)) {
     Add-Error "Castle AAR is required by Android build config but RELEASE_ARTIFACTS.md is missing."
   } else {
-    $artifactDoc = Get-Content -Raw -Path $artifactDocPath
     if ($artifactDoc -notmatch "scripts[\\/]+verify-castle-native-artifacts\.ps1") {
       Add-Error "Castle artifact provenance doc must name the rebuild/verification script."
     }
@@ -262,4 +363,5 @@ Write-Host "OPEN-SOURCE RELEASE VALIDATION PASSED"
 Write-Host "checked_public_docs=$($publicDocFiles.Count)"
 Write-Host "checked_active_runtime_files=$($activeRuntimeTextFiles.Count)"
 Write-Host "require_native_artifacts=$([bool]$RequireNativeArtifacts)"
+Write-Host "rebuild_sidecar_payload=$([bool]$RebuildSidecarPayload)"
 Write-Host "allow_dirty=$([bool]$AllowDirty)"
