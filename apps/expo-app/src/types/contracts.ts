@@ -2,7 +2,7 @@ export type EventEnvelope = {
   type: string;
   timestamp: string;
   source?: "sidecar_runtime" | "android_bridge_observation" | "ui_local";
-  truth_scope?: "sidecar_health" | "sidecar_ready" | "native_runtime_host" | "task_route_surface" | "ui_submit";
+  truth_scope?: "sidecar_health" | "sidecar_ready" | "native_runtime_host" | "task_route_surface" | "capability_state" | "ui_submit";
   payload: Record<string, any>;
 };
 
@@ -72,6 +72,7 @@ export type RuntimeState = {
   last_meaningful_user_action_at: string;
   active_task?: TaskSnapshot | null;
   queued_task?: TaskSnapshot | null;
+  capability_state?: Record<string, any> | null;
   runtime_id: string;
   pending_approval?: boolean | null;
   resume_checkpoint?: string | null;

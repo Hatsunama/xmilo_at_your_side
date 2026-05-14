@@ -217,7 +217,8 @@ func IsAllowedAppBridgeEvidenceOperation(operation string) bool {
 		"sidecar_ready_probe",
 		"task_route_surface_ready",
 		"byok_key_storage",
-		"permission_state_snapshot":
+		"permission_state_snapshot",
+		"capability_state_snapshot":
 		return true
 	default:
 		return false

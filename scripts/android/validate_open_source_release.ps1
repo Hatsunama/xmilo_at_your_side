@@ -114,6 +114,7 @@ $approvedTruthCleanupReasons = @{
   "apps/expo-app/app/index.tsx" = "approved_runtime_truth_repair_ui_local_error_source_tagging"
   "apps/expo-app/app/lair.tsx" = "approved_runtime_context_truth_repair_structured_context_and_ui_local_error_source_tagging"
   "apps/expo-app/app/runtime-recovery.tsx" = "approved_recovery_classification_truth_repair_source_tagged_recovery_outcomes"
+  "apps/expo-app/app/settings.tsx" = "approved_phase9_capability_truth_settings_surface"
   "apps/expo-app/app/setup.tsx" = "approved_provider_policy_repair_sidecar_options_resolve_save_gate"
   "docs/authority/xMilo_v1/core/startup/XMILO_STARTUP_AND_SETUP_FLOW_SOURCE_OF_TRUTH_2026-03-29.txt" = "approved_terminal_truth_cleanup_stale_authority_runtime_host_wording"
   "docs/authority/xMilo_v1/core/master/XMILO_MASTER_PHASE_LIST_2026-03-24.txt" = "approved_terminal_truth_cleanup_stale_authority_runtime_host_wording"

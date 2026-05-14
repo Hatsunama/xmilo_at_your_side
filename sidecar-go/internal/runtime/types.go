@@ -141,5 +141,6 @@ type RuntimeState struct {
 	QueuedTask                 *TaskSnapshot     `json:"queued_task,omitempty"`
 	PendingApproval            *ApprovalState    `json:"pending_approval,omitempty"`
 	ResumeCheckpoint           *ResumeCheckpoint `json:"resume_checkpoint,omitempty"`
+	CapabilityState            map[string]any    `json:"capability_state,omitempty"`
 	RuntimeID                  string            `json:"runtime_id"`
 }

@@ -26,6 +26,7 @@ Milo has broad local power, so security rules stay strict.
 - Treat the phone as a real user device, not a sandbox toy.
 - Avoid unnecessary sensor, clipboard, camera, or file access.
 - If a device capability must be tested, test only what is needed and record the result precisely.
+- Permission state, manifest declaration, and device hardware presence are not enough to claim access. Usable access requires an app-owned xMilo tool path that is live-proven by the capability checker.
 
 ## Failure handling
 - If blocked, explain the blocker plainly.

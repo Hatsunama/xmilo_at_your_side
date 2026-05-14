@@ -25,6 +25,9 @@ const config: ExpoConfig = {
       "INTERNET",
       "com.android.vending.BILLING",
       "POST_NOTIFICATIONS",
+      "CAMERA",
+      "RECORD_AUDIO",
+      "ACCESS_FINE_LOCATION",
       "READ_MEDIA_IMAGES",
       "READ_EXTERNAL_STORAGE"
     ],

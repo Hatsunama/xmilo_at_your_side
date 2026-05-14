@@ -89,6 +89,13 @@
         "reason"
       ]
     },
+    "runtime.capability_state": {
+      "required_payload_fields": [
+        "status",
+        "checked_at",
+        "capability_count"
+      ]
+    },
     "runtime.ready": {
       "required_payload_fields": [
         "ok",
@@ -220,7 +227,8 @@
     "sidecar_runtime": [
       "runtime.ready",
       "runtime.error",
-      "runtime.capability_degraded"
+      "runtime.capability_degraded",
+      "runtime.capability_state"
     ],
     "android_bridge_observation": [
       "app_bridge_verified"

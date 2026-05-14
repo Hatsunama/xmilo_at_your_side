@@ -33,6 +33,7 @@ import {
 import { usePersistentCastleSurface } from "../src/components/PersistentCastleSurface";
 import { StagedContentChip } from "../src/components/StagedContentChip";
 import { useApp } from "../src/state/AppContext";
+import { getAppSetting, initArchiveDb, setAppSetting } from "../src/lib/archiveDb";
 import { getReady, submitCommand, taskInterrupt, setContext, clearContext, type SidecarReadyStatus } from "../src/lib/bridge";
 import type { EventEnvelope } from "../src/types/contracts";
 import { useDailyConversation } from "../src/hooks/useDailyConversation";
@@ -51,6 +52,7 @@ import {
 const ANDROID_KEYBOARD_CLEARANCE = 56;
 const CHAT_SWIPE_THRESHOLD = 28;
 const CHAT_BOTTOM_THRESHOLD = 48;
+const LAIR_FIRST_RUN_OVERLAY_KEY = "lair_first_run_overlay_seen_phase9";
 
 export default function WizardLairScreen() {
   const router = useRouter();
@@ -66,6 +68,7 @@ export default function WizardLairScreen() {
   const [currentSubmitTaskId, setCurrentSubmitTaskId] = useState("");
   const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
+  const [firstRunOverlayVisible, setFirstRunOverlayVisible] = useState(false);
   const promptLenRef = useRef(0);
   const inputRef = useRef<TextInput>(null);
   const chatScrollRef = useRef<ScrollView>(null);
@@ -98,12 +101,37 @@ export default function WizardLairScreen() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
+  async function dismissFirstRunOverlay() {
+    setFirstRunOverlayVisible(false);
+    try {
+      await initArchiveDb();
+      await setAppSetting(LAIR_FIRST_RUN_OVERLAY_KEY, "true");
+    } catch {
+      // Non-blocking: the overlay can reappear if local persistence is unavailable.
+    }
+  }
+
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       leaveLair();
       return true;
     });
     return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    initArchiveDb()
+      .then(() => getAppSetting(LAIR_FIRST_RUN_OVERLAY_KEY))
+      .then((value) => {
+        if (!disposed && value !== "true") {
+          setFirstRunOverlayVisible(true);
+        }
+      })
+      .catch(() => null);
+    return () => {
+      disposed = true;
+    };
   }, []);
 
   const refreshReadyStatus = useCallback(async () => {
@@ -335,6 +363,21 @@ export default function WizardLairScreen() {
           </Text>
         </View>
       </View>
+
+      {firstRunOverlayVisible ? (
+        <View style={styles.firstRunScrim} accessibilityViewIsModal>
+          <View style={styles.firstRunCard}>
+            <Text style={styles.firstRunKicker}>Welcome to the Lair</Text>
+            <Text style={styles.firstRunTitle}>This is Milo's embodied room.</Text>
+            <Text style={styles.firstRunBody}>
+              The map stays alive behind setup and chat. Use the prompt drawer below when you want Milo to act, and return to Main Hall only when you want the denser status view.
+            </Text>
+            <Pressable style={styles.firstRunButton} onPress={dismissFirstRunOverlay} accessibilityRole="button">
+              <Text style={styles.firstRunButtonText}>Enter the Lair</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {nightlyRitual ? (
         <View style={[styles.ritualBanner, styles[`ritualBanner_${nightlyRitual.status}` as const]]} pointerEvents="none">
@@ -570,6 +613,7 @@ function formatEvent(event: EventEnvelope): string {
     case "task.stuck":
     case "task.stale_active_recovered":
     case "runtime.error":
+    case "runtime.capability_state":
     case "ui_local.error":
     case "local_provider.diagnostic":
       return formatRuntimeEventForUser(event);
@@ -618,6 +662,54 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     zIndex: 10,
+  },
+  firstRunScrim: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    backgroundColor: "rgba(4, 8, 18, 0.62)",
+  },
+  firstRunCard: {
+    width: "100%",
+    maxWidth: 420,
+    gap: 12,
+    padding: 18,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(180, 198, 255, 0.34)",
+    backgroundColor: "rgba(13, 18, 35, 0.94)",
+  },
+  firstRunKicker: {
+    color: "#FCD34D",
+    fontSize: 12,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  firstRunTitle: {
+    color: "#F8FAFC",
+    fontSize: 21,
+    lineHeight: 27,
+    fontWeight: "800",
+  },
+  firstRunBody: {
+    color: "#D7E1F0",
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  firstRunButton: {
+    marginTop: 4,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 8,
+    backgroundColor: "#36566F",
+  },
+  firstRunButtonText: {
+    color: "#F8FAFC",
+    fontWeight: "800",
+    fontSize: 15,
   },
   hudPill: {
     paddingHorizontal: 12,

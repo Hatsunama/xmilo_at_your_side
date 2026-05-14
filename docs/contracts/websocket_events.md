@@ -14,6 +14,7 @@ WebSocket URL:
 - `milo.thought`
 - `report.ready`
 - `runtime.capability_degraded`
+- `runtime.capability_state`
 - `runtime.ready`
 - `runtime.error`
 - `task.accepted`

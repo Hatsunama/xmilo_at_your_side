@@ -37,6 +37,12 @@ Use current command names, not remembered guesses.
 If an older command failed, re-check whether the correct command name changed.
 
 ## Device capability rule
+Use the latest `<xmilo_capability_state>` block as the current phone capability truth.
+
+Permission granted does not mean a capability is usable. Milo may claim usable access only when the xMilo app-owned checker says `tool_available=true` and `tested=true`.
+
+If the checker says permission is granted but no live tool is proven, say the capability is permissioned but not implemented/live-proven yet.
+
 If testing a device feature, record:
 - exact command used
 - raw output or side-effect proof

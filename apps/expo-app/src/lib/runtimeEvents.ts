@@ -4,6 +4,7 @@ import { toUserFacingLocalProviderError, type SidecarReadyStatus } from "./bridg
 const REFRESH_EVENT_TYPES = new Set([
   "runtime.ready",
   "runtime.error",
+  "runtime.capability_state",
   "task.accepted",
   "task.completed",
   "task.stuck",
@@ -24,6 +25,7 @@ const TASK_EVENT_TYPES = new Set([
   "task.stale_active_recovered",
   "report.ready",
   "runtime.error",
+  "runtime.capability_state",
   "local_provider.diagnostic",
 ]);
 
@@ -120,6 +122,8 @@ export function formatRuntimeEventForUser(event: EventEnvelope) {
       return `⚠ Stuck: ${safeUserFacingError(event.payload?.reason, "Unknown error")}`;
     case "runtime.error":
       return `⚠ Runtime: ${safeUserFacingError(event.payload?.message, "Unknown runtime error")}`;
+    case "runtime.capability_state":
+      return `Capability check updated (${safeToken(event.payload?.capability_count, "0")} items).`;
     case "ui_local.error":
       return `⚠ Local: ${safeUserFacingError(event.payload?.message, "Local submit error")}`;
     case "local_provider.diagnostic":
@@ -139,7 +143,7 @@ export function safeEventText(event: EventEnvelope) {
   if (event.type === "local_provider.diagnostic") {
     return formatProviderDiagnostic(event.payload as ProviderDiagnosticPayload);
   }
-  if (event.type.startsWith("task.") || event.type === "runtime.error" || event.type === "ui_local.error") {
+  if (event.type.startsWith("task.") || event.type === "runtime.error" || event.type === "runtime.capability_state" || event.type === "ui_local.error") {
     return formatRuntimeEventForUser(event);
   }
   const candidate = event.payload?.report_text || event.payload?.text || event.payload?.message || event.payload?.summary || event.payload?.reason;

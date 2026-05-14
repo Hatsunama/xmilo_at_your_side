@@ -77,6 +77,7 @@ func (e *Engine) Snapshot() runtime.RuntimeState {
 	lastAction, _ := e.store.GetRuntimeConfig("last_meaningful_user_action_at")
 	approval, _ := e.store.GetApprovalState()
 	checkpoint, _ := e.store.GetResumeCheckpoint()
+	capabilityState := e.latestCapabilityState()
 	return runtime.RuntimeState{
 		MiloState:                  e.currentState,
 		CurrentRoomID:              e.currentRoomID,
@@ -86,6 +87,7 @@ func (e *Engine) Snapshot() runtime.RuntimeState {
 		QueuedTask:                 queued,
 		PendingApproval:            approval,
 		ResumeCheckpoint:           checkpoint,
+		CapabilityState:            capabilityState,
 		RuntimeID:                  "local-sidecar",
 	}
 }
@@ -197,6 +199,9 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 			checkpointPayload, _ := json.Marshal(checkpoint)
 			promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n" + contextBlock + "\n\n" + task.Prompt
 		}
+	}
+	if capabilityBlock := e.capabilityPromptBlock(); capabilityBlock != "" {
+		promptForRelay = capabilityBlock + "\n\n" + promptForRelay
 	}
 
 	relayResp, err := e.turnClient.Turn(timeoutCtx, contracts.RelayTurnRequest{
@@ -340,6 +345,33 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		"execution_result":    relayResp.ExecutionResult,
 		"evidence_boundary":   task.EvidenceBoundary,
 	})
+}
+
+func (e *Engine) latestCapabilityState() map[string]any {
+	var state map[string]any
+	if err := e.store.GetRuntimeConfigJSON("capability_state_snapshot", &state); err != nil {
+		return nil
+	}
+	if len(state) == 0 {
+		return nil
+	}
+	return state
+}
+
+func (e *Engine) capabilityPromptBlock() string {
+	state := e.latestCapabilityState()
+	if len(state) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return ""
+	}
+	return "<xmilo_capability_state>\n" +
+		"Use this app-owned checker output as the only source of truth for phone capabilities. " +
+		"Permission/grant state alone is not usable access; only tool_available=true and tested=true may be described as usable.\n" +
+		string(raw) +
+		"\n</xmilo_capability_state>"
 }
 
 func (e *Engine) InterruptTask(reason string) error {
