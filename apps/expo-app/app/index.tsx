@@ -398,9 +398,18 @@ export default function MainHallScreen() {
             <Text style={styles.emptyBody}>Once the sidecar starts emitting events, they will show up here.</Text>
           </View>
         ) : (
-          events.slice().reverse().map((event, index) => (
-            <MessageBubble key={`${event.timestamp}-${index}`} event={event} onReport={openReport} />
-          ))
+          <View style={styles.recentEventsBox}>
+            <ScrollView
+              style={styles.recentEventsScroll}
+              contentContainerStyle={styles.recentEventsContent}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+            >
+              {events.slice().reverse().map((event, index) => (
+                <MessageBubble key={`${event.timestamp}-${index}`} event={event} onReport={openReport} />
+              ))}
+            </ScrollView>
+          </View>
         )}
 
       </ScrollView>
@@ -525,6 +534,21 @@ const styles = StyleSheet.create({
   emptyCard: { backgroundColor: "#111827", borderRadius: 18, padding: 16, borderWidth: 1, borderColor: "#1F2937" },
   emptyTitle: { color: "#F8FAFC", fontWeight: "700" },
   emptyBody: { color: "#CBD5E1", marginTop: 8, lineHeight: 20 },
+  recentEventsBox: {
+    maxHeight: 432,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#1F2937",
+    backgroundColor: "#0F172A",
+    overflow: "hidden",
+  },
+  recentEventsScroll: {
+    maxHeight: 432,
+  },
+  recentEventsContent: {
+    gap: 12,
+    padding: 12,
+  },
   footerRow: { flexDirection: "row", gap: 12 },
   modalScrim: {
     flex: 1,
