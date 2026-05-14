@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"xmilo/sidecar-go/internal/providerpolicy"
 )
 
 type Config struct {
@@ -65,34 +67,24 @@ func (c Config) LocalBYOKActive() bool {
 }
 
 func (c *Config) ApplyBYOKProviderDefaults() {
-	c.BYOKProvider = strings.ToLower(strings.TrimSpace(c.BYOKProvider))
-	if c.BYOKProvider == "" || c.BYOKProvider == "grok" {
-		c.BYOKProvider = "xai"
+	provider, err := providerpolicy.NormalizeProvider(c.BYOKProvider)
+	if err != nil {
+		c.BYOKProvider = strings.ToLower(strings.TrimSpace(c.BYOKProvider))
+		return
 	}
+	c.BYOKProvider = provider
 	if strings.TrimSpace(c.BYOKKeyEnv) == "" {
 		c.BYOKKeyEnv = "XMILO_BYOK_API_KEY"
 	}
+	spec, err := providerpolicy.Spec(provider)
+	if err != nil {
+		return
+	}
 	if strings.TrimSpace(c.BYOKBaseURL) == "" {
-		switch c.BYOKProvider {
-		case "xai":
-			c.BYOKBaseURL = "https://api.x.ai/v1"
-		case "openai":
-			c.BYOKBaseURL = "https://api.openai.com/v1"
-		case "anthropic":
-			c.BYOKBaseURL = "https://api.anthropic.com/v1"
-		}
+		c.BYOKBaseURL = spec.DefaultBaseURL
 	}
 	if strings.TrimSpace(c.BYOKModel) == "" {
-		switch c.BYOKProvider {
-		case "xai":
-			c.BYOKModel = "grok-4"
-		case "openai":
-			c.BYOKModel = "gpt-5.4"
-		case "anthropic":
-			c.BYOKModel = "claude-sonnet-4-5"
-		case "ollama":
-			c.BYOKModel = "llama3.2"
-		}
+		c.BYOKModel = spec.DefaultModel
 	}
 }
 

@@ -120,6 +120,8 @@ export function formatRuntimeEventForUser(event: EventEnvelope) {
       return `⚠ Stuck: ${safeUserFacingError(event.payload?.reason, "Unknown error")}`;
     case "runtime.error":
       return `⚠ Runtime: ${safeUserFacingError(event.payload?.message, "Unknown runtime error")}`;
+    case "ui_local.error":
+      return `⚠ Local: ${safeUserFacingError(event.payload?.message, "Local submit error")}`;
     case "local_provider.diagnostic":
       return formatProviderDiagnostic(event.payload as ProviderDiagnosticPayload);
     case "task.stale_active_recovered":
@@ -137,7 +139,7 @@ export function safeEventText(event: EventEnvelope) {
   if (event.type === "local_provider.diagnostic") {
     return formatProviderDiagnostic(event.payload as ProviderDiagnosticPayload);
   }
-  if (event.type.startsWith("task.") || event.type === "runtime.error") {
+  if (event.type.startsWith("task.") || event.type === "runtime.error" || event.type === "ui_local.error") {
     return formatRuntimeEventForUser(event);
   }
   const candidate = event.payload?.report_text || event.payload?.text || event.payload?.message || event.payload?.summary || event.payload?.reason;

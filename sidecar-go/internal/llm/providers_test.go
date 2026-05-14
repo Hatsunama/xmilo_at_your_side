@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"xmilo/sidecar-go/internal/config"
+	"xmilo/sidecar-go/internal/providerpolicy"
 	"xmilo/sidecar-go/shared/contracts"
 )
 
@@ -19,6 +20,7 @@ func TestXAITurnUsesResponsesPathAndParsesResponse(t *testing.T) {
 	server := providerServer(t, "/responses", "Bearer local-test-key", responsesPayload("xai done"), nil)
 	defer server.Close()
 	client := mustLocalClient(t, localConfig(t, "xai", server.URL, "grok-test", true))
+	client.HTTP = server.Client()
 	resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_1", Phase: "intake"})
 	if err != nil {
 		t.Fatalf("turn: %v", err)
@@ -32,6 +34,7 @@ func TestOpenAITurnUsesDistinctResponsesPathAndParsesResponse(t *testing.T) {
 	server := providerServer(t, "/responses", "Bearer local-test-key", responsesPayload("openai done"), nil)
 	defer server.Close()
 	client := mustLocalClient(t, localConfig(t, "openai", server.URL, "gpt-test", true))
+	client.HTTP = server.Client()
 	resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_1", Phase: "intake"})
 	if err != nil {
 		t.Fatalf("turn: %v", err)
@@ -52,6 +55,7 @@ func TestAnthropicTurnUsesMessagesPathAndParsesResponse(t *testing.T) {
 	})
 	defer server.Close()
 	client := mustLocalClient(t, localConfig(t, "anthropic", server.URL, "claude-test", true))
+	client.HTTP = server.Client()
 	resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_1", Phase: "intake"})
 	if err != nil {
 		t.Fatalf("turn: %v", err)
@@ -70,6 +74,7 @@ func TestOllamaTurnAllowsNoKeyAndParsesResponse(t *testing.T) {
 		BYOKBaseURL:  server.URL,
 		BYOKModel:    "llama-test",
 	})
+	client.HTTP = server.Client()
 	resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_1", Phase: "intake"})
 	if err != nil {
 		t.Fatalf("turn: %v", err)
@@ -115,13 +120,70 @@ func TestUnsupportedProviderReturnsPreciseError(t *testing.T) {
 }
 
 func TestProviderAuthFailureReturnsPreciseError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}))
 	defer server.Close()
+	t.Setenv(providerpolicy.DevAllowCloudProviderCustomBaseURLEnv, "1")
 	client := mustLocalClient(t, localConfig(t, "xai", server.URL, "grok-test", true))
+	client.HTTP = server.Client()
 	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{}); err == nil || err.Error() != "local_provider_auth_failed" {
 		t.Fatalf("expected local_provider_auth_failed, got %v", err)
+	}
+}
+
+func TestLocalProviderRereadsKeyFileAfterAuthFailure(t *testing.T) {
+	var seen []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		auth := r.Header.Get("Authorization")
+		seen = append(seen, auth)
+		switch auth {
+		case "Bearer bad":
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		case "Bearer good":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(responsesPayload("recovered")))
+			return
+		default:
+			t.Fatalf("unexpected auth header")
+		}
+	}))
+	defer server.Close()
+
+	keyPath := filepath.Join(t.TempDir(), "provider.key")
+	if err := os.WriteFile(keyPath, []byte("bad\n"), 0o600); err != nil {
+		t.Fatalf("write bad key: %v", err)
+	}
+
+	t.Setenv(providerpolicy.DevAllowCloudProviderCustomBaseURLEnv, "1")
+	client := mustLocalClient(t, config.Config{
+		LLMMode:      "local_byok",
+		BYOKProvider: "openai",
+		BYOKKeyFile:  keyPath,
+		BYOKBaseURL:  server.URL,
+		BYOKModel:    "gpt-test",
+	})
+	client.HTTP = server.Client()
+
+	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_bad", Phase: "intake"}); err == nil || err.Error() != "local_provider_auth_failed" {
+		t.Fatalf("expected auth failure with bad key, got %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("good\n"), 0o600); err != nil {
+		t.Fatalf("write good key: %v", err)
+	}
+	resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_good", Phase: "intake"})
+	if err != nil {
+		t.Fatalf("expected recovery with rewritten key: %v", err)
+	}
+	if resp.Summary != "recovered" {
+		t.Fatalf("unexpected response after key rewrite: %#v", resp)
+	}
+	if len(seen) != 2 || seen[0] != "Bearer bad" || seen[1] != "Bearer good" {
+		t.Fatalf("expected provider to see bad then good auth headers, got %#v", seen)
 	}
 }
 
@@ -139,7 +201,7 @@ func TestOpenAIHTTPErrorMappingIsNotCollapsedToUnreachable(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/responses" {
 					t.Fatalf("unexpected path %s", r.URL.Path)
 				}
@@ -147,7 +209,9 @@ func TestOpenAIHTTPErrorMappingIsNotCollapsedToUnreachable(t *testing.T) {
 			}))
 			defer server.Close()
 
+			t.Setenv(providerpolicy.DevAllowCloudProviderCustomBaseURLEnv, "1")
 			client := mustLocalClient(t, localConfig(t, "openai", server.URL, "gpt-test", true))
+			client.HTTP = server.Client()
 			_, err := client.Turn(context.Background(), contracts.RelayTurnRequest{})
 			if err == nil || err.Error() != test.wantCode {
 				t.Fatalf("expected %s, got %v", test.wantCode, err)
@@ -165,13 +229,14 @@ func TestOpenAIHTTPErrorMappingIsNotCollapsedToUnreachable(t *testing.T) {
 
 func TestProviderUnreachableReturnsPreciseError(t *testing.T) {
 	client := mustLocalClient(t, localConfig(t, "xai", "http://127.0.0.1:1", "grok-test", true))
-	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{}); err == nil || err.Error() != "local_provider_unreachable" {
-		t.Fatalf("expected local_provider_unreachable, got %v", err)
+	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{}); err == nil || err.Error() != "local_provider_disallowed_url_scheme" {
+		t.Fatalf("expected local_provider_disallowed_url_scheme, got %v", err)
 	}
 }
 
 func TestOpenAIUnreachableIncludesSafeDiagnostic(t *testing.T) {
-	client := mustLocalClient(t, localConfig(t, "openai", "http://127.0.0.1:1", "gpt-test", true))
+	t.Setenv(providerpolicy.DevAllowCloudProviderCustomBaseURLEnv, "1")
+	client := mustLocalClient(t, localConfig(t, "openai", "https://127.0.0.1:1", "gpt-test", true))
 	_, err := client.Turn(context.Background(), contracts.RelayTurnRequest{})
 	if err == nil || err.Error() != "local_provider_unreachable" {
 		t.Fatalf("expected local_provider_unreachable, got %v", err)
@@ -216,6 +281,59 @@ func TestLocalProviderReadyRequiresExplicitOllamaBaseURL(t *testing.T) {
 	}
 }
 
+func TestParsePlannerResponseTextAcceptsStrictJSONAndFencedJSON(t *testing.T) {
+	raw := turnJSON("strict json")
+	for _, text := range []string{
+		raw,
+		"```json\n" + raw + "\n```",
+		"```\n" + raw + "\n```",
+	} {
+		resp, err := parsePlannerResponseText(text)
+		if err != nil {
+			t.Fatalf("expected valid planner JSON to parse: %v", err)
+		}
+		if resp.Summary != "strict json" {
+			t.Fatalf("unexpected parsed response: %#v", resp)
+		}
+	}
+}
+
+func TestParsePlannerResponseTextRejectsFreeformMalformedAndUnsafeShape(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "freeform", text: "Sure, I can help with that."},
+		{name: "embedded json with prose", text: "Here is the JSON:\n" + turnJSON("embedded")},
+		{name: "malformed json", text: `{"summary":`},
+		{name: "invalid completion shape", text: strings.Replace(turnJSON("bad completion"), `"completion_status":"completed"`, `"completion_status":"done"`, 1)},
+		{name: "missing required key", text: strings.Replace(turnJSON("missing key"), `"next_blocker":"",`, "", 1)},
+		{name: "extra key", text: strings.Replace(turnJSON("extra key"), `"choices":[]`, `"choices":[],"unexpected":true`, 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parsePlannerResponseText(tt.text); err == nil || err.Error() != "local_provider_invalid_planner_response" {
+				t.Fatalf("expected safe invalid planner response error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLocalBYOKPromptContainsStrictJSONContract(t *testing.T) {
+	prompt := buildProviderPrompt(contracts.RelayTurnRequest{Phase: "intake", Prompt: "hey"}, "openai")
+	for _, needle := range []string{
+		"Output must be a single JSON object, with no markdown fences, no prose, and no text before or after it.",
+		"Required JSON shape for a simple informational answer:",
+		`"completion_status":"completed"`,
+		`"action_payload":{}`,
+		`"expected_check":null`,
+	} {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("expected local BYOK prompt to contain %q", needle)
+		}
+	}
+}
+
 func mustLocalClient(t *testing.T, cfg config.Config) *LocalClient {
 	t.Helper()
 	client, err := NewLocalProvider(cfg)
@@ -245,7 +363,8 @@ func localConfig(t *testing.T, provider, baseURL, model string, writeKey bool) c
 
 func providerServer(t *testing.T, wantPath, wantAuth, payload string, extra func(*testing.T, *http.Request)) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	t.Setenv(providerpolicy.DevAllowCloudProviderCustomBaseURLEnv, "1")
+	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != wantPath {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -280,6 +399,12 @@ func ollamaPayload(summary string) string {
 }
 
 func escapedTurnJSON(summary string) string {
+	raw := turnJSON(summary)
+	escaped, _ := json.Marshal(raw)
+	return string(escaped[1 : len(escaped)-1])
+}
+
+func turnJSON(summary string) string {
 	raw, _ := json.Marshal(map[string]any{
 		"intent":               "general",
 		"target_room":          "main_hall",
@@ -288,9 +413,12 @@ func escapedTurnJSON(summary string) string {
 		"report_text":          summary,
 		"completion_status":    "completed",
 		"continuation_status":  "completed",
+		"next_blocker":         "",
+		"action_type":          "none",
+		"action_payload":       map[string]any{},
+		"expected_check":       nil,
 		"requires_user_choice": false,
 		"choices":              []string{},
 	})
-	escaped, _ := json.Marshal(string(raw))
-	return string(escaped[1 : len(escaped)-1])
+	return string(raw)
 }

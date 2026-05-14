@@ -43,6 +43,7 @@ type StateChanged struct {
 // TaskCompleted is the payload for "task.completed".
 type TaskCompleted struct {
 	TaskID         string `json:"task_id"`
+	AttemptID      string `json:"attempt_id"`
 	Summary        string `json:"summary"`
 	TrophyEligible bool   `json:"trophy_eligible"`
 }
@@ -50,14 +51,16 @@ type TaskCompleted struct {
 // TaskStuck is the payload for "task.stuck".
 type TaskStuck struct {
 	TaskID          string   `json:"task_id"`
+	AttemptID       string   `json:"attempt_id"`
 	Reason          string   `json:"reason"`
 	RecoveryOptions []string `json:"recovery_options"`
 }
 
 // TaskCancelled is the payload for "task.cancelled".
 type TaskCancelled struct {
-	TaskID string `json:"task_id"`
-	Reason string `json:"reason"`
+	TaskID    string `json:"task_id"`
+	AttemptID string `json:"attempt_id"`
+	Reason    string `json:"reason"`
 }
 
 // MiloThought is the payload for "milo.thought".

@@ -5,6 +5,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import {
   attemptRuntimeRecovery,
   initRuntimeRecoveryState,
+  makeUiLocalRecoveryFailure,
   refreshRuntimeRecoveryState,
   RuntimeRecoveryState,
 } from "../src/lib/runtimeRecovery";
@@ -58,11 +59,7 @@ export default function RuntimeRecoveryScreen() {
       setState((current) => ({
         ...current,
         attempting: false,
-        last_result: {
-          result: "restart_failed",
-          at: new Date().toISOString(),
-          note: error?.message ?? "unknown error",
-        },
+        last_result: makeUiLocalRecoveryFailure(error?.message ?? "unknown error", current.attempts_used ?? 0),
       }));
     }
   }

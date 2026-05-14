@@ -3,6 +3,7 @@ import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 
 import { addStagedInput } from "./archiveDb";
+import type { StagedContextPayload } from "./bridge";
 
 export type StagedInputRecord = {
   id: string;
@@ -109,9 +110,9 @@ export async function stageImagePick() {
   return record;
 }
 
-export function formatStagedInputsForContext(inputs: StagedInputRecord[]) {
+export function formatStagedInputsForContext(inputs: StagedInputRecord[]): StagedContextPayload | null {
   if (!inputs.length) {
-    return "";
+    return null;
   }
 
   const lines = [
@@ -122,5 +123,14 @@ export function formatStagedInputsForContext(inputs: StagedInputRecord[]) {
     })
   ];
 
-  return lines.join("\n");
+  const provenances = Array.from(new Set(inputs.map((input) => input.provenance).filter(Boolean)));
+  const source = provenances.length === 1 ? provenances[0] : "mixed_staged_inputs";
+  return {
+    content: lines.join("\n"),
+    source,
+    provenance: source,
+    label: inputs.length === 1 ? inputs[0].label : `${inputs.length} staged inputs`,
+    mime_type: inputs.length === 1 ? inputs[0].mime_type : null,
+    created_at: new Date().toISOString()
+  };
 }

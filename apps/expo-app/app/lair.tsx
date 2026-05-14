@@ -131,12 +131,23 @@ export default function WizardLairScreen() {
     promptLenRef.current = text.length;
 
     if (delta > PASTE_THRESHOLD && text.length > PASTE_THRESHOLD) {
-      // Large paste detected — store in sidecar, show chip, clear input
-      const preview = text.slice(0, 80).replace(/\n/g, " ");
-      setPastedContext({ preview, charCount: text.length });
-      setPrompt("");
-      promptLenRef.current = 0;
-      try { await setContext(text); } catch (_) {}
+      try {
+        await setContext({
+          content: text,
+          source: "large_paste",
+          provenance: "large_paste",
+          label: "Large paste",
+          mime_type: "text/plain",
+          created_at: new Date().toISOString()
+        });
+        const preview = text.slice(0, 80).replace(/\n/g, " ");
+        setPastedContext({ preview, charCount: text.length });
+        setPrompt("");
+        setSendError("");
+        promptLenRef.current = 0;
+      } catch (error: any) {
+        setSendError(error?.message ?? "Could not stage pasted context.");
+      }
       return;
     }
     setPrompt(text);
@@ -183,9 +194,11 @@ export default function WizardLairScreen() {
       setSendStatus("");
       setSendError(message);
       pushEvent({
-        type: "runtime.error",
+        type: "ui_local.error",
         timestamp: new Date().toISOString(),
-        payload: { message, recoverable: true }
+        source: "ui_local",
+        truth_scope: "ui_submit",
+        payload: { message, recoverable: true, source: "ui_local", truth_scope: "ui_submit" }
       });
       await refreshRuntimeState();
     } finally {
@@ -437,6 +450,7 @@ function formatEvent(event: EventEnvelope): string {
     case "task.stuck":
     case "task.stale_active_recovered":
     case "runtime.error":
+    case "ui_local.error":
     case "local_provider.diagnostic":
       return formatRuntimeEventForUser(event);
     case "task.entitlement_lost":

@@ -16,6 +16,7 @@ import (
 
 	"xmilo/sidecar-go/internal/buildinfo"
 	"xmilo/sidecar-go/internal/config"
+	"xmilo/sidecar-go/internal/contextpolicy"
 	"xmilo/sidecar-go/internal/db"
 	"xmilo/sidecar-go/internal/legacy"
 	"xmilo/sidecar-go/internal/llm"
@@ -23,6 +24,7 @@ import (
 	"xmilo/sidecar-go/internal/mind"
 	"xmilo/sidecar-go/internal/movement"
 	"xmilo/sidecar-go/internal/netutil"
+	"xmilo/sidecar-go/internal/providerpolicy"
 	"xmilo/sidecar-go/internal/relay"
 	"xmilo/sidecar-go/internal/runtime"
 	"xmilo/sidecar-go/internal/tasks"
@@ -138,6 +140,9 @@ func (a *App) Start(ctx context.Context) error {
 	mux.Handle("/command/submit", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleCommandSubmit)))
 	mux.Handle("/task/current", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleTaskCurrent)))
 	mux.Handle("/task/interrupt", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleTaskInterrupt)))
+	mux.Handle("/local-provider/options", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleLocalProviderOptions)))
+	mux.Handle("/local-provider/resolve", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleLocalProviderResolve)))
+	mux.Handle("/runtime/evidence/app-bridge", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAppBridgeEvidence)))
 	mux.Handle("/context/set", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleContextSet)))
 	mux.Handle("/context/clear", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleContextClear)))
 	mux.Handle("/task/cancel", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleTaskCancel)))
@@ -472,6 +477,7 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 		MindLoaded:            a.mindLoaded,
 		RuntimeID:             a.cfg.RuntimeID,
 		LLMMode:               a.cfg.LLMMode,
+		BYOKProvider:          a.cfg.BYOKProvider,
 		SubscriptionEntitled:  false,
 		BringYourOwnKeyActive: a.localBYOKKeyConfigured(),
 		Phase9APIKeyAccess:    a.localBYOKKeyConfigured(),
@@ -556,7 +562,7 @@ func (a *App) handleTaskStart(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": snap.TaskID, "immediate_state": snap, "intake_gate": assessment})
+	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": snap.TaskID, "attempt_id": snap.AttemptID, "immediate_state": snap, "intake_gate": assessment})
 }
 
 func (a *App) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
@@ -612,6 +618,7 @@ func (a *App) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 		"handled":         true,
 		"kind":            "task",
 		"task_id":         snap.TaskID,
+		"attempt_id":      snap.AttemptID,
 		"immediate_state": snap,
 		"intake_gate":     assessment,
 	})
@@ -653,18 +660,29 @@ func (a *App) handleTaskInterrupt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleContextSet(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Content string `json:"content"`
-	}
-	if err := decodeJSON(r, &req); err != nil || req.Content == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "content required"})
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if err := a.store.SetRuntimeConfig("active_context", req.Content); err != nil {
+	var req contextpolicy.SetRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	stored, err := contextpolicy.Normalize(req, time.Now().UTC())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := a.store.SetRuntimeConfig("active_context", stored.Content); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	if err := a.store.SetRuntimeConfig("active_context_meta", contextpolicy.MetadataJSON(stored.Meta)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "context": stored.Meta})
 }
 
 func (a *App) handleContextClear(w http.ResponseWriter, r *http.Request) {
@@ -672,7 +690,193 @@ func (a *App) handleContextClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	if err := a.store.SetRuntimeConfig("active_context_meta", ""); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *App) handleLocalProviderOptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"providers": providerpolicy.Options(),
+	})
+}
+
+func (a *App) handleLocalProviderResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		Provider     string `json:"provider"`
+		BaseURL      string `json:"base_url"`
+		Model        string `json:"model"`
+		KeyFileReady bool   `json:"key_file_ready"`
+		HasAPIKey    bool   `json:"has_api_key"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	resolved, err := providerpolicy.Resolve(providerpolicy.ResolveInput{
+		Provider:     req.Provider,
+		BaseURL:      req.BaseURL,
+		Model:        req.Model,
+		KeyFileReady: req.KeyFileReady,
+		HasAPIKey:    req.HasAPIKey,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "resolved": resolved})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "resolved": resolved})
+}
+
+const maxAppBridgeEvidencePayloadBytes = 16 * 1024
+
+func (a *App) handleAppBridgeEvidence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	if a.engine == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "runtime_engine_unavailable"})
+		return
+	}
+
+	var evidence runtime.AppBridgeEvidence
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAppBridgeEvidencePayloadBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&evidence); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_app_bridge_evidence:" + err.Error()})
+		return
+	}
+	if err := validateAppBridgeEvidence(evidence, time.Now().UTC()); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	stored, err := a.engine.RecordAppBridgeEvidence(evidence)
+	if err != nil {
+		status := http.StatusConflict
+		if err.Error() == "app_bridge_evidence_no_active_task" {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "evidence": stored})
+}
+
+func validateAppBridgeEvidence(evidence runtime.AppBridgeEvidence, now time.Time) error {
+	if evidence.ProofClass != "app_bridge_verified" {
+		return fmt.Errorf("invalid_app_bridge_proof_class")
+	}
+	if evidence.Source != "android_bridge" {
+		return fmt.Errorf("invalid_app_bridge_source")
+	}
+	if !tasks.IsAllowedAppBridgeEvidenceOperation(evidence.Operation) {
+		return fmt.Errorf("invalid_app_bridge_operation")
+	}
+	checkedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(evidence.CheckedAt))
+	if err != nil {
+		return fmt.Errorf("invalid_app_bridge_checked_at")
+	}
+	if checkedAt.After(now.Add(time.Minute)) || now.Sub(checkedAt) > tasks.AppBridgeEvidenceFreshness {
+		return fmt.Errorf("stale_app_bridge_evidence")
+	}
+	if strings.TrimSpace(evidence.Summary) == "" || len(evidence.Summary) > 240 {
+		return fmt.Errorf("invalid_app_bridge_summary")
+	}
+	if evidence.Verified {
+		if strings.TrimSpace(evidence.BlockingReason) != "" {
+			return fmt.Errorf("verified_app_bridge_evidence_must_not_have_blocking_reason")
+		}
+	} else if strings.TrimSpace(evidence.BlockingReason) == "" {
+		return fmt.Errorf("failed_app_bridge_evidence_requires_blocking_reason")
+	}
+	if containsSensitiveText(evidence.Summary) ||
+		containsSensitiveText(evidence.BlockingReason) ||
+		containsSensitiveText(evidence.EvidenceID) ||
+		containsSensitiveText(evidence.AttemptID) ||
+		containsSensitiveText(evidence.TaskID) {
+		return fmt.Errorf("app_bridge_evidence_contains_sensitive_text")
+	}
+	if err := validateAppBridgeEvidenceDetails(evidence.Details, 0); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAppBridgeEvidenceDetails(details map[string]any, depth int) error {
+	if len(details) > 32 {
+		return fmt.Errorf("app_bridge_evidence_details_too_large")
+	}
+	if depth > 2 {
+		return fmt.Errorf("app_bridge_evidence_details_too_deep")
+	}
+	for key, value := range details {
+		if isSensitiveFieldName(key) {
+			return fmt.Errorf("app_bridge_evidence_sensitive_detail:%s", key)
+		}
+		if len(key) > 64 {
+			return fmt.Errorf("app_bridge_evidence_detail_key_too_long")
+		}
+		switch typed := value.(type) {
+		case string:
+			if len(typed) > 240 || containsSensitiveText(typed) {
+				return fmt.Errorf("app_bridge_evidence_sensitive_or_oversized_detail:%s", key)
+			}
+		case bool, float64, nil:
+		case map[string]any:
+			if err := validateAppBridgeEvidenceDetails(typed, depth+1); err != nil {
+				return err
+			}
+		case []any:
+			if len(typed) > 16 {
+				return fmt.Errorf("app_bridge_evidence_detail_array_too_large:%s", key)
+			}
+			for _, item := range typed {
+				if text, ok := item.(string); ok {
+					if len(text) > 120 || containsSensitiveText(text) {
+						return fmt.Errorf("app_bridge_evidence_sensitive_or_oversized_detail:%s", key)
+					}
+				}
+			}
+		default:
+			return fmt.Errorf("app_bridge_evidence_unsupported_detail:%s", key)
+		}
+	}
+	return nil
+}
+
+func isSensitiveFieldName(key string) bool {
+	normalized := strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(key)))
+	return strings.Contains(normalized, "api_key") ||
+		strings.Contains(normalized, "apikey") ||
+		strings.Contains(normalized, "bearer") ||
+		strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "password") ||
+		strings.Contains(normalized, "provider_key") ||
+		strings.Contains(normalized, "raw_key") ||
+		strings.Contains(normalized, "key_file_path") ||
+		strings.HasSuffix(normalized, "_path")
+}
+
+func containsSensitiveText(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(lower, "bearer ") ||
+		strings.Contains(lower, "api_key") ||
+		strings.Contains(lower, "authorization:") ||
+		strings.Contains(lower, "xai-") ||
+		strings.Contains(lower, "anthropic-")
 }
 
 func (a *App) handleTaskCancel(w http.ResponseWriter, r *http.Request) {

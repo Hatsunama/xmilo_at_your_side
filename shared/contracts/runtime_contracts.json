@@ -1,0 +1,352 @@
+{
+  "version": 1,
+  "task_identity_fields": [
+    "task_id",
+    "attempt_id"
+  ],
+  "runtime_events": {
+    "archive.record_created": {
+      "required_payload_fields": [
+        "task_id"
+      ]
+    },
+    "local_provider.diagnostic": {
+      "required_payload_fields": []
+    },
+    "milo.movement_started": {
+      "required_payload_fields": [
+        "from_room",
+        "from_anchor",
+        "to_room",
+        "to_anchor",
+        "reason",
+        "estimated_ms"
+      ]
+    },
+    "milo.room_changed": {
+      "required_payload_fields": [
+        "room_id",
+        "anchor_id"
+      ]
+    },
+    "milo.state_changed": {
+      "required_payload_fields": [
+        "from_state",
+        "to_state"
+      ]
+    },
+    "milo.thought": {
+      "required_payload_fields": [
+        "text",
+        "style",
+        "trigger"
+      ]
+    },
+    "maintenance.nightly_completed": {
+      "required_payload_fields": [
+        "archive_date",
+        "trigger",
+        "completed_at",
+        "task_count",
+        "update_check_status",
+        "message"
+      ]
+    },
+    "maintenance.nightly_deferred": {
+      "required_payload_fields": [
+        "archive_date",
+        "reason",
+        "task_id",
+        "message"
+      ]
+    },
+    "maintenance.nightly_started": {
+      "required_payload_fields": [
+        "archive_date",
+        "trigger",
+        "started_at",
+        "local_time",
+        "update_check_status"
+      ]
+    },
+    "report.ready": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "report_text",
+        "completion_status"
+      ]
+    },
+    "runtime.error": {
+      "required_payload_fields": [
+        "message"
+      ]
+    },
+    "runtime.capability_degraded": {
+      "required_payload_fields": [
+        "capability",
+        "status",
+        "reason"
+      ]
+    },
+    "runtime.ready": {
+      "required_payload_fields": [
+        "ok",
+        "runtime_host",
+        "runtime_id"
+      ]
+    },
+    "task.accepted": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "intent",
+        "room_id"
+      ]
+    },
+    "task.awaiting_user_choice": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "blocker"
+      ]
+    },
+    "task.blocked": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "blocker"
+      ]
+    },
+    "task.cancelled": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "reason"
+      ]
+    },
+    "task.choice_recorded": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "choice",
+        "decision"
+      ]
+    },
+    "task.completed": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "summary",
+        "trophy_eligible"
+      ]
+    },
+    "task.entitlement_lost": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "message"
+      ]
+    },
+    "task.intake_evaluated": {
+      "required_payload_fields": [
+        "surface",
+        "assessment"
+      ]
+    },
+    "task.message_emitted": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "message"
+      ]
+    },
+    "task.progress": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "phase",
+        "message"
+      ]
+    },
+    "task.result_unverified": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "blocker"
+      ]
+    },
+    "task.resume_blocked": {
+      "required_payload_fields": [
+        "task_id",
+        "reason"
+      ]
+    },
+    "task.resumable": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "blocker"
+      ]
+    },
+    "task.stale_active_recovered": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id"
+      ]
+    },
+    "task.stuck": {
+      "required_payload_fields": [
+        "task_id",
+        "attempt_id",
+        "reason",
+        "recovery_options"
+      ]
+    }
+  },
+  "local_events": {
+    "ui_local.error": {
+      "source": "ui_local",
+      "truth_scope": "ui_submit",
+      "required_payload_fields": [
+        "message",
+        "recoverable",
+        "source",
+        "truth_scope"
+      ]
+    }
+  },
+  "event_sources": {
+    "sidecar_runtime": [
+      "runtime.ready",
+      "runtime.error",
+      "runtime.capability_degraded"
+    ],
+    "android_bridge_observation": [
+      "app_bridge_verified"
+    ],
+    "ui_local": [
+      "ui_local.error"
+    ]
+  },
+  "recovery_results": [
+    "restart_verified",
+    "restart_failed",
+    "restart_rate_limited",
+    "restart_needs_operator"
+  ],
+  "recovery_result_required_fields": [
+    "result",
+    "source",
+    "truth_scope",
+    "verified",
+    "checked_at",
+    "note",
+    "attempts_used"
+  ],
+  "recovery_result_blocking_required_for": [
+    "restart_failed",
+    "restart_rate_limited",
+    "restart_needs_operator"
+  ],
+  "recovery_sources": [
+    "sidecar_runtime",
+    "android_bridge_observation",
+    "ui_local"
+  ],
+  "recovery_truth_scopes": [
+    "sidecar_health",
+    "sidecar_ready",
+    "native_runtime_host",
+    "task_route_surface",
+    "ui_submit"
+  ],
+  "expo_types": {
+    "EventEnvelope": [
+      "type",
+      "timestamp",
+      "source",
+      "truth_scope",
+      "payload"
+    ],
+    "RuntimeRecoveryOutcome": [
+      "result",
+      "source",
+      "truth_scope",
+      "verified",
+      "checked_at",
+      "note",
+      "attempts_used"
+    ],
+    "TaskSnapshot": [
+      "task_id",
+      "attempt_id"
+    ],
+    "CommandSubmitResponse": [
+      "task_id",
+      "attempt_id",
+      "immediate_state"
+    ],
+    "ProviderDiagnosticPayload": [
+      "task_id",
+      "attempt_id"
+    ]
+  },
+  "castle_event_structs": {
+    "TaskCompleted": [
+      "TaskID",
+      "AttemptID"
+    ],
+    "TaskStuck": [
+      "TaskID",
+      "AttemptID"
+    ],
+    "TaskCancelled": [
+      "TaskID",
+      "AttemptID"
+    ]
+  },
+  "app_bridge_evidence_fields": [
+    "proof_class",
+    "verified",
+    "source",
+    "operation",
+    "checked_at",
+    "summary",
+    "blocking_reason",
+    "evidence_id",
+    "attempt_id",
+    "task_id",
+    "details"
+  ],
+  "provider_context_dtos": {
+    "LocalProviderOption": [
+      "id",
+      "label",
+      "default_model",
+      "default_base_url",
+      "key_required",
+      "custom_base_url_allowed",
+      "base_url_required",
+      "allowed_schemes"
+    ],
+    "LocalProviderResolvedConfig": [
+      "provider",
+      "model",
+      "base_url",
+      "key_required",
+      "base_url_required",
+      "local_turn_allowed",
+      "readiness_reason",
+      "spec"
+    ],
+    "StagedContextPayload": [
+      "content",
+      "source",
+      "provenance",
+      "label",
+      "mime_type",
+      "created_at"
+    ]
+  }
+}

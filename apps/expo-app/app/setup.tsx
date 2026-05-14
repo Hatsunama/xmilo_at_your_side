@@ -18,8 +18,11 @@ import {
   authCheck,
   authRedeemInvite,
   authRegister,
+  getLocalProviderOptions,
   verifyTwoFactor,
-  getState
+  getState,
+  resolveLocalProviderConfig,
+  type LocalProviderOption
 } from "../src/lib/bridge";
 import {
   configureRevenueCat,
@@ -37,9 +40,9 @@ import {
   openXMiloclawNotificationSettings,
   openXMiloclawOverlaySettings,
   restartXMiloclawRuntimeHost,
+  getXMiloclawLocalByokStatus,
   saveXMiloclawLocalByokApiKey,
   startXMiloclawRuntimeHost,
-  type ByokProvider,
   type XMiloclawRuntimeStatus
 } from "../src/lib/xmiloRuntimeHost";
 import { hasSetupCompletedOnce, markSetupCompletedOnce } from "../src/lib/setupCompletion";
@@ -62,46 +65,6 @@ type Step =
   | "invite_input"
   | "byok_choose_provider"
   | "byok_enter_key";
-
-const BYOK_PROVIDER_OPTIONS: Array<{ provider: ByokProvider; label: string; model: string; baseUrl: string; keyRequired: boolean; copy: string }> = [
-  {
-    provider: "xai",
-    label: "xAI",
-    model: "grok-4",
-    baseUrl: "https://api.x.ai/v1",
-    keyRequired: true,
-    copy: "Uses xAI locally through the sidecar. The default model and base URL are handled automatically."
-  },
-  {
-    provider: "openai",
-    label: "OpenAI / GPT",
-    model: "gpt-5.4",
-    baseUrl: "https://api.openai.com/v1",
-    keyRequired: true,
-    copy: "Uses OpenAI locally through the sidecar. The default model and base URL are handled automatically."
-  },
-  {
-    provider: "anthropic",
-    label: "Claude / Anthropic",
-    model: "claude-sonnet-4-5",
-    baseUrl: "https://api.anthropic.com/v1",
-    keyRequired: true,
-    copy: "Uses Anthropic locally through the sidecar. The default model and base URL are handled automatically."
-  },
-  {
-    provider: "ollama",
-    label: "Ollama",
-    model: "llama3.2",
-    baseUrl: "",
-    keyRequired: false,
-    copy: "Ollama must be reachable from this phone. PC localhost will not work unless Ollama runs on the phone. Use a LAN URL like http://192.168.x.x:11434."
-  }
-];
-
-const BYOK_PROVIDER_BY_ID = Object.fromEntries(BYOK_PROVIDER_OPTIONS.map((option) => [option.provider, option])) as Record<
-  ByokProvider,
-  (typeof BYOK_PROVIDER_OPTIONS)[number]
->;
 
 type AccessConfig = {
   access_mode?: string;
@@ -257,7 +220,9 @@ export default function SetupScreen() {
   const [recoveryCode, setRecoveryCode] = useState("");
   const [trustPage, setTrustPage] = useState(0);
   const [trustIntroDismissed, setTrustIntroDismissed] = useState(false);
-  const [byokProvider, setByokProvider] = useState<ByokProvider | "">("");
+  const [byokProvider, setByokProvider] = useState("");
+  const [localProviderOptions, setLocalProviderOptions] = useState<LocalProviderOption[]>([]);
+  const [providerOptionsBusy, setProviderOptionsBusy] = useState(false);
   const [byokKey, setByokKey] = useState("");
   const [byokBaseUrl, setByokBaseUrl] = useState("");
   const [byokModel, setByokModel] = useState("");
@@ -407,6 +372,35 @@ export default function SetupScreen() {
     return () => sub.remove();
   }, [runtimeStep, step, trustIntroDismissed, trustPage]);
 
+  useEffect(() => {
+    if (step !== "byok_choose_provider") return;
+    let cancelled = false;
+    async function loadProviderOptions() {
+      setProviderOptionsBusy(true);
+      setError("");
+      try {
+        await ensureProviderSetupRuntimeReady();
+        const providers = await getLocalProviderOptions();
+        if (!cancelled) {
+          setLocalProviderOptions(providers);
+        }
+      } catch (error: any) {
+        if (!cancelled) {
+          setLocalProviderOptions([]);
+          setError(error?.message ?? "Could not load local provider options from the sidecar.");
+        }
+      } finally {
+        if (!cancelled) {
+          setProviderOptionsBusy(false);
+        }
+      }
+    }
+    loadProviderOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [step]);
+
   async function refreshRuntimeStatus() {
     try {
       const status = await getXMiloclawRuntimeStatus();
@@ -416,6 +410,81 @@ export default function SetupScreen() {
       setRuntimeError(error?.message ?? "Could not read runtime host status.");
       return null;
     }
+  }
+
+  function isProviderSetupRuntimeReady(status: XMiloclawRuntimeStatus | null) {
+    return Boolean(status?.hostReady && status?.taskRouteSurfaceReady);
+  }
+
+  function runtimeNotReadyReason(status: XMiloclawRuntimeStatus | null) {
+    if (status?.lastError) return status.lastError;
+    const missing = getFinalRuntimeMissing(status);
+    return missing.length ? `Missing runtime readiness: ${missing.join(", ")}` : "Runtime host is not ready.";
+  }
+
+  async function ensureProviderSetupRuntimeReady() {
+    if (!hasNativeXMiloclawRuntimeHost()) {
+      throw new Error("Native xMilo runtime host is not available in this build.");
+    }
+
+    const current = await getXMiloclawRuntimeStatus();
+    setRuntimeStatus(current);
+    if (isProviderSetupRuntimeReady(current)) {
+      return current;
+    }
+
+    const started = await startXMiloclawRuntimeHost();
+    setRuntimeStatus(started);
+    if (isProviderSetupRuntimeReady(started)) {
+      return started;
+    }
+
+    const restarted = await restartXMiloclawRuntimeHost();
+    setRuntimeStatus(restarted);
+    if (isProviderSetupRuntimeReady(restarted)) {
+      return restarted;
+    }
+
+    throw new Error(runtimeNotReadyReason(restarted));
+  }
+
+  async function waitForByokReadinessAfterSave(resolved: {
+    provider: string;
+    model: string;
+    key_required: boolean;
+    base_url_required: boolean;
+  }) {
+    const localStatus = await getXMiloclawLocalByokStatus();
+    if (localStatus.provider !== resolved.provider) {
+      throw new Error("Saved provider did not match the sidecar-resolved provider.");
+    }
+    if (resolved.key_required && !localStatus.keyFileReady) {
+      throw new Error("Saved local provider key was not ready after write.");
+    }
+    if (resolved.base_url_required && !localStatus.baseUrlReady) {
+      throw new Error("Saved local provider base URL was not ready after write.");
+    }
+    if (resolved.model && localStatus.model !== resolved.model) {
+      throw new Error("Saved local provider model did not match the sidecar-resolved model.");
+    }
+
+    let lastReason = "sidecar_not_checked";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const ready = await getXMiloclawRuntimeStatus();
+      setRuntimeStatus(ready);
+      const localReady =
+        ready.hostReady === true &&
+        ready.taskRouteSurfaceReady === true &&
+        ready.llmMode === "local_byok" &&
+        ready.byokProvider === resolved.provider &&
+        ready.bringYourOwnKeyActive === true &&
+        ready.localLlmTurnAllowed === true &&
+        ready.firstTaskEligible === true;
+      if (localReady) return;
+      lastReason = `llm=${ready.llmMode ?? "unknown"} provider=${ready.byokProvider ?? "unknown"} local=${String(ready.localLlmTurnAllowed)} byok=${String(ready.bringYourOwnKeyActive)}`;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    throw new Error(`Local BYOK readiness was not confirmed after save (${lastReason}).`);
   }
 
   function getFinalRuntimeMissing(status: XMiloclawRuntimeStatus | null) {
@@ -842,27 +911,28 @@ export default function SetupScreen() {
   async function handleByokSaveAndContinue() {
     if (!byokProvider) return;
 
-    const providerConfig = BYOK_PROVIDER_BY_ID[byokProvider];
     const trimmedKey = byokKey.trim();
     const trimmedBaseUrl = byokBaseUrl.trim();
     const trimmedModel = byokModel.trim();
-    if (providerConfig.keyRequired && !trimmedKey) {
-      Alert.alert("BYOK key not saved", "This provider requires an API key.");
-      return;
-    }
-    if (byokProvider === "ollama" && !trimmedBaseUrl) {
-      Alert.alert("BYOK config not saved", "Ollama needs a reachable base URL from this phone.");
-      return;
-    }
 
     setByokBusy(true);
     try {
-      const localStatus = await saveXMiloclawLocalByokApiKey(byokProvider, trimmedKey, trimmedBaseUrl, trimmedModel);
-      if (!localStatus.byokReady) {
-        throw new Error("Local BYOK configuration was not ready after save.");
+      await ensureProviderSetupRuntimeReady();
+      const resolved = await resolveLocalProviderConfig({
+        provider: byokProvider,
+        base_url: trimmedBaseUrl,
+        model: trimmedModel,
+        has_api_key: Boolean(trimmedKey),
+        key_file_ready: false
+      });
+      if (!resolved.local_turn_allowed) {
+        throw new Error(resolved.readiness_reason || "Local provider configuration is not ready.");
       }
+      await saveXMiloclawLocalByokApiKey(resolved.provider, trimmedKey, resolved.base_url, resolved.model);
       resetRuntimeTaskProof();
-      await restartXMiloclawRuntimeHost();
+      const restartStatus = await restartXMiloclawRuntimeHost();
+      setRuntimeStatus(restartStatus);
+      await waitForByokReadinessAfterSave(resolved);
       await refreshRuntimeState().catch(() => null);
       await markSetupCompletedOnce().catch(() => null);
       setByokKey("");
@@ -1158,8 +1228,7 @@ export default function SetupScreen() {
       setRuntimeBusy(true);
       setRuntimeError("");
       try {
-        const status = await startXMiloclawRuntimeHost();
-        setRuntimeStatus(status);
+        const status = await ensureProviderSetupRuntimeReady();
         if (!(status.foregroundServiceStarted ?? status.runtimeHostStarted)) {
           setRuntimeError(status.lastError || "Runtime host did not start.");
           return;
@@ -1765,18 +1834,20 @@ export default function SetupScreen() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.padded}>
         <Text style={styles.title}>Choose provider</Text>
         <Text style={styles.body}>Your provider key stays local on this phone. Hosted access stays separate.</Text>
+        {!!error && <Text style={styles.error}>{error}</Text>}
 
         <View style={styles.card}>
-          {BYOK_PROVIDER_OPTIONS.map((option) => (
+          {providerOptionsBusy ? <ActivityIndicator color={CLR.accent} /> : null}
+          {localProviderOptions.map((option) => (
             <Pressable
-              key={option.provider}
+              key={option.id}
               style={[styles.linkButton, { marginTop: 10 }]}
               onPress={() => {
                 setError("");
-                setByokProvider(option.provider);
+                setByokProvider(option.id);
                 setByokKey("");
-                setByokBaseUrl(option.provider === "ollama" ? "" : option.baseUrl);
-                setByokModel(option.model);
+                setByokBaseUrl("");
+                setByokModel("");
                 setStep("byok_enter_key");
               }}
             >
@@ -1793,15 +1864,16 @@ export default function SetupScreen() {
   }
 
   if (step === "byok_enter_key") {
-    const providerConfig = byokProvider ? BYOK_PROVIDER_BY_ID[byokProvider] : null;
-    const keyRequired = providerConfig?.keyRequired ?? true;
+    const providerConfig = byokProvider ? localProviderOptions.find((option) => option.id === byokProvider) : null;
+    const keyRequired = providerConfig?.key_required ?? false;
+    const showBaseUrlInput = Boolean(providerConfig?.custom_base_url_allowed || (providerConfig?.base_url_required && !providerConfig.default_base_url));
     return (
       <ScrollView style={styles.scroll} contentContainerStyle={styles.padded}>
         <Text style={styles.title}>{keyRequired ? "Enter your API key" : "Configure local provider"}</Text>
         <Text style={styles.body}>
           Provider: <Text style={styles.inlineAccent}>{providerConfig?.label ?? "—"}</Text>
         </Text>
-        {providerConfig?.copy ? <Text style={styles.body}>{providerConfig.copy}</Text> : null}
+        <Text style={styles.body}>Provider rules are resolved by the local sidecar before the key is saved.</Text>
 
         <TextInput
           style={styles.input}
@@ -1814,10 +1886,10 @@ export default function SetupScreen() {
           secureTextEntry
         />
 
-        {byokProvider === "ollama" ? (
+        {showBaseUrlInput ? (
           <TextInput
             style={styles.input}
-            placeholder="Base URL, e.g. http://192.168.x.x:11434"
+            placeholder="Base URL"
             placeholderTextColor={CLR.muted}
             value={byokBaseUrl}
             onChangeText={setByokBaseUrl}
@@ -1826,10 +1898,10 @@ export default function SetupScreen() {
             keyboardType="url"
           />
         ) : (
-          <Text style={styles.fine}>Base URL: {providerConfig?.baseUrl || "default"}</Text>
+          <Text style={styles.fine}>Base URL: {providerConfig?.default_base_url || "sidecar default"}</Text>
         )}
 
-        <Text style={styles.fine}>Model: {providerConfig?.model || "default"}</Text>
+        <Text style={styles.fine}>Model: {providerConfig?.default_model || "sidecar default"}</Text>
 
         <Btn label="Save & continue" onPress={handleByokSaveAndContinue} busy={byokBusy} />
 

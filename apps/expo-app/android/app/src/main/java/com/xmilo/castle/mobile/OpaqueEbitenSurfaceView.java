@@ -179,8 +179,15 @@ final class OpaqueEbitenSurfaceView extends GLSurfaceView {
                 Log.i(TAG, "AlphaFixRenderer: surface created (first time)");
                 return;
             }
-            Log.e(TAG, "AlphaFixRenderer: context lost, killing app");
-            Runtime.getRuntime().exit(0);
+            Log.e(TAG, "AlphaFixRenderer: EGL context lost; renderer degraded without app process exit");
+            errored = true;
+            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                @Override
+                public void run() {
+                    onErrorOnGameUpdate(new IllegalStateException(
+                            "Castle renderer EGL context lost; renderer degraded without app process exit"));
+                }
+            });
         }
 
         @Override

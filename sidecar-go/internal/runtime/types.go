@@ -17,6 +17,7 @@ type ReadyResponse struct {
 	MindLoaded            bool   `json:"mind_loaded"`
 	RuntimeID             string `json:"runtime_id"`
 	LLMMode               string `json:"llm_mode"`
+	BYOKProvider          string `json:"byok_provider,omitempty"`
 	SubscriptionEntitled  bool   `json:"subscription_entitled"`
 	BringYourOwnKeyActive bool   `json:"bring_your_own_key_active"`
 	Phase9APIKeyAccess    bool   `json:"phase9_api_key_access"`
@@ -27,6 +28,7 @@ type ReadyResponse struct {
 
 type TaskSnapshot struct {
 	TaskID           string            `json:"task_id"`
+	AttemptID        string            `json:"attempt_id"`
 	Prompt           string            `json:"prompt"`
 	Intent           string            `json:"intent"`
 	RoomID           string            `json:"room_id"`
@@ -57,6 +59,7 @@ type ApprovalState struct {
 
 type ResumeCheckpoint struct {
 	TaskID             string            `json:"task_id"`
+	AttemptID          string            `json:"attempt_id"`
 	SourceStatus       string            `json:"source_status"`
 	Phase              string            `json:"phase"`
 	Blocker            string            `json:"blocker"`
@@ -96,11 +99,37 @@ type VerificationStep struct {
 }
 
 type EvidenceBoundary struct {
-	VerifiedFacts        []string          `json:"verified_facts"`
-	ExecutedSteps        []string          `json:"executed_steps"`
-	UnverifiedClaims     []string          `json:"unverified_claims"`
-	BlockedReasons       []string          `json:"blocked_reasons"`
-	NextVerificationStep *VerificationStep `json:"next_verification_step,omitempty"`
+	VerifiedFacts        []string            `json:"verified_facts"`
+	ExecutedSteps        []string            `json:"executed_steps"`
+	UnverifiedClaims     []string            `json:"unverified_claims"`
+	BlockedReasons       []string            `json:"blocked_reasons"`
+	NextVerificationStep *VerificationStep   `json:"next_verification_step,omitempty"`
+	CompletionEvidence   *CompletionEvidence `json:"completion_evidence,omitempty"`
+	AppBridgeEvidence    []AppBridgeEvidence `json:"app_bridge_evidence,omitempty"`
+}
+
+type CompletionEvidence struct {
+	ProofClass            string `json:"proof_class"`
+	RequiredForCompletion bool   `json:"required_for_completion"`
+	Verified              bool   `json:"verified"`
+	Source                string `json:"source"`
+	Summary               string `json:"summary"`
+	BlockingReason        string `json:"blocking_reason,omitempty"`
+	CheckedAt             string `json:"checked_at"`
+}
+
+type AppBridgeEvidence struct {
+	ProofClass     string         `json:"proof_class"`
+	Verified       bool           `json:"verified"`
+	Source         string         `json:"source"`
+	Operation      string         `json:"operation"`
+	CheckedAt      string         `json:"checked_at"`
+	Summary        string         `json:"summary"`
+	BlockingReason string         `json:"blocking_reason,omitempty"`
+	EvidenceID     string         `json:"evidence_id,omitempty"`
+	AttemptID      string         `json:"attempt_id,omitempty"`
+	TaskID         string         `json:"task_id,omitempty"`
+	Details        map[string]any `json:"details,omitempty"`
 }
 
 type RuntimeState struct {

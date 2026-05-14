@@ -1,11 +1,41 @@
 export type EventEnvelope = {
   type: string;
   timestamp: string;
+  source?: "sidecar_runtime" | "android_bridge_observation" | "ui_local";
+  truth_scope?: "sidecar_health" | "sidecar_ready" | "native_runtime_host" | "task_route_surface" | "ui_submit";
   payload: Record<string, any>;
+};
+
+export type RuntimeRecoveryResultState =
+  | "restart_verified"
+  | "restart_failed"
+  | "restart_rate_limited"
+  | "restart_needs_operator";
+
+export type RuntimeRecoverySource = "sidecar_runtime" | "android_bridge_observation" | "ui_local";
+
+export type RuntimeRecoveryTruthScope =
+  | "sidecar_health"
+  | "sidecar_ready"
+  | "native_runtime_host"
+  | "task_route_surface"
+  | "ui_submit";
+
+export type RuntimeRecoveryOutcome = {
+  result: RuntimeRecoveryResultState;
+  source: RuntimeRecoverySource;
+  truth_scope: RuntimeRecoveryTruthScope[];
+  verified: boolean;
+  checked_at: string;
+  note: string;
+  blocking_reason?: string;
+  attempts_used: number;
+  next_allowed_at?: string;
 };
 
 export type ProviderDiagnosticPayload = {
   task_id?: string;
+  attempt_id?: string;
   error_code?: string;
   code?: string;
   error_category?: string;
@@ -20,6 +50,7 @@ export type ProviderDiagnosticPayload = {
 
 export type TaskSnapshot = {
   task_id: string;
+  attempt_id: string;
   prompt: string;
   intent: string;
   room_id: string;
@@ -50,6 +81,7 @@ export type CommandSubmitResponse = {
   handled?: boolean;
   kind?: "task" | "movement" | string;
   task_id?: string;
+  attempt_id?: string;
   immediate_state?: TaskSnapshot | null;
   intake_gate?: Record<string, unknown> | null;
   plan?: Record<string, unknown> | null;

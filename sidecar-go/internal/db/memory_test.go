@@ -17,6 +17,7 @@ func TestTaskSlotPersistsMemoryIntentAssessment(t *testing.T) {
 
 	task := runtime.TaskSnapshot{
 		TaskID:    "task_memory_write",
+		AttemptID: "attempt_memory_write",
 		Prompt:    "remember that I prefer cinnamon",
 		Intent:    "memory",
 		RoomID:    "archive",
@@ -50,6 +51,9 @@ func TestTaskSlotPersistsMemoryIntentAssessment(t *testing.T) {
 	}
 	if got := loaded.IntakeAssessment.MemoryIntent.SafetyStatus; got != "needs_confirmation" {
 		t.Fatalf("expected memory safety status to round-trip, got %q", got)
+	}
+	if got := loaded.AttemptID; got != "attempt_memory_write" {
+		t.Fatalf("expected attempt_id to round-trip, got %q", got)
 	}
 }
 

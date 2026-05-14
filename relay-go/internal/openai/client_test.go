@@ -1,6 +1,9 @@
 package openai
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -30,6 +33,21 @@ func TestBuildResponsesBodyStripsUnsupportedXAIFields(t *testing.T) {
 
 	if body["model"] != "grok-4" {
 		t.Fatalf("expected model to be preserved")
+	}
+}
+
+func TestTurnRejectsInvalidPlannerResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":[{"content":[{"type":"output_text","text":"{\"intent\":\"general\",\"target_room\":\"main_hall\",\"thought_text\":\"bad\",\"summary\":\"bad\",\"report_text\":\"bad\",\"completion_status\":\"completed\",\"continuation_status\":\"completed\",\"action_type\":\"emit_message\",\"action_payload\":{\"message\":\"not proof\"},\"requires_user_choice\":false,\"choices\":[]}"}]}]}`))
+	}))
+	defer server.Close()
+
+	client := New("key", "grok-4", server.URL)
+	client.HTTP = server.Client()
+	_, err := client.Turn(context.Background(), contracts.RelayTurnRequest{Phase: "intake", Prompt: "test"})
+	if err == nil || !strings.Contains(err.Error(), "emit_message_cannot_complete") {
+		t.Fatalf("expected typed validation failure, got %v", err)
 	}
 }
 

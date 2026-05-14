@@ -138,9 +138,11 @@ export default function MainHallScreen() {
       setSendStatus("");
       setSendError(message);
       pushEvent({
-        type: "runtime.error",
+        type: "ui_local.error",
         timestamp: new Date().toISOString(),
-        payload: { message, recoverable: true }
+        source: "ui_local",
+        truth_scope: "ui_submit",
+        payload: { message, recoverable: true, source: "ui_local", truth_scope: "ui_submit" }
       });
       await refreshRuntimeState();
     } finally {

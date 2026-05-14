@@ -2,8 +2,6 @@ package tasks
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"xmilo/sidecar-go/internal/contextpolicy"
 	"xmilo/sidecar-go/internal/db"
 	"xmilo/sidecar-go/internal/llm"
 	"xmilo/sidecar-go/internal/movement"
@@ -20,6 +19,7 @@ import (
 	"xmilo/sidecar-go/internal/runtime"
 	"xmilo/sidecar-go/internal/ws"
 	"xmilo/sidecar-go/shared/contracts"
+	"xmilo/sidecar-go/shared/plannerpolicy"
 )
 
 type TurnClient interface {
@@ -59,6 +59,10 @@ func New(store *db.Store, turnClient TurnClient, hub *ws.Hub, systemPrompt strin
 		responseStyle: "balanced",
 		memoryStore:   make(map[string]string),
 	}
+}
+
+func newAttemptID() string {
+	return "attempt_" + uuid.NewString()
 }
 
 func (e *Engine) ReconcileStaleActiveTask() error {
@@ -117,6 +121,7 @@ func (e *Engine) StartTask(ctx context.Context, prompt string) (*runtime.TaskSna
 	now := time.Now().UTC().Format(time.RFC3339)
 	task := runtime.TaskSnapshot{
 		TaskID:           "task_" + uuid.NewString(),
+		AttemptID:        newAttemptID(),
 		Prompt:           prompt,
 		Intent:           route.Intent,
 		RoomID:           route.RoomID,
@@ -137,7 +142,7 @@ func (e *Engine) StartTask(ctx context.Context, prompt string) (*runtime.TaskSna
 	_ = e.store.SetRuntimeConfig("last_meaningful_user_action_at", now)
 	e.emit("task.intake_evaluated", map[string]any{"surface": "start_task", "assessment": assessment})
 
-	e.emit("task.accepted", map[string]any{"task_id": task.TaskID, "intent": task.Intent, "room_id": task.RoomID})
+	e.emit("task.accepted", map[string]any{"task_id": task.TaskID, "attempt_id": task.AttemptID, "intent": task.Intent, "room_id": task.RoomID})
 	e.transitionTo("moving")
 	e.emit("milo.movement_started", map[string]any{
 		"from_room": e.currentRoomID, "from_anchor": e.currentAnchor,
@@ -156,12 +161,18 @@ func (e *Engine) runTask(ctx context.Context, task runtime.TaskSnapshot) {
 func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot, phase string, checkpoint *runtime.ResumeCheckpoint) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
+	if task.AttemptID == "" {
+		task.AttemptID = newAttemptID()
+	}
+	if checkpoint != nil && checkpoint.AttemptID == "" {
+		checkpoint.AttemptID = task.AttemptID
+	}
 
 	e.currentRoomID = task.RoomID
 	e.currentAnchor = task.AnchorID
 	e.emit("milo.room_changed", map[string]any{"room_id": task.RoomID, "anchor_id": task.AnchorID})
 	e.transitionTo("working")
-	e.emit("task.progress", map[string]any{"task_id": task.TaskID, "phase": "intake", "room_id": task.RoomID, "anchor_id": task.AnchorID, "message": "Milo is reasoning."})
+	e.emit("task.progress", map[string]any{"task_id": task.TaskID, "attempt_id": task.AttemptID, "phase": "intake", "room_id": task.RoomID, "anchor_id": task.AnchorID, "message": "Milo is reasoning."})
 
 	if phase == "intake" {
 		_ = e.store.AppendConversation("user", task.Prompt)
@@ -172,19 +183,19 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		turnTail = append(turnTail, contracts.TurnMessage{Role: item["role"], Content: item["content"]})
 	}
 
-	// If the user has an active pasted context (Phase 3), prepend it to the relay
-	// prompt only — conversation history stores the clean prompt so the context
-	// does not bloat every subsequent turn in the tail.
+	// Staged context is sidecar-gated untrusted external data. Conversation
+	// history stores the clean prompt so context does not bloat future turns.
 	promptForRelay := task.Prompt
 	if checkpoint != nil {
 		checkpointPayload, _ := json.Marshal(checkpoint)
 		promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n" + task.Prompt
 	}
-	if activeCtx, _ := e.store.GetRuntimeConfig("active_context"); activeCtx != "" {
-		promptForRelay = "<untrusted_staged_context>\n" + activeCtx + "\n</untrusted_staged_context>\n\n" + task.Prompt
+	if activeCtx, ok := e.activeStoredContext(); ok {
+		contextBlock := contextpolicy.PromptBlock(activeCtx)
+		promptForRelay = contextBlock + "\n\n" + task.Prompt
 		if checkpoint != nil {
 			checkpointPayload, _ := json.Marshal(checkpoint)
-			promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n<untrusted_staged_context>\n" + activeCtx + "\n</untrusted_staged_context>\n\n" + task.Prompt
+			promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n" + contextBlock + "\n\n" + task.Prompt
 		}
 	}
 
@@ -209,10 +220,11 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 			_ = e.store.ClearTask("active")
 			e.transitionTo("idle")
 			e.emit("task.entitlement_lost", map[string]any{
-				"task_id": task.TaskID,
-				"prompt":  task.Prompt,
-				"saved":   true,
-				"message": "Access ended mid-task. Task state saved — subscribe or redeem a code to resume.",
+				"task_id":    task.TaskID,
+				"attempt_id": task.AttemptID,
+				"prompt":     task.Prompt,
+				"saved":      true,
+				"message":    "Access ended mid-task. Task state saved — subscribe or redeem a code to resume.",
 			})
 			return
 		}
@@ -226,10 +238,21 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		e.emit("runtime.error", map[string]any{"message": err.Error(), "recoverable": true})
 		if diagnostic := llm.SafeDiagnostic(err); diagnostic != nil {
 			diagnostic["task_id"] = task.TaskID
+			diagnostic["attempt_id"] = task.AttemptID
 			e.emit("local_provider.diagnostic", diagnostic)
 		}
-		e.emit("task.stuck", map[string]any{"task_id": task.TaskID, "reason": err.Error(), "recovery_options": []string{"retry", "cancel"}})
+		e.emit("task.stuck", map[string]any{"task_id": task.TaskID, "attempt_id": task.AttemptID, "reason": err.Error(), "recovery_options": []string{"retry", "cancel"}})
 		return
+	}
+
+	if err := plannerpolicy.ValidateResponse(relayResp); err != nil {
+		relayResp = blockedTypedActionResponse(relayResp, "invalid_planner_response:"+err.Error(), "Planner response failed typed validation.")
+		if strings.TrimSpace(relayResp.Summary) == "" {
+			relayResp.Summary = "Planner response rejected"
+		}
+		if strings.TrimSpace(relayResp.ReportText) == "" {
+			relayResp.ReportText = "Milo rejected an unsafe or malformed planner response before using it as runtime truth."
+		}
 	}
 
 	relayResp = e.enforceIntakeCeiling(task, checkpoint, relayResp, phase)
@@ -238,9 +261,12 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		relayResp = e.enforceResumedTypedAction(task, checkpoint, relayResp)
 	}
 
+	relayResp = e.enforceCompletionEvidence(&task, checkpoint, relayResp)
+	e.recordEvidenceBoundary(&task, checkpoint, relayResp)
+
 	_ = e.store.AppendConversation("assistant", relayResp.ReportText)
 	e.emit("milo.thought", map[string]any{"text": relayResp.ThoughtText, "style": "standard", "trigger": "auto"})
-	e.emit("task.progress", map[string]any{"task_id": task.TaskID, "phase": "report", "room_id": "main_hall", "anchor_id": "main_hall_center", "message": "Milo is returning with a report."})
+	e.emit("task.progress", map[string]any{"task_id": task.TaskID, "attempt_id": task.AttemptID, "phase": "report", "room_id": "main_hall", "anchor_id": "main_hall_center", "message": "Milo is returning with a report."})
 	e.transitionTo("moving")
 	e.emit("milo.movement_started", map[string]any{
 		"from_room": task.RoomID, "from_anchor": task.AnchorID,
@@ -281,10 +307,11 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 
 	switch outcome.TaskStatus {
 	case "completed":
-		e.emit("task.completed", map[string]any{"task_id": task.TaskID, "summary": relayResp.Summary, "trophy_eligible": false})
+		e.emit("task.completed", map[string]any{"task_id": task.TaskID, "attempt_id": task.AttemptID, "summary": relayResp.Summary, "trophy_eligible": false})
 	default:
 		e.emit(outcome.EventType, map[string]any{
 			"task_id":         task.TaskID,
+			"attempt_id":      task.AttemptID,
 			"summary":         relayResp.Summary,
 			"report_text":     relayResp.ReportText,
 			"blocker":         outcome.Blocker,
@@ -294,6 +321,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 	}
 	e.emit("archive.record_created", map[string]any{
 		"task_id":      task.TaskID,
+		"attempt_id":   task.AttemptID,
 		"title":        relayResp.Summary,
 		"description":  relayResp.ReportText,
 		"created_at":   time.Now().UTC().Format(time.RFC3339),
@@ -302,6 +330,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 	})
 	e.emit("report.ready", map[string]any{
 		"task_id":             task.TaskID,
+		"attempt_id":          task.AttemptID,
 		"report_text":         relayResp.ReportText,
 		"style":               e.responseStyle,
 		"completion_status":   outcome.TaskStatus,
@@ -329,7 +358,7 @@ func (e *Engine) InterruptTask(reason string) error {
 	e.currentRoomID = "main_hall"
 	e.currentAnchor = "main_hall_center"
 	e.transitionTo("idle")
-	e.emit("task.cancelled", map[string]any{"task_id": task.TaskID, "reason": reason})
+	e.emit("task.cancelled", map[string]any{"task_id": task.TaskID, "attempt_id": task.AttemptID, "reason": reason})
 	return nil
 }
 
@@ -524,7 +553,7 @@ func (e *Engine) RecordChoice(taskID, choice, decision string) (*runtime.Approva
 		_ = e.store.SetApprovalState(approval)
 		_ = e.store.SetResumeCheckpoint(checkpoint)
 		e.emit("task.intake_evaluated", map[string]any{"surface": "task_choice", "assessment": assessment})
-		e.emit("task.blocked", map[string]any{"task_id": taskID, "blocker": "user_denied_choice"})
+		e.emit("task.blocked", map[string]any{"task_id": taskID, "attempt_id": task.AttemptID, "blocker": "user_denied_choice"})
 		return approval, assessment, nil
 	case "approve":
 	default:
@@ -583,6 +612,7 @@ func (e *Engine) RecordChoice(taskID, choice, decision string) (*runtime.Approva
 	e.emit("task.intake_evaluated", map[string]any{"surface": "task_choice", "assessment": assessment})
 	e.emit("task.choice_recorded", map[string]any{
 		"task_id":         taskID,
+		"attempt_id":      task.AttemptID,
 		"selected_choice": choice,
 		"decision":        "approve",
 	})
@@ -618,6 +648,8 @@ func (e *Engine) ResumePending(ctx context.Context) (*runtime.TaskSnapshot, *run
 	checkpoint.IntakeAssessment = assessment
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	task.AttemptID = newAttemptID()
+	checkpoint.AttemptID = task.AttemptID
 	task.Status = "running"
 	task.StuckReason = ""
 	task.UpdatedAt = now
@@ -628,11 +660,12 @@ func (e *Engine) ResumePending(ctx context.Context) (*runtime.TaskSnapshot, *run
 	e.emit("task.intake_evaluated", map[string]any{"surface": "resume", "assessment": assessment})
 
 	e.emit("task.accepted", map[string]any{
-		"task_id": task.TaskID,
-		"intent":  task.Intent,
-		"room_id": task.RoomID,
-		"resumed": true,
-		"phase":   checkpoint.Phase,
+		"task_id":    task.TaskID,
+		"attempt_id": task.AttemptID,
+		"intent":     task.Intent,
+		"room_id":    task.RoomID,
+		"resumed":    true,
+		"phase":      checkpoint.Phase,
 	})
 	e.transitionTo("working")
 
@@ -644,6 +677,53 @@ func (e *Engine) ResumePending(ctx context.Context) (*runtime.TaskSnapshot, *run
 // DiscardInterrupted clears the saved interrupted task (user chose "start new").
 func (e *Engine) DiscardInterrupted() error {
 	return e.store.ClearTask("interrupted")
+}
+
+func (e *Engine) RecordAppBridgeEvidence(evidence runtime.AppBridgeEvidence) (*runtime.AppBridgeEvidence, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	task, err := e.store.GetTask("active")
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, errors.New("app_bridge_evidence_no_active_task")
+	}
+	if strings.TrimSpace(evidence.TaskID) == "" {
+		return nil, errors.New("app_bridge_evidence_missing_task_id")
+	}
+	if evidence.TaskID != task.TaskID {
+		return nil, errors.New("app_bridge_evidence_task_mismatch")
+	}
+	if strings.TrimSpace(evidence.AttemptID) == "" {
+		return nil, errors.New("app_bridge_evidence_missing_attempt_id")
+	}
+	if task.AttemptID == "" || evidence.AttemptID != task.AttemptID {
+		return nil, errors.New("app_bridge_evidence_attempt_mismatch")
+	}
+
+	boundary := e.ensureEvidenceBoundary(task, nil)
+	boundary.AppBridgeEvidence = append(boundary.AppBridgeEvidence, evidence)
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := e.store.UpsertTask("active", *task); err != nil {
+		return nil, err
+	}
+
+	checkpoint, err := e.store.GetResumeCheckpoint()
+	if err != nil {
+		return nil, err
+	}
+	if checkpoint != nil && checkpoint.TaskID == task.TaskID {
+		if checkpoint.EvidenceBoundary == nil {
+			checkpoint.EvidenceBoundary = boundary
+		} else {
+			checkpoint.EvidenceBoundary.AppBridgeEvidence = append(checkpoint.EvidenceBoundary.AppBridgeEvidence, evidence)
+		}
+		_ = e.store.SetResumeCheckpoint(checkpoint)
+	}
+
+	return &evidence, nil
 }
 
 type relayOutcome struct {
@@ -926,11 +1006,25 @@ func (e *Engine) ensureEvidenceBoundary(task *runtime.TaskSnapshot, checkpoint *
 	if boundary == nil {
 		boundary = &runtime.EvidenceBoundary{}
 	}
+	boundary.AppBridgeEvidence = appBridgeEvidenceForTaskAttempt(boundary.AppBridgeEvidence, task.TaskID, task.AttemptID)
 	task.EvidenceBoundary = boundary
 	if checkpoint != nil {
 		checkpoint.EvidenceBoundary = boundary
 	}
 	return boundary
+}
+
+func appBridgeEvidenceForTaskAttempt(evidence []runtime.AppBridgeEvidence, taskID, attemptID string) []runtime.AppBridgeEvidence {
+	if taskID == "" || attemptID == "" || len(evidence) == 0 {
+		return nil
+	}
+	filtered := evidence[:0]
+	for _, item := range evidence {
+		if item.TaskID == taskID && item.AttemptID == attemptID {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func (e *Engine) updateEvidenceFromResponse(boundary *runtime.EvidenceBoundary, resp contracts.RelayTurnResponse) {
@@ -1032,9 +1126,10 @@ func (e *Engine) executeEmitMessage(task runtime.TaskSnapshot, payload map[strin
 	}
 
 	e.emit("task.message_emitted", map[string]any{
-		"task_id": task.TaskID,
-		"message": message,
-		"phase":   "resume_message",
+		"task_id":    task.TaskID,
+		"attempt_id": task.AttemptID,
+		"message":    message,
+		"phase":      "resume_message",
 	})
 	return &contracts.ExecutionResult{
 		Status:        "emitted",
@@ -1398,6 +1493,9 @@ func updatedCheckpointFromResult(checkpoint *runtime.ResumeCheckpoint, result *c
 }
 
 func (e *Engine) finalizeTask(task *runtime.TaskSnapshot, checkpoint *runtime.ResumeCheckpoint, relayResp contracts.RelayTurnResponse) {
+	relayResp = e.enforceCompletionEvidence(task, checkpoint, relayResp)
+	e.recordEvidenceBoundary(task, checkpoint, relayResp)
+
 	_ = e.store.AppendConversation("assistant", relayResp.ReportText)
 	e.emit("milo.thought", map[string]any{"text": relayResp.ThoughtText, "style": "standard", "trigger": "auto"})
 
@@ -1459,10 +1557,11 @@ func (e *Engine) finalizeTask(task *runtime.TaskSnapshot, checkpoint *runtime.Re
 
 	switch outcome.TaskStatus {
 	case "completed":
-		e.emit("task.completed", map[string]any{"task_id": task.TaskID, "summary": relayResp.Summary, "trophy_eligible": false})
+		e.emit("task.completed", map[string]any{"task_id": task.TaskID, "attempt_id": task.AttemptID, "summary": relayResp.Summary, "trophy_eligible": false})
 	default:
 		e.emit(outcome.EventType, map[string]any{
 			"task_id":         task.TaskID,
+			"attempt_id":      task.AttemptID,
 			"summary":         relayResp.Summary,
 			"report_text":     relayResp.ReportText,
 			"blocker":         outcome.Blocker,
@@ -1472,6 +1571,7 @@ func (e *Engine) finalizeTask(task *runtime.TaskSnapshot, checkpoint *runtime.Re
 	}
 	e.emit("archive.record_created", map[string]any{
 		"task_id":      task.TaskID,
+		"attempt_id":   task.AttemptID,
 		"title":        relayResp.Summary,
 		"description":  relayResp.ReportText,
 		"created_at":   time.Now().UTC().Format(time.RFC3339),
@@ -1480,6 +1580,7 @@ func (e *Engine) finalizeTask(task *runtime.TaskSnapshot, checkpoint *runtime.Re
 	})
 	e.emit("report.ready", map[string]any{
 		"task_id":             task.TaskID,
+		"attempt_id":          task.AttemptID,
 		"report_text":         relayResp.ReportText,
 		"style":               e.responseStyle,
 		"completion_status":   outcome.TaskStatus,
@@ -1487,6 +1588,7 @@ func (e *Engine) finalizeTask(task *runtime.TaskSnapshot, checkpoint *runtime.Re
 		"action_type":         relayResp.ActionType,
 		"continuation_status": relayResp.ContinuationStatus,
 		"execution_result":    relayResp.ExecutionResult,
+		"evidence_boundary":   task.EvidenceBoundary,
 	})
 }
 
@@ -1506,6 +1608,7 @@ func buildApprovalCheckpoint(task runtime.TaskSnapshot, blocker string, choices 
 	now := time.Now().UTC()
 	return &runtime.ResumeCheckpoint{
 		TaskID:             task.TaskID,
+		AttemptID:          task.AttemptID,
 		SourceStatus:       "awaiting_user_choice",
 		Phase:              "resume_after_user_choice",
 		Blocker:            blocker,
@@ -1530,6 +1633,7 @@ func buildInterruptedCheckpoint(task runtime.TaskSnapshot, contextHash string) *
 	now := time.Now().UTC()
 	return &runtime.ResumeCheckpoint{
 		TaskID:             task.TaskID,
+		AttemptID:          task.AttemptID,
 		SourceStatus:       "interrupted",
 		Phase:              "resume_after_interruption",
 		Blocker:            task.StuckReason,
@@ -1560,8 +1664,12 @@ func checkpointExpired(checkpoint *runtime.ResumeCheckpoint) bool {
 
 func (e *Engine) currentContextHash() string {
 	activeCtx, _ := e.store.GetRuntimeConfig("active_context")
-	sum := sha256.Sum256([]byte(activeCtx))
-	return hex.EncodeToString(sum[:])
+	metaRaw, _ := e.store.GetRuntimeConfig("active_context_meta")
+	stored, ok := contextpolicy.ParseStored(activeCtx, metaRaw, time.Now().UTC())
+	if !ok {
+		return ""
+	}
+	return contextpolicy.Hash(stored)
 }
 
 func contextHashMatches(expected, actual string) bool {
@@ -1616,6 +1724,16 @@ func (e *Engine) assessPromptIntake(prompt string) *runtime.IntakeAssessment {
 		assessment.ValidationState = "INVALID"
 		assessment.ChosenClosedAction = "REFUSE"
 		return assessment
+	}
+
+	if activeCtx, ok := e.activeStoredContext(); ok {
+		assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "external_untrusted")
+		assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "staged_context_active")
+		assessment.TrustTier = 6
+		if contextpolicy.InjectionHitCount(activeCtx.Content, injectionPhrases) > 0 {
+			assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "staged_context_injection_suspected")
+			assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "authority_spoof_suspected")
+		}
 	}
 
 	switch {
@@ -1734,6 +1852,12 @@ func appendUnique(values []string, candidate string) []string {
 	return append(values, candidate)
 }
 
+func (e *Engine) activeStoredContext() (contextpolicy.StoredContext, bool) {
+	activeCtx, _ := e.store.GetRuntimeConfig("active_context")
+	metaRaw, _ := e.store.GetRuntimeConfig("active_context_meta")
+	return contextpolicy.ParseStored(activeCtx, metaRaw, time.Now().UTC())
+}
+
 func (e *Engine) buildMemoryIntent(prompt, lower string, isWrite bool, injectionHits int) (*runtime.MemoryIntent, string) {
 	effect := "preference_read"
 	if isWrite {
@@ -1849,9 +1973,10 @@ func (e *Engine) reconcileStaleActiveTaskLocked(reason string) error {
 		return err
 	}
 	e.emit("task.stale_active_recovered", map[string]any{
-		"task_id": active.TaskID,
-		"status":  active.Status,
-		"reason":  reason,
+		"task_id":    active.TaskID,
+		"attempt_id": active.AttemptID,
+		"status":     active.Status,
+		"reason":     reason,
 	})
 	return nil
 }

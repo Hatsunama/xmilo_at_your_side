@@ -1,19 +1,28 @@
 import type { CommandSubmitResponse, EventEnvelope } from "../types/contracts";
 import { addArchiveRecord, initArchiveDb } from "./archiveDb";
 import { SIDECAR_BASE_URL } from "./config";
-import { resolveLocalhostBearerToken } from "./xmiloRuntimeHost";
+import {
+  captureTaskAttemptIdentityFromSidecarPayload,
+  clearCurrentTaskAttemptIdentity,
+  resolveLocalhostBearerToken
+} from "./xmiloRuntimeHost";
 
 async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
   const bearer = await resolveLocalhostBearerToken();
 
-  const response = await fetch(`${SIDECAR_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${bearer}`,
-      ...(init?.headers ?? {})
-    }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${SIDECAR_BASE_URL}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearer}`,
+        ...(init?.headers ?? {})
+      }
+    });
+  } catch (error) {
+    throw new Error(toUserFacingLocalProviderError(String((error as Error)?.message ?? error)));
+  }
 
   const text = await response.text();
   let data: any = null;
@@ -26,6 +35,16 @@ async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const rawMessage = String(data?.error_code === "ACTIVE_TASK_RUNNING" ? data.error_code : data?.error ?? data?.reason ?? response.statusText);
     throw new Error(toUserFacingLocalProviderError(rawMessage));
+  }
+  captureTaskAttemptIdentityFromSidecarPayload(data, `sidecar:${path}`);
+  if (path === "/state" && isObjectRecord(data) && !data.active_task) {
+    clearCurrentTaskAttemptIdentity("sidecar:/state:no_active_task");
+  }
+  if (path === "/task/current" && isObjectRecord(data) && !data.task) {
+    clearCurrentTaskAttemptIdentity("sidecar:/task/current:no_task");
+  }
+  if (path === "/task/interrupt") {
+    clearCurrentTaskAttemptIdentity("sidecar:/task/interrupt");
   }
   return data as T;
 }
@@ -46,6 +65,17 @@ export function toUserFacingLocalProviderError(rawMessage: string) {
       return "Local provider request failed. Check provider status, model, and local configuration.";
     case "local_provider_unavailable":
       return "Local provider is unavailable right now. Check the provider service or local Ollama server.";
+    case "local_provider_base_url_required":
+      return "Local provider base URL is required before saving.";
+    case "local_provider_disallowed_url_scheme":
+      return "Local provider URL scheme is not allowed for this provider.";
+    case "local_provider_custom_base_url_not_allowed":
+      return "Custom base URL is not allowed for this provider.";
+    case "local_provider_model_required":
+      return "Local provider model is required before saving.";
+    case "Network request failed":
+    case "Failed to fetch":
+      return "Local runtime route is still warming up. Wait a moment and try again.";
     case "ACTIVE_TASK_RUNNING":
     case "active task already running":
       return "Milo already has a task running. Wait for it to finish, or stop it before retrying.";
@@ -85,6 +115,49 @@ export async function getReady(): Promise<SidecarReadyStatus> {
   return request("/ready");
 }
 
+export type LocalProviderOption = {
+  id: string;
+  label: string;
+  default_model: string;
+  default_base_url: string;
+  key_required: boolean;
+  custom_base_url_allowed: boolean;
+  base_url_required: boolean;
+  allowed_schemes: string[];
+};
+
+export type LocalProviderResolveRequest = {
+  provider: string;
+  base_url?: string;
+  model?: string;
+  key_file_ready?: boolean;
+  has_api_key?: boolean;
+};
+
+export type LocalProviderResolvedConfig = {
+  provider: string;
+  model: string;
+  base_url: string;
+  key_required: boolean;
+  base_url_required: boolean;
+  local_turn_allowed: boolean;
+  readiness_reason?: string;
+  spec?: LocalProviderOption;
+};
+
+export async function getLocalProviderOptions(): Promise<LocalProviderOption[]> {
+  const response = await request<{ providers?: LocalProviderOption[] }>("/local-provider/options");
+  return response.providers ?? [];
+}
+
+export async function resolveLocalProviderConfig(input: LocalProviderResolveRequest): Promise<LocalProviderResolvedConfig> {
+  const response = await request<{ resolved: LocalProviderResolvedConfig }>("/local-provider/resolve", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+  return response.resolved;
+}
+
 export async function getState() {
   return request("/state");
 }
@@ -118,10 +191,19 @@ export async function getStorageStats() {
   return request("/storage/stats");
 }
 
-export async function setContext(content: string) {
+export type StagedContextPayload = {
+  content: string;
+  source: string;
+  provenance: string;
+  label?: string;
+  mime_type?: string | null;
+  created_at?: string;
+};
+
+export async function setContext(payload: StagedContextPayload) {
   return request("/context/set", {
     method: "POST",
-    body: JSON.stringify({ content })
+    body: JSON.stringify(payload)
   });
 }
 
@@ -296,14 +378,20 @@ export function connectBridge(onEvent: (event: EventEnvelope) => void) {
 
       socket.onmessage = async (event) => {
         const parsed = JSON.parse(event.data) as EventEnvelope;
-        onEvent(parsed);
+        const tagged: EventEnvelope = { ...parsed, source: "sidecar_runtime" };
+        if (isTaskTerminalEvent(tagged.type)) {
+          clearCurrentTaskAttemptIdentity(`event:${tagged.type}`);
+        } else {
+          captureTaskAttemptIdentityFromSidecarPayload(tagged, `event:${tagged.type}`);
+        }
+        onEvent(tagged);
 
-        if (parsed.type === "archive.record_created") {
+        if (tagged.type === "archive.record_created") {
           await addArchiveRecord({
-            task_id: parsed.payload.task_id,
-            title: parsed.payload.title,
-            description: parsed.payload.description,
-            created_at: parsed.payload.created_at
+            task_id: tagged.payload.task_id,
+            title: tagged.payload.title,
+            description: tagged.payload.description,
+            created_at: tagged.payload.created_at
           });
         }
       };
@@ -332,4 +420,17 @@ export function connectBridge(onEvent: (event: EventEnvelope) => void) {
     disposed = true;
     socket?.close();
   };
+}
+
+function isTaskTerminalEvent(type: string) {
+  return type === "task.completed" ||
+    type === "task.failed" ||
+    type === "task.blocked" ||
+    type === "task.stuck" ||
+    type === "task.cancelled" ||
+    type === "task.interrupted";
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
 }

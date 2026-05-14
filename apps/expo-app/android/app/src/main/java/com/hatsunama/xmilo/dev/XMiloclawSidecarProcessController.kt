@@ -7,6 +7,10 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import org.json.JSONObject
 
@@ -23,22 +27,11 @@ object XMiloclawSidecarProcessController {
   private const val PREFS_BYOK_BASE_URL_KEY = "byok_base_url"
   private const val PREFS_BYOK_MODEL_KEY = "byok_model"
   private const val TOKEN_FILENAME = "xmilo_localhost_bearer_token.txt"
-  private val BYOK_PROVIDER_DEFAULT_MODELS =
-    mapOf(
-      "xai" to "grok-4",
-      "openai" to "gpt-5.4",
-      "anthropic" to "claude-sonnet-4-5",
-      "ollama" to "llama3.2"
-    )
-  private val BYOK_PROVIDER_DEFAULT_BASE_URLS =
-    mapOf(
-      "xai" to "https://api.x.ai/v1",
-      "openai" to "https://api.openai.com/v1",
-      "anthropic" to "https://api.anthropic.com/v1"
-    )
   private const val CONNECT_TIMEOUT_MS = 1_000
   private const val READ_TIMEOUT_MS = 1_500
   private const val MAX_PROCESS_OUTPUT_LINE_CHARS = 220
+  private const val APP_BRIDGE_PROOF_CLASS = "app_bridge_verified"
+  private const val APP_BRIDGE_PROOF_SOURCE = "android_bridge"
   private val requiredMindFiles = listOf("IDENTITY.md", "SOUL.md", "SECURITY.md", "TOOLS.md", "USER.md")
 
   private val lock = Any()
@@ -294,19 +287,12 @@ object XMiloclawSidecarProcessController {
   }
 
   fun saveLocalBYOKConfig(context: Context, provider: String, apiKey: String, baseUrl: String, model: String): JSONObject {
-    val normalizedProvider = normalizeBYOKProvider(provider)
+    val providerToken = providerStorageToken(provider)
     val trimmedKey = apiKey.trim()
-    if (normalizedProvider != "ollama" && trimmedKey.isBlank()) {
-      throw IllegalArgumentException("missing local provider key")
-    }
     val trimmedBaseUrl = baseUrl.trim()
-    if (normalizedProvider == "ollama" && trimmedBaseUrl.isBlank()) {
-      throw IllegalArgumentException("missing local provider base URL")
-    }
-    val resolvedBaseUrl = trimmedBaseUrl.ifBlank { BYOK_PROVIDER_DEFAULT_BASE_URLS[normalizedProvider].orEmpty() }
-    val resolvedModel = model.trim().ifBlank { BYOK_PROVIDER_DEFAULT_MODELS.getValue(normalizedProvider) }
+    val resolvedModel = model.trim()
     val appContext = context.applicationContext
-    val keyFile = localBYOKKeyFile(appContext, normalizedProvider)
+    val keyFile = localBYOKKeyFile(appContext, providerToken)
     if (trimmedKey.isBlank()) {
       if (keyFile.exists() && !keyFile.delete()) {
         throw IllegalStateException("could not clear local key file")
@@ -326,29 +312,150 @@ object XMiloclawSidecarProcessController {
     appContext
       .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .edit()
-      .putString(PREFS_BYOK_PROVIDER_KEY, normalizedProvider)
-      .putString(PREFS_BYOK_BASE_URL_KEY, resolvedBaseUrl)
+      .putString(PREFS_BYOK_PROVIDER_KEY, providerToken)
+      .putString(PREFS_BYOK_BASE_URL_KEY, trimmedBaseUrl)
       .putString(PREFS_BYOK_MODEL_KEY, resolvedModel)
       .apply()
-    return localBYOKStatus(appContext)
+    val status = localBYOKStatus(appContext)
+    status.put("bridgeProof", localBYOKBridgeProof(status))
+    return status
   }
 
   fun localBYOKStatus(context: Context): JSONObject {
     val appContext = context.applicationContext
     val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    val provider = prefs.getString(PREFS_BYOK_PROVIDER_KEY, null)?.let { normalizeBYOKProviderOrNull(it) } ?: "xai"
+    val provider = prefs.getString(PREFS_BYOK_PROVIDER_KEY, null)?.let { providerStorageTokenOrNull(it) }.orEmpty()
     val keyFile = localBYOKKeyFile(appContext, provider)
     val baseUrl = prefs.getString(PREFS_BYOK_BASE_URL_KEY, null).orEmpty()
-    val model = prefs.getString(PREFS_BYOK_MODEL_KEY, null).orEmpty().ifBlank { BYOK_PROVIDER_DEFAULT_MODELS[provider].orEmpty() }
+    val model = prefs.getString(PREFS_BYOK_MODEL_KEY, null).orEmpty()
     val keyFileReady = keyFile.exists() && keyFile.length() > 0
-    val baseUrlReady = provider != "ollama" || baseUrl.isNotBlank()
+    val baseUrlReady = baseUrl.isNotBlank()
     return JSONObject()
       .put("provider", provider)
       .put("keyFileReady", keyFileReady)
       .put("keyFilePath", keyFile.absolutePath)
       .put("baseUrlReady", baseUrlReady)
       .put("model", model)
-      .put("byokReady", if (provider == "ollama") baseUrlReady else keyFileReady)
+      .put("byokReady", keyFileReady || baseUrlReady || model.isNotBlank())
+  }
+
+  fun runtimeStatusBridgeProof(status: XMiloclawRuntimeStatus, operation: String): JSONObject {
+    val normalizedOperation =
+      when (operation) {
+        "runtime_host_start",
+        "runtime_host_restart",
+        "native_sidecar_payload_ready",
+        "sidecar_ready_probe",
+        "task_route_surface_ready",
+        "permission_state_snapshot" -> operation
+        else -> "runtime_host_status"
+      }
+    val verified =
+      when (normalizedOperation) {
+        "native_sidecar_payload_ready" -> status.runtimeFilesPrepared
+        "sidecar_ready_probe" -> status.bridgeConnected && status.taskRouteSurfaceReady
+        "task_route_surface_ready" -> status.taskRouteSurfaceReady
+        "permission_state_snapshot" ->
+          status.notificationsGranted &&
+            status.appearOnTopGranted &&
+            status.batteryUnrestricted &&
+            status.accessibilityEnabled
+        else -> status.hostReady
+      }
+    val summary =
+      if (verified) {
+        "Android bridge verified $normalizedOperation."
+      } else {
+        "Android bridge observed $normalizedOperation is not ready."
+      }
+    val proof =
+      baseBridgeProof(
+        operation = normalizedOperation,
+        verified = verified,
+        summary = summary,
+        blockingReason = if (verified) null else bridgeBlockingReason(status, normalizedOperation)
+      )
+    proof.put(
+      "details",
+      JSONObject()
+        .put("notifications_granted", status.notificationsGranted)
+        .put("appear_on_top_granted", status.appearOnTopGranted)
+        .put("battery_unrestricted", status.batteryUnrestricted)
+        .put("accessibility_enabled", status.accessibilityEnabled)
+        .put("foreground_service_started", status.foregroundServiceStarted)
+        .put("runtime_files_prepared", status.runtimeFilesPrepared)
+        .put("sidecar_process_launched", status.sidecarProcessLaunched)
+        .put("sidecar_process_alive", status.sidecarProcessAlive)
+        .put("bridge_connected", status.bridgeConnected)
+        .put("task_route_surface_ready", status.taskRouteSurfaceReady)
+        .put("host_ready", status.hostReady)
+        .put("last_runtime_stage", sanitizeProofText(status.lastRuntimeStage))
+        .put("last_health_code", status.lastHealthCode ?: JSONObject.NULL)
+        .put("last_ready_code", status.lastReadyCode ?: JSONObject.NULL)
+        .put("last_health_category", sanitizeProofText(status.lastHealthCategory))
+        .put("last_ready_category", sanitizeProofText(status.lastReadyCategory))
+        .put("restart_attempted", status.restartAttempted)
+        .put("restart_succeeded", status.restartSucceeded ?: JSONObject.NULL)
+    )
+    return proof
+  }
+
+  private fun localBYOKBridgeProof(status: JSONObject): JSONObject {
+    val keyFileReady = status.optBoolean("keyFileReady", false)
+    val proof =
+      baseBridgeProof(
+        operation = "byok_key_storage",
+        verified = keyFileReady,
+        summary =
+          if (keyFileReady) {
+            "Android bridge verified local provider key storage."
+          } else {
+            "Android bridge did not verify local provider key storage."
+          },
+        blockingReason = if (keyFileReady) null else "byok_key_file_not_ready"
+      )
+    proof.put(
+      "details",
+      JSONObject()
+        .put("provider", sanitizeProofText(status.optString("provider", "")))
+        .put("key_file_ready", keyFileReady)
+        .put("base_url_ready", status.optBoolean("baseUrlReady", false))
+        .put("model_configured", status.optString("model", "").isNotBlank())
+        .put("byok_ready", status.optBoolean("byokReady", false))
+    )
+    return proof
+  }
+
+  private fun baseBridgeProof(operation: String, verified: Boolean, summary: String, blockingReason: String?): JSONObject =
+    JSONObject()
+      .put("proof_class", APP_BRIDGE_PROOF_CLASS)
+      .put("verified", verified)
+      .put("source", APP_BRIDGE_PROOF_SOURCE)
+      .put("operation", operation)
+      .put("checked_at", checkedAtIso())
+      .put("summary", sanitizeProofText(summary))
+      .put("evidence_id", UUID.randomUUID().toString())
+      .apply {
+        if (!verified) {
+          put("blocking_reason", sanitizeProofText(blockingReason ?: "android_bridge_proof_not_verified"))
+        }
+      }
+
+  private fun bridgeBlockingReason(status: XMiloclawRuntimeStatus, operation: String): String =
+    when (operation) {
+      "native_sidecar_payload_ready" -> "native_sidecar_payload_not_ready"
+      "sidecar_ready_probe" -> "sidecar_ready_probe_not_verified:${status.lastReadyCategory}"
+      "task_route_surface_ready" -> "task_route_surface_not_ready:${status.lastReadyCategory}"
+      "permission_state_snapshot" -> "permission_state_incomplete"
+      "runtime_host_start" -> status.lastError ?: "runtime_host_start_not_ready:${status.lastRuntimeStage}"
+      "runtime_host_restart" -> status.lastError ?: "runtime_host_restart_not_ready:${status.lastRuntimeStage}"
+      else -> status.lastError ?: "runtime_host_status_not_ready:${status.lastRuntimeStage}"
+    }
+
+  private fun checkedAtIso(): String {
+    val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+    formatter.timeZone = TimeZone.getTimeZone("UTC")
+    return formatter.format(Date())
   }
 
   private fun prepareRuntime(context: Context): RuntimePaths {
@@ -429,12 +536,12 @@ object XMiloclawSidecarProcessController {
       prefs.edit().putString(PREFS_RUNTIME_ID_KEY, runtimeId).apply()
     }
 
-    val byokProvider = prefs.getString(PREFS_BYOK_PROVIDER_KEY, null)?.let { normalizeBYOKProviderOrNull(it) }
+    val byokProvider = prefs.getString(PREFS_BYOK_PROVIDER_KEY, null)?.let { providerStorageTokenOrNull(it) }
     val byokKeyFile = byokProvider?.let { localBYOKKeyFile(context, it) }
     val byokKeyReady = byokKeyFile?.let { it.exists() && it.length() > 0 } == true
     val byokBaseUrl = prefs.getString(PREFS_BYOK_BASE_URL_KEY, null).orEmpty()
-    val byokModel = byokProvider?.let { prefs.getString(PREFS_BYOK_MODEL_KEY, null).orEmpty().ifBlank { BYOK_PROVIDER_DEFAULT_MODELS[it].orEmpty() } }.orEmpty()
-    val localBYOKActive = byokProvider != null && if (byokProvider == "ollama") byokBaseUrl.isNotBlank() else byokKeyReady
+    val byokModel = prefs.getString(PREFS_BYOK_MODEL_KEY, null).orEmpty()
+    val localBYOKActive = byokProvider != null && (byokKeyReady || byokBaseUrl.isNotBlank() || byokModel.isNotBlank())
     val config =
       JSONObject()
         .put("host", HOST)
@@ -558,16 +665,19 @@ object XMiloclawSidecarProcessController {
 
   private fun localBYOKKeyFile(context: Context, provider: String): File = File(context.filesDir, "runtime/secrets/byok_${provider}.key")
 
-  private fun normalizeBYOKProvider(provider: String): String =
-    normalizeBYOKProviderOrNull(provider) ?: throw IllegalArgumentException("unsupported local BYOK provider")
+  private fun providerStorageToken(provider: String): String {
+    val token = provider.trim().lowercase()
+    if (token.isBlank() || !Regex("^[a-z0-9_-]{1,48}$").matches(token)) {
+      throw IllegalArgumentException("invalid local provider token")
+    }
+    return token
+  }
 
-  private fun normalizeBYOKProviderOrNull(provider: String): String? =
-    when (provider.trim().lowercase()) {
-      "xai", "grok" -> "xai"
-      "openai", "gpt" -> "openai"
-      "anthropic", "claude" -> "anthropic"
-      "ollama" -> "ollama"
-      else -> null
+  private fun providerStorageTokenOrNull(provider: String): String? =
+    try {
+      providerStorageToken(provider)
+    } catch (_: IllegalArgumentException) {
+      null
     }
 
   private fun updateReadyAccessFields(body: String) {
@@ -694,6 +804,12 @@ object XMiloclawSidecarProcessController {
         .replace(longSecretLikePattern, "[REDACTED_LONG_VALUE]")
     return redacted.take(MAX_PROCESS_OUTPUT_LINE_CHARS).ifBlank { "[empty]" }
   }
+
+  private fun sanitizeProofText(raw: String): String =
+    sanitizeProcessOutput(raw)
+      .replace(Regex("""(?i)(api[_-]?key|provider[_-]?key|secret|token)\s*[:=]\s*[^\s,"'}]+"""), "\$1=[REDACTED]")
+      .take(240)
+      .ifBlank { "unknown" }
 
   private fun categorizeProcessOutput(raw: String, sanitized: String): String {
     val text = raw.lowercase()

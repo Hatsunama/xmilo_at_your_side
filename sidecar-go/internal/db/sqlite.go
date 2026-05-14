@@ -45,6 +45,7 @@ func (s *Store) migrate() error {
 		{1, migration001},
 		{2, migration002},
 		{3, migration003},
+		{4, migration004},
 	}
 
 	current := 0
@@ -64,6 +65,8 @@ func (s *Store) migrate() error {
 			if migration.version == 2 && strings.Contains(err.Error(), "duplicate column name") && strings.Contains(err.Error(), "intake_assessment") {
 				// column already exists, nothing to do
 			} else if migration.version == 3 && strings.Contains(err.Error(), "duplicate column name") && strings.Contains(err.Error(), "evidence_boundary") {
+				// column already exists
+			} else if migration.version == 4 && strings.Contains(err.Error(), "duplicate column name") && strings.Contains(err.Error(), "attempt_id") {
 				// column already exists
 			} else {
 				return err
@@ -138,10 +141,11 @@ func (s *Store) UpsertTask(slot string, t runtime.TaskSnapshot) error {
 		return err
 	}
 	_, err = s.DB.Exec(`
-        INSERT INTO task_slots(slot, task_id, prompt, intent, room_id, anchor_id, status, started_at, updated_at, retry_count, max_retries, failure_type, stuck_reason, intake_assessment, evidence_boundary)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO task_slots(slot, task_id, attempt_id, prompt, intent, room_id, anchor_id, status, started_at, updated_at, retry_count, max_retries, failure_type, stuck_reason, intake_assessment, evidence_boundary)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(slot) DO UPDATE SET
             task_id = excluded.task_id,
+            attempt_id = excluded.attempt_id,
             prompt = excluded.prompt,
             intent = excluded.intent,
             room_id = excluded.room_id,
@@ -155,13 +159,13 @@ func (s *Store) UpsertTask(slot string, t runtime.TaskSnapshot) error {
             stuck_reason = excluded.stuck_reason,
             intake_assessment = excluded.intake_assessment,
             evidence_boundary = excluded.evidence_boundary
-    `, slot, t.TaskID, t.Prompt, t.Intent, t.RoomID, t.AnchorID, t.Status, t.StartedAt, t.UpdatedAt, t.RetryCount, t.MaxRetries, t.FailureType, t.StuckReason, intakeJSON, evidenceJSON)
+    `, slot, t.TaskID, t.AttemptID, t.Prompt, t.Intent, t.RoomID, t.AnchorID, t.Status, t.StartedAt, t.UpdatedAt, t.RetryCount, t.MaxRetries, t.FailureType, t.StuckReason, intakeJSON, evidenceJSON)
 	return err
 }
 
 func (s *Store) GetTask(slot string) (*runtime.TaskSnapshot, error) {
 	row := s.DB.QueryRow(`
-        SELECT task_id, prompt, intent, room_id, anchor_id, status, started_at, updated_at, retry_count, max_retries, failure_type, stuck_reason
+        SELECT task_id, attempt_id, prompt, intent, room_id, anchor_id, status, started_at, updated_at, retry_count, max_retries, failure_type, stuck_reason
  , intake_assessment, evidence_boundary
         FROM task_slots WHERE slot = ? AND task_id IS NOT NULL
     `, slot)
@@ -169,7 +173,7 @@ func (s *Store) GetTask(slot string) (*runtime.TaskSnapshot, error) {
 	var t runtime.TaskSnapshot
 	var intakeJSON string
 	var evidenceJSON string
-	if err := row.Scan(&t.TaskID, &t.Prompt, &t.Intent, &t.RoomID, &t.AnchorID, &t.Status, &t.StartedAt, &t.UpdatedAt, &t.RetryCount, &t.MaxRetries, &t.FailureType, &t.StuckReason, &intakeJSON, &evidenceJSON); err != nil {
+	if err := row.Scan(&t.TaskID, &t.AttemptID, &t.Prompt, &t.Intent, &t.RoomID, &t.AnchorID, &t.Status, &t.StartedAt, &t.UpdatedAt, &t.RetryCount, &t.MaxRetries, &t.FailureType, &t.StuckReason, &intakeJSON, &evidenceJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -377,3 +381,7 @@ func (s *Store) GetResumeCheckpoint() (*runtime.ResumeCheckpoint, error) {
 func (s *Store) ClearResumeCheckpoint() error {
 	return s.SetResumeCheckpoint(nil)
 }
+
+const migration004 = `
+ALTER TABLE task_slots ADD COLUMN attempt_id TEXT;
+`
