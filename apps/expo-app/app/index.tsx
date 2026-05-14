@@ -1,5 +1,5 @@
-import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -12,10 +12,12 @@ import {
 } from "react-native";
 
 import { MessageBubble } from "../src/components/MessageBubble";
+import { StagedContentChip } from "../src/components/StagedContentChip";
 import { StarterChips } from "../src/components/StarterChips";
 import { clearStagedInputs, listStagedInputs } from "../src/lib/archiveDb";
 import { authCheck, clearContext, getHealth, getReady, setContext, submitAIReport, submitCommand, taskInterrupt, type SidecarReadyStatus } from "../src/lib/bridge";
 import { formatStagedInputsForContext, stageDocumentPick, stageImagePick, type StagedInputRecord } from "../src/lib/externalIntake";
+import { useDailyConversation } from "../src/hooks/useDailyConversation";
 import {
   firstTaskAccessMessage,
   firstTaskErrorMessage,
@@ -39,6 +41,8 @@ const REPORT_REASONS = [
   "Pretending to have done something it did not do",
   "Other"
 ] as const;
+const PASTE_THRESHOLD = 800;
+const CONVERSATION_BOTTOM_THRESHOLD = 48;
 
 export default function MainHallScreen() {
   const router = useRouter();
@@ -51,10 +55,23 @@ export default function MainHallScreen() {
   const [sendError, setSendError] = useState("");
   const [currentSubmitTaskId, setCurrentSubmitTaskId] = useState("");
   const [stagedInputs, setStagedInputs] = useState<StagedInputRecord[]>([]);
+  const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
   const [verifiedEmail, setVerifiedEmail] = useState("");
   const [reportTarget, setReportTarget] = useState<EventEnvelope | null>(null);
   const [reportReason, setReportReason] = useState<(typeof REPORT_REASONS)[number]>("Harmful or unsafe");
   const [reportNote, setReportNote] = useState("");
+  const promptLenRef = useRef(0);
+  const conversationScrollRef = useRef<ScrollView>(null);
+  const pendingConversationScrollRef = useRef(false);
+  const lastConversationMessageCountRef = useRef(0);
+  const lastConversationLastMessageIdRef = useRef<string | null>(null);
+  const awaitingMainHallResponseScrollRef = useRef<{
+    taskId?: string | null;
+    attemptId?: string | null;
+    userMessageId: string;
+  } | null>(null);
+  const conversationScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dailyConversation = useDailyConversation(events, currentSubmitTaskId || state.active_task?.task_id);
 
   const refreshReadyStatus = useCallback(async () => {
     try {
@@ -108,7 +125,8 @@ export default function MainHallScreen() {
   );
 
   async function submit(nextPrompt: string) {
-    if (!nextPrompt.trim()) return;
+    const trimmedPrompt = nextPrompt.trim();
+    if (!trimmedPrompt) return;
     setBusy(true);
     setSendError("");
     setSendStatus("Checking current task state...");
@@ -123,15 +141,25 @@ export default function MainHallScreen() {
     }
     setCurrentSubmitTaskId("");
     setSendStatus("Sending...");
+    const userMessageId = await dailyConversation.appendUserPrompt(trimmedPrompt);
+    awaitingMainHallResponseScrollRef.current = { userMessageId };
     try {
-      const response = await submitCommand(nextPrompt.trim());
+      const response = await submitCommand(trimmedPrompt);
       safeLogSubmitResponse(response);
       const taskId = taskIdFromSubmitResponse(response);
+      const attemptId = response.attempt_id || response.immediate_state?.attempt_id || null;
+      awaitingMainHallResponseScrollRef.current = {
+        userMessageId,
+        taskId,
+        attemptId,
+      };
       if (taskId) {
         setCurrentSubmitTaskId(taskId);
+        await dailyConversation.updateMessageTaskIdentity(userMessageId, taskId, attemptId);
       }
       setSendStatus(submitResponseMessage(response));
       setPrompt("");
+      promptLenRef.current = 0;
       await refreshRuntimeState();
     } catch (error: any) {
       const message = firstTaskErrorMessage(error?.message ?? "Failed to start task");
@@ -184,6 +212,66 @@ export default function MainHallScreen() {
     setCurrentSubmitTaskId("");
   }, [taskProofResetVersion]);
 
+  const scheduleConversationScrollToEnd = useCallback(() => {
+    if (conversationScrollTimerRef.current) {
+      clearTimeout(conversationScrollTimerRef.current);
+      conversationScrollTimerRef.current = null;
+    }
+    requestAnimationFrame(() => {
+      conversationScrollTimerRef.current = setTimeout(() => {
+        pendingConversationScrollRef.current = false;
+        conversationScrollRef.current?.scrollToEnd({ animated: true });
+        conversationScrollTimerRef.current = null;
+      }, 0);
+    });
+  }, []);
+
+  useEffect(() => {
+    const messageCount = dailyConversation.messages.length;
+    const messageCountIncreased = messageCount > lastConversationMessageCountRef.current;
+    const newestMessage = messageCount > 0 ? dailyConversation.messages[messageCount - 1] : null;
+    const newestMessageId = newestMessage?.id ?? null;
+    const newestMessageChanged = Boolean(newestMessageId && newestMessageId !== lastConversationLastMessageIdRef.current);
+    lastConversationMessageCountRef.current = messageCount;
+    lastConversationLastMessageIdRef.current = newestMessageId;
+
+    if (dailyConversation.forceNextChatScrollRef.current) {
+      pendingConversationScrollRef.current = true;
+      dailyConversation.forceNextChatScrollRef.current = false;
+    }
+
+    const awaitedResponse = awaitingMainHallResponseScrollRef.current;
+    if (awaitedResponse && newestMessageChanged && newestMessage && newestMessage.role !== "user") {
+      const taskMatches = !awaitedResponse.taskId || !newestMessage.task_id || awaitedResponse.taskId === newestMessage.task_id;
+      if (taskMatches && newestMessage.id !== awaitedResponse.userMessageId) {
+        pendingConversationScrollRef.current = true;
+        awaitingMainHallResponseScrollRef.current = null;
+        scheduleConversationScrollToEnd();
+        return;
+      }
+    }
+
+    if (messageCountIncreased && (pendingConversationScrollRef.current || dailyConversation.chatNearBottomRef.current)) {
+      pendingConversationScrollRef.current = true;
+      scheduleConversationScrollToEnd();
+    }
+  }, [dailyConversation.chatNearBottomRef, dailyConversation.forceNextChatScrollRef, dailyConversation.messages.length, scheduleConversationScrollToEnd]);
+
+  useEffect(
+    () => () => {
+      if (conversationScrollTimerRef.current) {
+        clearTimeout(conversationScrollTimerRef.current);
+      }
+    },
+    []
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      void dailyConversation.loadDailyConversation();
+    }, [dailyConversation.loadDailyConversation])
+  );
+
   async function refreshStagedInputs() {
     const staged = await listStagedInputs();
     setStagedInputs(staged);
@@ -193,6 +281,34 @@ export default function MainHallScreen() {
     } else {
       await clearContext();
     }
+  }
+
+  async function handlePromptChange(text: string) {
+    const delta = text.length - promptLenRef.current;
+    promptLenRef.current = text.length;
+
+    if (delta > PASTE_THRESHOLD && text.length > PASTE_THRESHOLD) {
+      try {
+        await setContext({
+          content: text,
+          source: "large_paste",
+          provenance: "large_paste",
+          label: "Large paste",
+          mime_type: "text/plain",
+          created_at: new Date().toISOString()
+        });
+        const preview = text.slice(0, 80).replace(/\n/g, " ");
+        setPastedContext({ preview, charCount: text.length });
+        setPrompt("");
+        setSendError("");
+        promptLenRef.current = 0;
+      } catch (error: any) {
+        setSendError(error?.message ?? "Could not stage pasted context.");
+      }
+      return;
+    }
+
+    setPrompt(text);
   }
 
   async function attachFile() {
@@ -217,11 +333,23 @@ export default function MainHallScreen() {
 
   async function clearStaged() {
     try {
+      setPastedContext(null);
       await clearStagedInputs();
       await refreshStagedInputs();
     } catch (error: any) {
       Alert.alert("Clear staged inputs failed", error?.message ?? "Unknown error");
     }
+  }
+
+  async function dismissPastedContext() {
+    setPastedContext(null);
+    try {
+      if (stagedInputs.length) {
+        await refreshStagedInputs();
+      } else {
+        await clearContext();
+      }
+    } catch (_) {}
   }
 
   function openReport(event: EventEnvelope) {
@@ -330,6 +458,60 @@ export default function MainHallScreen() {
           </View>
         ) : null}
 
+        <View style={styles.conversationCard}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Daily conversation</Text>
+            <Text style={styles.conversationMeta}>
+              {dailyConversation.messages.length ? `${dailyConversation.messages.length} today` : "Today"}
+            </Text>
+          </View>
+          {dailyConversation.messages.length === 0 ? (
+            <View style={styles.conversationEmpty}>
+              <Text style={styles.conversationEmptyTitle}>No conversation yet today</Text>
+              <Text style={styles.conversationEmptyBody}>Send Milo a prompt here or in the Lair to start the shared daily thread.</Text>
+            </View>
+          ) : (
+            <ScrollView
+              ref={conversationScrollRef}
+              style={styles.conversationScroll}
+              contentContainerStyle={styles.conversationContent}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+              scrollEventThrottle={80}
+              onScroll={({ nativeEvent }) => {
+                const distanceFromBottom =
+                  nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
+                dailyConversation.chatNearBottomRef.current = distanceFromBottom < CONVERSATION_BOTTOM_THRESHOLD;
+              }}
+              onContentSizeChange={() => {
+                if (dailyConversation.forceNextChatScrollRef.current) {
+                  pendingConversationScrollRef.current = true;
+                  dailyConversation.forceNextChatScrollRef.current = false;
+                }
+                if (pendingConversationScrollRef.current || dailyConversation.chatNearBottomRef.current) {
+                  scheduleConversationScrollToEnd();
+                }
+              }}
+            >
+              {dailyConversation.messages.map((message) => (
+                <View
+                  key={message.id}
+                  style={[
+                    styles.conversationBubble,
+                    message.role === "user" ? styles.conversationBubbleUser : null,
+                    message.role === "system" ? styles.conversationBubbleSystem : null
+                  ]}
+                >
+                  <Text style={styles.conversationRole}>
+                    {message.role === "user" ? "You" : message.role === "system" ? "System" : "Milo"}
+                  </Text>
+                  <Text style={styles.conversationText}>{message.text}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
         <View style={styles.composerCard}>
           <Text style={styles.sectionTitle}>Send Milo a prompt</Text>
           {visibleSendStatus || visibleSendError ? (
@@ -350,28 +532,34 @@ export default function MainHallScreen() {
               <Text style={styles.attachButtonText}>Clear staged</Text>
             </Pressable>
           </View>
+          {pastedContext ? (
+            <StagedContentChip
+              label="Large paste"
+              meta={`${pastedContext.charCount.toLocaleString()} chars`}
+              preview={pastedContext.preview}
+              onRemove={dismissPastedContext}
+            />
+          ) : null}
           {stagedInputs.length ? (
-            <View style={styles.stagedCard}>
-              <Text style={styles.stagedTitle}>Staged for this task</Text>
+            <View style={styles.stagedChipList}>
               {stagedInputs.map((input) => (
-                <View key={input.id} style={styles.stagedItem}>
-                  <Text style={styles.stagedItemLabel}>{input.label}</Text>
-                  <Text style={styles.stagedItemMeta}>
-                    {input.input_type}
-                    {input.mime_type ? ` • ${input.mime_type}` : ""}
-                  </Text>
-                  {input.text_excerpt ? <Text style={styles.stagedExcerpt}>{input.text_excerpt.slice(0, 220)}</Text> : null}
-                </View>
+                <StagedContentChip
+                  key={input.id}
+                  label={input.label}
+                  meta={`${input.input_type}${input.mime_type ? ` · ${input.mime_type}` : ""}`}
+                  preview={input.text_excerpt?.replace(/\s+/g, " ").slice(0, 80)}
+                  onRemove={clearStaged}
+                />
               ))}
             </View>
           ) : null}
           <TextInput
             multiline
-            placeholder="Ask Milo something or send him somewhere..."
+            placeholder={pastedContext || stagedInputs.length ? "Now give Milo a prompt for this content..." : "Ask Milo something or send him somewhere..."}
             placeholderTextColor="#94A3B8"
             style={styles.input}
             value={prompt}
-            onChangeText={setPrompt}
+            onChangeText={handlePromptChange}
             maxLength={8000}
           />
           <Text style={styles.charCount}>{prompt.length}/8000</Text>
@@ -496,6 +684,27 @@ const styles = StyleSheet.create({
   pill: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: "#0F172A", borderWidth: 1, borderColor: "#23314F" },
   pillLabel: { color: "#94A3B8", fontSize: 11 },
   pillValue: { color: "#E2E8F0", fontWeight: "600", marginTop: 2 },
+  conversationCard: { backgroundColor: "#111827", borderRadius: 18, padding: 16, borderWidth: 1, borderColor: "#1F2937" },
+  conversationMeta: { color: "#94A3B8", fontSize: 12, fontWeight: "700" },
+  conversationEmpty: { marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: "#1E293B", backgroundColor: "#0F172A", padding: 14 },
+  conversationEmptyTitle: { color: "#F8FAFC", fontWeight: "700" },
+  conversationEmptyBody: { color: "#CBD5E1", marginTop: 6, lineHeight: 19 },
+  conversationScroll: { maxHeight: 400, marginTop: 12 },
+  conversationContent: { gap: 10, paddingBottom: 4 },
+  conversationBubble: {
+    alignSelf: "flex-start",
+    maxWidth: "88%",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#263653",
+    backgroundColor: "#0F172A",
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  conversationBubbleUser: { alignSelf: "flex-end", backgroundColor: "#1D2B4F", borderColor: "#355084" },
+  conversationBubbleSystem: { backgroundColor: "#251A33", borderColor: "#57406E" },
+  conversationRole: { color: "#A5B4FC", fontSize: 11, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 },
+  conversationText: { color: "#E5E7EB", lineHeight: 20 },
   composerCard: { backgroundColor: "#111827", borderRadius: 18, padding: 16, borderWidth: 1, borderColor: "#1F2937" },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   sectionTitle: { color: "#F8FAFC", fontSize: 18, fontWeight: "700" },
@@ -507,14 +716,10 @@ const styles = StyleSheet.create({
   attachRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
   attachButton: { backgroundColor: "#1F2937", borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12 },
   attachButtonText: { color: "#E2E8F0", fontWeight: "700" },
-  stagedCard: { marginTop: 12, backgroundColor: "#0F172A", borderRadius: 14, borderWidth: 1, borderColor: "#1E293B", padding: 12, gap: 10 },
-  stagedTitle: { color: "#C4B5FD", fontWeight: "700" },
-  stagedItem: { gap: 4 },
-  stagedItemLabel: { color: "#F8FAFC", fontWeight: "600" },
-  stagedItemMeta: { color: "#94A3B8", fontSize: 12 },
-  stagedExcerpt: { color: "#CBD5E1", fontSize: 12, lineHeight: 18 },
+  stagedChipList: { marginTop: 12, gap: 8 },
   input: {
-    minHeight: 120,
+    minHeight: 76,
+    maxHeight: 144,
     color: "#F8FAFC",
     backgroundColor: "#0F172A",
     borderRadius: 14,

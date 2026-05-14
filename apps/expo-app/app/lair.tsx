@@ -13,7 +13,7 @@
  * Navigation: accessible from the main index screen via "Enter the Lair".
  */
 
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BackHandler,
@@ -31,9 +31,11 @@ import {
 } from "react-native";
 
 import { usePersistentCastleSurface } from "../src/components/PersistentCastleSurface";
+import { StagedContentChip } from "../src/components/StagedContentChip";
 import { useApp } from "../src/state/AppContext";
 import { getReady, submitCommand, taskInterrupt, setContext, clearContext, type SidecarReadyStatus } from "../src/lib/bridge";
 import type { EventEnvelope } from "../src/types/contracts";
+import { useDailyConversation } from "../src/hooks/useDailyConversation";
 import {
   formatActiveTaskStatus,
   firstTaskAccessMessage,
@@ -45,17 +47,6 @@ import {
   taskIdFromEvent,
   taskIdFromSubmitResponse,
 } from "../src/lib/runtimeEvents";
-import {
-  appendLairChatMessage,
-  chatProjectionFromRuntimeEvent,
-  clearLairChatForDate,
-  listTodayLairChatMessages,
-  localChatDate,
-  removeLairChatMessagesForTaskSource,
-  resetLairChatAfterNightlyArchive,
-  updateLairChatMessageTaskIdentity,
-  type LairDailyChatMessage,
-} from "../src/lib/lairDailyChat";
 
 const ANDROID_KEYBOARD_CLEARANCE = 56;
 const CHAT_SWIPE_THRESHOLD = 28;
@@ -69,7 +60,6 @@ export default function WizardLairScreen() {
   const [busy, setBusy] = useState(false);
   const [inputVisible, setInputVisible] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
-  const [chatMessages, setChatMessages] = useState<LairDailyChatMessage[]>([]);
   const [sendStatus, setSendStatus] = useState("");
   const [sendError, setSendError] = useState("");
   const [readyStatus, setReadyStatus] = useState<SidecarReadyStatus | null>(null);
@@ -79,13 +69,10 @@ export default function WizardLairScreen() {
   const promptLenRef = useRef(0);
   const inputRef = useRef<TextInput>(null);
   const chatScrollRef = useRef<ScrollView>(null);
-  const currentChatDateRef = useRef(localChatDate());
-  const processedEventIdsRef = useRef(new Set<string>());
-  const reportReadyTaskIdsRef = useRef(new Set<string>());
-  const chatNearBottomRef = useRef(true);
-  const forceNextChatScrollRef = useRef(false);
   const castleSurface = usePersistentCastleSurface();
   const expandedChatMaxHeight = Math.round(windowHeight * 0.75);
+  const dailyConversation = useDailyConversation(events, currentSubmitTaskId || state.active_task?.task_id);
+  const chatMessages = dailyConversation.messages;
 
   // Chars added in a single onChangeText that signals a paste rather than typing.
   const PASTE_THRESHOLD = 800;
@@ -106,27 +93,6 @@ export default function WizardLairScreen() {
     []
   );
 
-  const loadDailyChat = useCallback(async () => {
-    const today = localChatDate();
-    currentChatDateRef.current = today;
-    const messages = await listTodayLairChatMessages(today);
-    setChatMessages(messages);
-    reportReadyTaskIdsRef.current = new Set(
-      messages
-        .filter((message) => message.source_event_type === "report.ready" && message.task_id)
-        .map((message) => String(message.task_id))
-    );
-  }, []);
-
-  const appendProjectedChat = useCallback(async (message: Parameters<typeof appendLairChatMessage>[0], forceScroll = false) => {
-    const saved = await appendLairChatMessage(message, currentChatDateRef.current);
-    if (!saved) return;
-    setChatMessages((prev) => (prev.some((item) => item.id === saved.id) ? prev : [...prev, saved]));
-    if (forceScroll || chatNearBottomRef.current) {
-      forceNextChatScrollRef.current = true;
-    }
-  }, []);
-
   function openComposer() {
     setInputVisible(true);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -139,21 +105,6 @@ export default function WizardLairScreen() {
     });
     return () => subscription.remove();
   }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    async function load() {
-      try {
-        await loadDailyChat();
-      } catch {
-        if (!disposed) setChatMessages([]);
-      }
-    }
-    void load();
-    return () => {
-      disposed = true;
-    };
-  }, [loadDailyChat]);
 
   const refreshReadyStatus = useCallback(async () => {
     try {
@@ -260,30 +211,14 @@ export default function WizardLairScreen() {
     }
     setSendStatus("Sending...");
     setCurrentSubmitTaskId("");
-    const userMessageId = `user:${new Date().toISOString()}:${Math.random().toString(36).slice(2)}`;
-    await appendProjectedChat(
-      {
-        id: userMessageId,
-        role: "user",
-        text: trimmedPrompt,
-        source_event_type: "ui.prompt_submitted",
-      },
-      true
-    );
+    const userMessageId = await dailyConversation.appendUserPrompt(trimmedPrompt);
     try {
       const response = await submitCommand(trimmedPrompt);
       safeLogSubmitResponse(response);
       const taskId = taskIdFromSubmitResponse(response);
       if (taskId) {
         setCurrentSubmitTaskId(taskId);
-        await updateLairChatMessageTaskIdentity(userMessageId, taskId, response.attempt_id || response.immediate_state?.attempt_id);
-        setChatMessages((prev) =>
-          prev.map((message) =>
-            message.id === userMessageId
-              ? { ...message, task_id: taskId, attempt_id: response.attempt_id || response.immediate_state?.attempt_id || null }
-              : message
-          )
-        );
+        await dailyConversation.updateMessageTaskIdentity(userMessageId, taskId, response.attempt_id || response.immediate_state?.attempt_id);
       }
       setPrompt("");
       promptLenRef.current = 0;
@@ -338,49 +273,16 @@ export default function WizardLairScreen() {
   }, [currentSubmitTaskId, events, state.active_task?.task_id]);
 
   useEffect(() => {
-    let disposed = false;
-    async function projectEvents() {
-      for (const event of events) {
-        const taskId = taskIdFromEvent(event);
-        const eventKey = `${event.type}:${event.timestamp}:${taskId}:${String(event.payload?.attempt_id ?? "")}`;
-        if (processedEventIdsRef.current.has(eventKey)) continue;
-        processedEventIdsRef.current.add(eventKey);
-
-        if (event.type === "maintenance.nightly_completed") {
-          await resetLairChatAfterNightlyArchive(event.payload?.archive_date);
-          if (disposed) return;
-          await loadDailyChat();
-          continue;
-        }
-
-        if (event.type === "report.ready" && taskId) {
-          reportReadyTaskIdsRef.current.add(taskId);
-          await removeLairChatMessagesForTaskSource(taskId, "task.completed");
-          if (!disposed) {
-            setChatMessages((prev) => prev.filter((message) => !(message.task_id === taskId && message.source_event_type === "task.completed")));
-          }
-        }
-
-        const projection = chatProjectionFromRuntimeEvent(event, {
-          reportReadyTaskIds: reportReadyTaskIdsRef.current,
-          currentTaskId: currentSubmitTaskId || state.active_task?.task_id,
-        });
-        if (projection) {
-          await appendProjectedChat(projection);
-        }
-      }
-    }
-    void projectEvents();
-    return () => {
-      disposed = true;
-    };
-  }, [appendProjectedChat, currentSubmitTaskId, events, loadDailyChat, state.active_task?.task_id]);
-
-  useEffect(() => {
-    if (!chatExpanded || !forceNextChatScrollRef.current) return;
-    forceNextChatScrollRef.current = false;
+    if (!chatExpanded || !dailyConversation.forceNextChatScrollRef.current) return;
+    dailyConversation.forceNextChatScrollRef.current = false;
     requestAnimationFrame(() => chatScrollRef.current?.scrollToEnd({ animated: true }));
-  }, [chatExpanded, chatMessages.length]);
+  }, [chatExpanded, chatMessages.length, dailyConversation.forceNextChatScrollRef]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void dailyConversation.loadDailyConversation();
+    }, [dailyConversation.loadDailyConversation])
+  );
 
   const roomLabel = ROOM_LABELS[state.current_room_id ?? "main_hall"] ?? "Main Hall";
   const miloStateLabel = STATE_LABELS[state.milo_state ?? "idle"] ?? "Idle";
@@ -460,7 +362,7 @@ export default function WizardLairScreen() {
               <Text style={styles.controlButtonText}>← Back</Text>
             </Pressable>
             <Pressable style={styles.chatTitleWrap} onPress={() => setChatExpanded(true)}>
-              <Text style={styles.chatTitle}>Daily Lair chat</Text>
+              <Text style={styles.chatTitle}>Daily conversation</Text>
               <Text style={styles.chatSubtitle}>{chatMessages.length ? `${chatMessages.length} messages today` : "Ready when you are"}</Text>
             </Pressable>
             {chatExpanded ? (
@@ -489,12 +391,12 @@ export default function WizardLairScreen() {
               keyboardShouldPersistTaps="handled"
               onScroll={({ nativeEvent }) => {
                 const distanceFromBottom = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
-                chatNearBottomRef.current = distanceFromBottom < CHAT_BOTTOM_THRESHOLD;
+                dailyConversation.chatNearBottomRef.current = distanceFromBottom < CHAT_BOTTOM_THRESHOLD;
               }}
               scrollEventThrottle={80}
               onContentSizeChange={() => {
-                if (forceNextChatScrollRef.current || chatNearBottomRef.current) {
-                  forceNextChatScrollRef.current = false;
+                if (dailyConversation.forceNextChatScrollRef.current || dailyConversation.chatNearBottomRef.current) {
+                  dailyConversation.forceNextChatScrollRef.current = false;
                   chatScrollRef.current?.scrollToEnd({ animated: true });
                 }
               }}
@@ -565,14 +467,12 @@ export default function WizardLairScreen() {
           {inputVisible ? (
             <View style={styles.inputRow}>
               {pastedContext && (
-                <View style={styles.pasteChip}>
-                  <Text style={styles.pasteChipText} numberOfLines={1}>
-                    📎 {pastedContext.charCount.toLocaleString()} chars · "{pastedContext.preview}…"
-                  </Text>
-                  <Pressable onPress={dismissPaste} hitSlop={8} style={styles.pasteChipDismiss}>
-                    <Text style={styles.pasteChipDismissText}>✕</Text>
-                  </Pressable>
-                </View>
+                <StagedContentChip
+                  label="Large paste"
+                  meta={`${pastedContext.charCount.toLocaleString()} chars`}
+                  preview={pastedContext.preview}
+                  onRemove={dismissPaste}
+                />
               )}
               <View style={styles.pasteInputRow}>
                 <TextInput
