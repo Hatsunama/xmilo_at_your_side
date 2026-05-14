@@ -40,9 +40,11 @@ import {
   openXMiloclawNotificationSettings,
   openXMiloclawOverlaySettings,
   restartXMiloclawRuntimeHost,
+  refreshXMiloclawCapabilityState,
   getXMiloclawLocalByokStatus,
   saveXMiloclawLocalByokApiKey,
   startXMiloclawRuntimeHost,
+  type XMiloclawCapabilityState,
   type XMiloclawRuntimeStatus
 } from "../src/lib/xmiloRuntimeHost";
 import { hasSetupCompletedOnce, markSetupCompletedOnce } from "../src/lib/setupCompletion";
@@ -231,6 +233,7 @@ export default function SetupScreen() {
     Page3RuntimeStep
   >("hidden_runtime_host_path");
   const [runtimeStatus, setRuntimeStatus] = useState<XMiloclawRuntimeStatus | null>(null);
+  const [capabilityState, setCapabilityState] = useState<XMiloclawCapabilityState | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [runtimeError, setRuntimeError] = useState("");
   const [reviewAtBottom, setReviewAtBottom] = useState(false);
@@ -412,6 +415,17 @@ export default function SetupScreen() {
     }
   }
 
+  async function refreshCapabilityState() {
+    try {
+      const state = await refreshXMiloclawCapabilityState();
+      setCapabilityState(state);
+      return state;
+    } catch (error: any) {
+      setRuntimeError(error?.message ?? "Could not read xMilo capability state.");
+      return null;
+    }
+  }
+
   function isProviderSetupRuntimeReady(status: XMiloclawRuntimeStatus | null) {
     return Boolean(status?.hostReady && status?.taskRouteSurfaceReady);
   }
@@ -533,6 +547,7 @@ export default function SetupScreen() {
   useEffect(() => {
     if (step !== "waiting_sidecar") return;
     refreshRuntimeStatus();
+    refreshCapabilityState();
   }, [step]);
 
   useEffect(() => {
@@ -655,18 +670,10 @@ export default function SetupScreen() {
     set("unrestricted_battery_access", snapshot.batteryUnrestricted ? "granted" : "missing");
     set("ask_ignore_battery_optimizations", snapshot.batteryUnrestricted ? "granted" : "missing");
     set("accessibility_service_enabled", snapshot.accessibilityEnabled ? "granted" : "missing");
-    // Shared storage/media mapping (Android version dependent).
-    // Note: WRITE_EXTERNAL_STORAGE is deprecated and not grantable on modern Android targets; we still check it
-    // to truthfully reflect that the current row label is not satisfiable without a canon-level replacement.
-    checkPerm("modify_delete_shared_storage", "android.permission.WRITE_EXTERNAL_STORAGE");
+    // Shared storage/media mapping (Android version dependent). Keep Phase 9 minimal:
+    // image/library access only, plus app storage through the document/image pickers.
     checkPerm("read_shared_storage", "android.permission.READ_EXTERNAL_STORAGE");
-    checkPerm("read_audio_files", "android.permission.READ_MEDIA_AUDIO");
-    checkPerm("read_video_files", "android.permission.READ_MEDIA_VIDEO");
     checkPerm("read_image_files", "android.permission.READ_MEDIA_IMAGES");
-    checkPerm("read_user_selected_images_videos", "android.permission.READ_MEDIA_VISUAL_USER_SELECTED");
-    checkPerm("read_locations_from_media_collection", "android.permission.ACCESS_MEDIA_LOCATION");
-
-    checkPerm("view_network_connections", "android.permission.ACCESS_NETWORK_STATE");
     checkPerm("full_network_access", "android.permission.INTERNET");
     checkPerm("prevent_phone_sleeping", "android.permission.WAKE_LOCK");
     checkPerm("control_vibration", "android.permission.VIBRATE");
@@ -676,55 +683,49 @@ export default function SetupScreen() {
     // Keep blocking until a truthful AlarmManager.canScheduleExactAlarms() check is wired.
     set("set_alarm", "unknown");
 
-    checkPerm("send_text_message", "android.permission.SEND_SMS");
-    checkPerm("access_to_sms", "android.permission.READ_SMS");
-    checkPerm("make_phone_call", "android.permission.CALL_PHONE");
-    checkPerm("access_to_phone", "android.permission.READ_PHONE_STATE");
-    checkPerm("access_to_call_logs", "android.permission.READ_CALL_LOG");
-
     checkPerm("access_to_camera", "android.permission.CAMERA");
     checkPerm("access_to_microphone", "android.permission.RECORD_AUDIO");
-    entries.push(
-      Promise.all([
-        checkAndroidPermission("android.permission.ACCESS_FINE_LOCATION"),
-        checkAndroidPermission("android.permission.ACCESS_BACKGROUND_LOCATION")
-      ]).then(([fine, background]) => [
-        "access_to_location_all_the_time",
-        fine === "granted" && background === "granted" ? "granted" : fine === "missing" || background === "missing" ? "missing" : "unknown"
-      ])
-    );
     entries.push(checkAndroidPermission("android.permission.ACCESS_FINE_LOCATION").then((value) => ["additional_access_location", value]));
 
     // Inventory truth repairs (derived/umbrella rows)
-    // access_to_music_audio -> mirrors audio file read
-    // access_to_photos_videos -> mirrors image+video read (or shared storage read as legacy fallback)
+    // access_to_photos_videos -> Phase 9 image-picker/library permission only; video is not a current setup ask.
     // access_to_content/access_to_files_media -> mirrors any media/shared-storage read signal
     // health/background-data remain blocking until a truthful mapping exists
     set("access_to_health_fitness_wellness", "unknown");
-    set("allow_background_data_usage", "unknown");
 
     const results = await Promise.all(entries);
     const next: Record<string, Page3PermissionStatus> = {};
     for (const [id, value] of results) next[id] = value;
 
+    const strictCapabilityState = await refreshXMiloclawCapabilityState().catch(() => null);
+    if (strictCapabilityState) {
+      setCapabilityState(strictCapabilityState);
+      const capabilityStatus = (name: string): Page3PermissionStatus => {
+        const capability = strictCapabilityState.capabilities?.[name];
+        if (!capability) return "unknown";
+        return capability.accepted_for_setup ? "granted" : "missing";
+      };
+      next.access_to_camera = capabilityStatus("camera_rear");
+      next.access_to_microphone = capabilityStatus("microphone");
+      next.additional_access_location = capabilityStatus("location");
+      next.read_image_files = capabilityStatus("media_library");
+      next.access_to_photos_videos = capabilityStatus("media_library");
+    }
+
     // Derived/umbrella labels (best-effort mapping without faking grants)
     const anyMediaGranted =
-      next.modify_delete_shared_storage === "granted" ||
       next.read_shared_storage === "granted" ||
-      next.read_audio_files === "granted" ||
-      next.read_image_files === "granted" ||
-      next.read_video_files === "granted" ||
-      next.read_user_selected_images_videos === "granted";
+      next.read_image_files === "granted";
 
-    next.access_to_music_audio = next.read_audio_files ?? "unknown";
-    next.access_to_photos_videos =
-      next.read_image_files === "granted" && next.read_video_files === "granted"
+    if (!strictCapabilityState?.capabilities?.media_library) {
+      next.access_to_photos_videos = next.read_image_files === "granted"
         ? "granted"
-        : next.read_image_files === "missing" || next.read_video_files === "missing"
+        : next.read_image_files === "missing"
           ? "missing"
           : next.read_shared_storage === "granted"
             ? "granted"
             : "unknown";
+    }
 
     next.access_to_content = anyMediaGranted ? "granted" : next.read_shared_storage === "missing" ? "missing" : "unknown";
     next.access_to_files_media = anyMediaGranted ? "granted" : next.read_shared_storage === "missing" ? "missing" : "unknown";
@@ -756,7 +757,7 @@ export default function SetupScreen() {
     for (let i = 0; i < 6; i += 1) {
       const result = await authCheck().catch(() => null);
       if (result?.entitled) {
-        router.replace("/");
+        router.replace("/lair");
         return true;
       }
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -845,7 +846,7 @@ export default function SetupScreen() {
 
   async function handleStartTrial() {
     // Trial clock starts on the first real /llm/turn call — nothing to do here.
-    router.replace("/");
+    router.replace("/lair");
   }
 
   async function handleRedeemInvite() {
@@ -861,7 +862,7 @@ export default function SetupScreen() {
       if (result?.access_code_grant_days) {
         setAccessConfig((current) => ({ ...current, access_code_grant_days: result.access_code_grant_days }));
       }
-      router.replace("/");
+      router.replace("/lair");
     } catch (e: any) {
       setError(e?.message ?? "Invalid or already used code.");
     } finally {
@@ -1043,52 +1044,29 @@ export default function SetupScreen() {
       {
         id: "camera_microphone",
         section: "requested_later_features",
-        label: "Camera / Microphone",
+        label: "Camera / Microphone permission state",
         behavior: "clickable_runtime_request",
-        requiredForContinue: false,
+        requiredForContinue: true,
         status: combineStatuses(permissionChecklist.access_to_camera ?? "unknown", permissionChecklist.access_to_microphone ?? "unknown"),
-        actionHint: "Tap to request camera and microphone permissions."
+        actionHint: "Choose While using the app, not This time only. Android does not expose one-time versus while-using scope to this build after grant."
       },
       {
         id: "photos_videos",
         section: "requested_later_features",
-        label: "Photos / Videos",
+        label: "Photos and videos",
         behavior: "clickable_runtime_request",
-        requiredForContinue: false,
-        status:
-          permissionChecklist.access_to_photos_videos ??
-          combineStatuses(
-            permissionChecklist.read_image_files ?? "unknown",
-            permissionChecklist.read_video_files ?? "unknown"
-          ),
-        actionHint: "Tap to request media read permissions."
+        requiredForContinue: true,
+        status: permissionChecklist.access_to_photos_videos ?? permissionChecklist.read_image_files ?? "unknown",
+        actionHint: "Choose Allow all photos and videos, not limited access."
       },
       {
         id: "location",
         section: "requested_later_features",
-        label: "Location",
+        label: "Location permission state",
         behavior: "clickable_runtime_request",
-        requiredForContinue: false,
+        requiredForContinue: true,
         status: permissionChecklist.additional_access_location ?? "unknown",
-        actionHint: "Tap to request precise location permission."
-      },
-      {
-        id: "phone",
-        section: "requested_later_features",
-        label: "Phone",
-        behavior: "clickable_runtime_request",
-        requiredForContinue: false,
-        status: permissionChecklist.access_to_phone ?? "unknown",
-        actionHint: "Tap to request phone-state permission."
-      },
-      {
-        id: "sms",
-        section: "requested_later_features",
-        label: "SMS",
-        behavior: "clickable_runtime_request",
-        requiredForContinue: false,
-        status: permissionChecklist.access_to_sms ?? "unknown",
-        actionHint: "Tap to request SMS read permission."
+        actionHint: "Choose While using the app, not This time only. Choose Precise location."
       },
       {
         id: "app_owned_hidden_runtime_execution",
@@ -1178,14 +1156,14 @@ export default function SetupScreen() {
         } else if (row.id === "photos_videos") {
           await PermissionsAndroid.requestMultiple([
             "android.permission.READ_MEDIA_IMAGES",
-            "android.permission.READ_MEDIA_VIDEO"
+            "android.permission.READ_MEDIA_VIDEO",
+            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
           ] as any);
         } else if (row.id === "location") {
-          await requestAndroidPermission("android.permission.ACCESS_FINE_LOCATION");
-        } else if (row.id === "phone") {
-          await requestAndroidPermission("android.permission.READ_PHONE_STATE");
-        } else if (row.id === "sms") {
-          await requestAndroidPermission("android.permission.READ_SMS");
+          await PermissionsAndroid.requestMultiple([
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.ACCESS_COARSE_LOCATION"
+          ] as any);
         } else if (row.id === "app_owned_hidden_runtime_execution") {
           const before = await refreshRuntimeStatus();
           if (!before?.runtimeHostStarted) {
@@ -1193,9 +1171,10 @@ export default function SetupScreen() {
           }
         }
 
-        const status = await refreshRuntimeStatus();
-        await computeChecklist(status);
-      } finally {
+                          const status = await refreshRuntimeStatus();
+                          await computeChecklist(status);
+                          await refreshCapabilityState();
+                        } finally {
         setRuntimeBusy(false);
       }
     }
@@ -1333,18 +1312,9 @@ export default function SetupScreen() {
                       if (rowId === "unrestricted_battery_access") return "battery" as const;
                       if (rowId === "accessibility_service_enabled") return "accessibility" as const;
                       if (
-                        rowId === "read_audio_files" ||
                         rowId === "read_image_files" ||
-                        rowId === "read_video_files" ||
-                        rowId === "read_user_selected_images_videos" ||
-                        rowId === "read_locations_from_media_collection" ||
                         rowId === "access_to_camera" ||
-                        rowId === "access_to_microphone" ||
-                        rowId === "send_text_message" ||
-                        rowId === "access_to_sms" ||
-                        rowId === "make_phone_call" ||
-                        rowId === "access_to_phone" ||
-                        rowId === "access_to_call_logs"
+                        rowId === "access_to_microphone"
                       ) {
                         return "request_permission";
                       }
@@ -1363,18 +1333,9 @@ export default function SetupScreen() {
                           await requestAndroidPermission("android.permission.POST_NOTIFICATIONS");
                         } else if (actionKind === "request_permission") {
                           const byId: Record<string, string> = {
-                            read_audio_files: "android.permission.READ_MEDIA_AUDIO",
                             read_image_files: "android.permission.READ_MEDIA_IMAGES",
-                            read_video_files: "android.permission.READ_MEDIA_VIDEO",
-                            read_user_selected_images_videos: "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
-                            read_locations_from_media_collection: "android.permission.ACCESS_MEDIA_LOCATION",
                             access_to_camera: "android.permission.CAMERA",
-                            access_to_microphone: "android.permission.RECORD_AUDIO",
-                            send_text_message: "android.permission.SEND_SMS",
-                            access_to_sms: "android.permission.READ_SMS",
-                            make_phone_call: "android.permission.CALL_PHONE",
-                            access_to_phone: "android.permission.READ_PHONE_STATE",
-                            access_to_call_logs: "android.permission.READ_CALL_LOG"
+                            access_to_microphone: "android.permission.RECORD_AUDIO"
                           };
                           const perm = byId[key];
                           if (!perm) return;
@@ -1478,8 +1439,9 @@ export default function SetupScreen() {
                           onPress={async () => {
                             setRuntimeBusy(true);
                             try {
-                              const status = await refreshRuntimeStatus();
-                              await computeChecklist(status);
+        const status = await refreshRuntimeStatus();
+        await computeChecklist(status);
+        await refreshCapabilityState();
                             } finally {
                               setRuntimeBusy(false);
                             }
@@ -1508,11 +1470,26 @@ export default function SetupScreen() {
                 <Text style={styles.body}>
                   Disclosure only. Scroll to the bottom and acknowledge before continuing.
                 </Text>
+                <View style={styles.capabilityTruthBox}>
+                  <Text style={styles.checkLabel}>Live capability truth</Text>
+                  <Text style={styles.checkSubLabel}>
+                    {capabilityState
+                      ? `Last checked ${new Date(capabilityState.checked_at).toLocaleTimeString()}. Camera, microphone, and location are permission-state only until an xMilo-owned tool is live-proven.`
+                      : "Run a re-check to publish the app-owned capability snapshot before Milo claims phone access."}
+                  </Text>
+                  <Pressable
+                    style={[styles.linkButton, runtimeBusy && styles.linkButtonDisabled]}
+                    disabled={runtimeBusy}
+                    onPress={refreshCapabilityState}
+                  >
+                    <Text style={styles.linkButtonText}>Check capability truth</Text>
+                  </Pressable>
+                </View>
                 {(() => {
                   const requiredRowsMissing = additionalAccessRows
                     .filter((row) => row.requiredForContinue)
                     .filter((row) => row.status !== "granted")
-                    .map((row) => row.label);
+                    .map((row) => `${row.label} — ${row.actionHint || "tap the row and re-check."}`);
                   const continueEnabled = reviewAtBottom && reviewAcknowledged && requiredRowsMissing.length === 0 && !runtimeBusy;
 
                   const renderSectionRows = (
@@ -2105,7 +2082,7 @@ export default function SetupScreen() {
 
         <Pressable
           style={styles.textBtn}
-          onPress={() => router.replace("/")}
+          onPress={() => router.replace("/lair")}
         >
           <Text style={styles.textBtnLabel}>Skip for now →</Text>
         </Pressable>
@@ -2289,6 +2266,14 @@ const styles = StyleSheet.create({
   },
   checkRowPressed: {
     backgroundColor: "#0B1224",
+    borderColor: "#334155"
+  },
+  capabilityTruthBox: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "#0B1224",
+    borderWidth: 1,
     borderColor: "#334155"
   },
   checkLabel: {

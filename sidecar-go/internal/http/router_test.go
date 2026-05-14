@@ -147,6 +147,72 @@ func TestHandleReadyLocalBYOKExposesResolvedProviderIdentity(t *testing.T) {
 	}
 }
 
+func TestHandleReadyHostedRouteIgnoresSavedBYOKConfigWhenLLMModeRelay(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "provider.key")
+	if err := os.WriteFile(keyPath, []byte("local-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	app := &App{
+		cfg: config.Config{
+			LLMMode:      "relay",
+			BYOKProvider: "openai",
+			BYOKKeyFile:  keyPath,
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	app.handleReady(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d", http.StatusOK, rec.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["llm_mode"] != "relay" || out["relay_llm_turn_allowed"] != true || out["local_llm_turn_allowed"] != false {
+		t.Fatalf("hosted route must stay active despite saved BYOK config: %#v", out)
+	}
+}
+
+func TestHandleAuthCheckLocalBYOKIgnoresHostedSessionState(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "provider.key")
+	if err := os.WriteFile(keyPath, []byte("local-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	_ = store.SetRuntimeConfig("relay_session_jwt", "stale-hosted-session")
+	app := &App{
+		cfg: config.Config{
+			LLMMode:      "local_byok",
+			BYOKProvider: "openai",
+			BYOKKeyFile:  keyPath,
+		},
+		store: store,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/check", http.NoBody)
+	rec := httptest.NewRecorder()
+	app.handleAuthCheck(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d", http.StatusOK, rec.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["access_mode"] != "local_byok" || out["local_llm_turn_allowed"] != true || out["relay_llm_turn_allowed"] != false {
+		t.Fatalf("hosted session state must not block BYOK route: %#v", out)
+	}
+}
+
 func TestHandleLocalProviderOptionsReturnsSidecarPolicy(t *testing.T) {
 	app := &App{}
 	req := httptest.NewRequest(http.MethodGet, "/local-provider/options", http.NoBody)

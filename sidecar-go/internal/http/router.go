@@ -143,6 +143,7 @@ func (a *App) Start(ctx context.Context) error {
 	mux.Handle("/local-provider/options", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleLocalProviderOptions)))
 	mux.Handle("/local-provider/resolve", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleLocalProviderResolve)))
 	mux.Handle("/runtime/evidence/app-bridge", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAppBridgeEvidence)))
+	mux.Handle("/runtime/capability-state", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleCapabilityState)))
 	mux.Handle("/context/set", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleContextSet)))
 	mux.Handle("/context/clear", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleContextClear)))
 	mux.Handle("/task/cancel", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleTaskCancel)))
@@ -930,6 +931,38 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.engine.Snapshot())
 }
 
+func (a *App) handleCapabilityState(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		var state map[string]any
+		_ = a.store.GetRuntimeConfigJSON("capability_state_snapshot", &state)
+		if len(state) == 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "capability_state": nil})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "capability_state": state})
+	case http.MethodPost:
+		var state map[string]any
+		if err := decodeJSON(r, &state); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		safeState := sanitizeCapabilityState(state)
+		if err := a.store.SetRuntimeConfigJSON("capability_state_snapshot", safeState); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		a.hub.Broadcast("runtime.capability_state", map[string]any{
+			"status":           "updated",
+			"checked_at":       safeState["checked_at"],
+			"capability_count": capabilityCount(safeState),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "capability_state": safeState})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
 func (a *App) handleStorageStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := a.store.StorageStats(a.cfg.DBPath)
 	if err != nil {
@@ -1026,6 +1059,8 @@ func (a *App) localAccessStatus() map[string]any {
 		"entitled":                  false,
 		"subscription_entitled":     false,
 		"access_mode":               "local_byok",
+		"byok_provider":             a.cfg.BYOKProvider,
+		"llm_mode":                  a.cfg.LLMMode,
 		"bring_your_own_key_active": active,
 		"phase9_api_key_access":     active,
 		"first_task_eligible":       active,
@@ -1045,6 +1080,103 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func sanitizeCapabilityState(input map[string]any) map[string]any {
+	output := map[string]any{
+		"schema_version": 1,
+		"checked_at":     sanitizeShortString(fmt.Sprint(input["checked_at"])),
+	}
+	if output["checked_at"] == "" {
+		output["checked_at"] = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	runtimeHost, _ := input["runtime_host"].(map[string]any)
+	output["runtime_host"] = map[string]any{
+		"online":  boolValue(runtimeHost["online"]),
+		"version": sanitizeShortString(fmt.Sprint(runtimeHost["version"])),
+		"health":  sanitizeShortString(fmt.Sprint(runtimeHost["health"])),
+	}
+
+	capabilities := map[string]any{}
+	if rawCapabilities, ok := input["capabilities"].(map[string]any); ok {
+		for name, rawCapability := range rawCapabilities {
+			capability, ok := rawCapability.(map[string]any)
+			if !ok {
+				continue
+			}
+			key := sanitizeCapabilityKey(name)
+			if key == "" {
+				continue
+			}
+			capabilities[key] = map[string]any{
+				"declared":           optionalBool(capability["declared"]),
+				"requested":          optionalBool(capability["requested"]),
+				"granted":            optionalBool(capability["granted"]),
+				"available":          optionalBool(capability["available"]),
+				"tool_available":     optionalBool(capability["tool_available"]),
+				"tested":             optionalBool(capability["tested"]),
+				"last_verified_at":   sanitizeShortString(fmt.Sprint(capability["last_verified_at"])),
+				"failure_stage":      sanitizeShortString(fmt.Sprint(capability["failure_stage"])),
+				"grant_scope":        sanitizeShortString(fmt.Sprint(capability["grant_scope"])),
+				"location_accuracy":  sanitizeShortString(fmt.Sprint(capability["location_accuracy"])),
+				"media_access":       sanitizeShortString(fmt.Sprint(capability["media_access"])),
+				"accepted_for_setup": optionalBool(capability["accepted_for_setup"]),
+				"repair_hint":        sanitizeShortString(fmt.Sprint(capability["repair_hint"])),
+				"note":               sanitizeShortString(fmt.Sprint(capability["note"])),
+			}
+		}
+	}
+	output["capabilities"] = capabilities
+	return output
+}
+
+func capabilityCount(state map[string]any) int {
+	capabilities, _ := state["capabilities"].(map[string]any)
+	return len(capabilities)
+}
+
+func sanitizeCapabilityKey(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-', r == ':':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		default:
+			b.WriteRune('_')
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func sanitizeShortString(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "<nil>" {
+		return ""
+	}
+	replacer := strings.NewReplacer("\r", " ", "\n", " ", "\t", " ")
+	clean := replacer.Replace(value)
+	if len(clean) > 240 {
+		return clean[:240]
+	}
+	return clean
+}
+
+func optionalBool(value any) any {
+	if v, ok := value.(bool); ok {
+		return v
+	}
+	return nil
+}
+
+func boolValue(value any) bool {
+	v, _ := value.(bool)
+	return v
 }
 
 // jwtEntitledClaim extracts the entitled bool from a JWT without signature verification.

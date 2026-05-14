@@ -187,6 +187,132 @@ func TestLocalProviderRereadsKeyFileAfterAuthFailure(t *testing.T) {
 	}
 }
 
+func TestXAIProviderRereadsKeyFileAfterAuthFailure(t *testing.T) {
+	testProviderRereadsKeyFileAfterAuthFailure(t, "xai", "/responses", "grok-test", func(summary string) string {
+		return responsesPayload(summary)
+	})
+}
+
+func TestAnthropicProviderRereadsKeyFileAfterAuthFailure(t *testing.T) {
+	testProviderRereadsKeyFileAfterAuthFailure(t, "anthropic", "/messages", "claude-test", func(summary string) string {
+		return anthropicPayload(summary)
+	})
+}
+
+func TestOllamaUnreachableClearsAfterConfigRestart(t *testing.T) {
+	client := mustLocalClient(t, config.Config{
+		LLMMode:      "local_byok",
+		BYOKProvider: "ollama",
+		BYOKBaseURL:  "http://127.0.0.1:1",
+		BYOKModel:    "llama-test",
+	})
+	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_bad_ollama", Phase: "intake"}); err == nil || err.Error() != "local_provider_unreachable" {
+		t.Fatalf("expected unreachable ollama before config fix, got %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/generate" {
+			t.Fatalf("unexpected ollama path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(ollamaPayload("ollama recovered")))
+	}))
+	defer server.Close()
+
+	restarted := mustLocalClient(t, config.Config{
+		LLMMode:      "local_byok",
+		BYOKProvider: "ollama",
+		BYOKBaseURL:  server.URL,
+		BYOKModel:    "llama-test",
+	})
+	restarted.HTTP = server.Client()
+	resp, err := restarted.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_good_ollama", Phase: "intake"})
+	if err != nil {
+		t.Fatalf("expected ollama recovery after config restart: %v", err)
+	}
+	if resp.Summary != "ollama recovered" {
+		t.Fatalf("unexpected ollama recovery response: %#v", resp)
+	}
+}
+
+func TestProviderSwitchingUsesCurrentConstructedProvider(t *testing.T) {
+	steps := []struct {
+		provider string
+		path     string
+		model    string
+		payload  string
+	}{
+		{provider: "openai", path: "/responses", model: "gpt-test", payload: responsesPayload("openai first")},
+		{provider: "xai", path: "/responses", model: "grok-test", payload: responsesPayload("xai next")},
+		{provider: "openai", path: "/responses", model: "gpt-test", payload: responsesPayload("openai return")},
+		{provider: "anthropic", path: "/messages", model: "claude-test", payload: anthropicPayload("anthropic next")},
+		{provider: "xai", path: "/responses", model: "grok-test", payload: responsesPayload("xai return")},
+	}
+	for _, step := range steps {
+		t.Run(step.provider+"_"+step.model, func(t *testing.T) {
+			wantAuth := "Bearer local-test-key"
+			if step.provider == "anthropic" {
+				wantAuth = ""
+			}
+			server := providerServer(t, step.path, wantAuth, step.payload, func(t *testing.T, r *http.Request) {
+				if step.provider == "anthropic" && r.Header.Get("x-api-key") != "local-test-key" {
+					t.Fatalf("anthropic switch did not use the current provider key header")
+				}
+			})
+			defer server.Close()
+			client := mustLocalClient(t, localConfig(t, step.provider, server.URL, step.model, true))
+			client.HTTP = server.Client()
+			resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_switch", Phase: "intake"})
+			if err != nil {
+				t.Fatalf("turn after provider switch: %v", err)
+			}
+			if resp.Summary == "" {
+				t.Fatalf("expected provider response after switch")
+			}
+		})
+	}
+}
+
+func TestAnthropicOllamaAnthropicSwitchingUsesCurrentConstructedProvider(t *testing.T) {
+	anthropicOne := providerServer(t, "/messages", "", anthropicPayload("anthropic first"), func(t *testing.T, r *http.Request) {
+		if r.Header.Get("x-api-key") != "local-test-key" {
+			t.Fatalf("unexpected anthropic key header")
+		}
+	})
+	defer anthropicOne.Close()
+	client := mustLocalClient(t, localConfig(t, "anthropic", anthropicOne.URL, "claude-test", true))
+	client.HTTP = anthropicOne.Client()
+	if resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_anthropic_1", Phase: "intake"}); err != nil || resp.Summary != "anthropic first" {
+		t.Fatalf("anthropic first failed resp=%#v err=%v", resp, err)
+	}
+
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/generate" {
+			t.Fatalf("unexpected ollama path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(ollamaPayload("ollama middle")))
+	}))
+	defer ollama.Close()
+	ollamaClient := mustLocalClient(t, config.Config{LLMMode: "local_byok", BYOKProvider: "ollama", BYOKBaseURL: ollama.URL, BYOKModel: "llama-test"})
+	ollamaClient.HTTP = ollama.Client()
+	if resp, err := ollamaClient.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_ollama", Phase: "intake"}); err != nil || resp.Summary != "ollama middle" {
+		t.Fatalf("ollama middle failed resp=%#v err=%v", resp, err)
+	}
+
+	anthropicTwo := providerServer(t, "/messages", "", anthropicPayload("anthropic return"), func(t *testing.T, r *http.Request) {
+		if r.Header.Get("x-api-key") != "local-test-key" {
+			t.Fatalf("unexpected anthropic return key header")
+		}
+	})
+	defer anthropicTwo.Close()
+	returnClient := mustLocalClient(t, localConfig(t, "anthropic", anthropicTwo.URL, "claude-test", true))
+	returnClient.HTTP = anthropicTwo.Client()
+	if resp, err := returnClient.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_anthropic_2", Phase: "intake"}); err != nil || resp.Summary != "anthropic return" {
+		t.Fatalf("anthropic return failed resp=%#v err=%v", resp, err)
+	}
+}
+
 func TestOpenAIHTTPErrorMappingIsNotCollapsedToUnreachable(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -384,6 +510,65 @@ func providerServer(t *testing.T, wantPath, wantAuth, payload string, extra func
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(payload))
 	}))
+}
+
+func testProviderRereadsKeyFileAfterAuthFailure(t *testing.T, provider, wantPath, model string, payload func(string) string) {
+	t.Helper()
+	var seen []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != wantPath {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		auth := r.Header.Get("Authorization")
+		if provider == "anthropic" {
+			auth = "Bearer " + r.Header.Get("x-api-key")
+		}
+		seen = append(seen, auth)
+		switch auth {
+		case "Bearer bad":
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		case "Bearer good":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(payload(provider + " recovered")))
+			return
+		default:
+			t.Fatalf("unexpected auth header for %s", provider)
+		}
+	}))
+	defer server.Close()
+
+	keyPath := filepath.Join(t.TempDir(), "provider.key")
+	if err := os.WriteFile(keyPath, []byte("bad\n"), 0o600); err != nil {
+		t.Fatalf("write bad key: %v", err)
+	}
+
+	t.Setenv(providerpolicy.DevAllowCloudProviderCustomBaseURLEnv, "1")
+	client := mustLocalClient(t, config.Config{
+		LLMMode:      "local_byok",
+		BYOKProvider: provider,
+		BYOKKeyFile:  keyPath,
+		BYOKBaseURL:  server.URL,
+		BYOKModel:    model,
+	})
+	client.HTTP = server.Client()
+
+	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_bad_" + provider, Phase: "intake"}); err == nil || err.Error() != "local_provider_auth_failed" {
+		t.Fatalf("expected auth failure with bad %s key, got %v", provider, err)
+	}
+	if err := os.WriteFile(keyPath, []byte("good\n"), 0o600); err != nil {
+		t.Fatalf("write good key: %v", err)
+	}
+	resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_good_" + provider, Phase: "intake"})
+	if err != nil {
+		t.Fatalf("expected %s recovery with rewritten key: %v", provider, err)
+	}
+	if resp.Summary != provider+" recovered" {
+		t.Fatalf("unexpected %s response after key rewrite: %#v", provider, resp)
+	}
+	if len(seen) != 2 || seen[0] != "Bearer bad" || seen[1] != "Bearer good" {
+		t.Fatalf("expected %s provider to see bad then good auth headers, got %#v", provider, seen)
+	}
 }
 
 func responsesPayload(summary string) string {

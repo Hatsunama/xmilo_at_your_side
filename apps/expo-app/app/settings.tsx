@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import * as Clipboard from "expo-clipboard";
-import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import * as Notifications from "expo-notifications";
 import QRCode from "react-native-qrcode-svg";
 import { useApp } from "../src/state/AppContext";
@@ -13,21 +13,38 @@ import {
   confirmTwoFactorSetup,
   createWebsiteHandoff,
   disableTwoFactor,
+  getLocalProviderOptions,
+  getReady,
   getState,
   getStorageStats,
   getTwoFactorStatus,
   regenerateTwoFactorRecoveryCodes,
   resetTier,
+  resolveLocalProviderConfig,
+  type LocalProviderOption,
+  type LocalProviderResolvedConfig,
   verifyTwoFactor
 } from "../src/lib/bridge";
 import { DELETE_ACCOUNT_URL, PRIVACY_POLICY_URL, SUPPORT_URL } from "../src/lib/config";
 import { configureRevenueCat, isRevenueCatConfigured, restoreRevenueCatPurchases } from "../src/lib/revenuecat";
+import {
+  deactivateXMiloclawLocalByokRouting,
+  getXMiloclawLocalByokStatus,
+  getXMiloclawRuntimeStatus,
+  refreshXMiloclawCapabilityState,
+  restartXMiloclawRuntimeHost,
+  saveXMiloclawLocalByokApiKey,
+  type XMiloclawCapabilityState,
+  type XMiloclawRuntimeStatus
+} from "../src/lib/xmiloRuntimeHost";
 
 export default function SettingsScreen() {
   const {
     state,
     storageStats,
     setStorageStats,
+    resetRuntimeTaskProof,
+    refreshRuntimeState,
     speakAloudEnabled,
     setSpeakAloudEnabled,
     wakeWordEnabled,
@@ -41,6 +58,17 @@ export default function SettingsScreen() {
   const [twoFactorOtpUrl, setTwoFactorOtpUrl] = useState("");
   const [websiteHandoffUrl, setWebsiteHandoffUrl] = useState("");
   const [websiteQrVisible, setWebsiteQrVisible] = useState(false);
+  const [capabilityState, setCapabilityState] = useState<XMiloclawCapabilityState | null>(null);
+  const [providerOptions, setProviderOptions] = useState<LocalProviderOption[]>([]);
+  const [providerOptionsBusy, setProviderOptionsBusy] = useState(false);
+  const [providerSwitchBusy, setProviderSwitchBusy] = useState(false);
+  const [providerSwitchError, setProviderSwitchError] = useState("");
+  const [providerSwitchStatus, setProviderSwitchStatus] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState("");
+  const [providerKey, setProviderKey] = useState("");
+  const [providerBaseUrl, setProviderBaseUrl] = useState("");
+  const [providerModel, setProviderModel] = useState("");
+  const [runtimeRouteStatus, setRuntimeRouteStatus] = useState<XMiloclawRuntimeStatus | null>(null);
   const [twoFactorStatus, setTwoFactorStatus] = useState({
     verified_email: "",
     email_verified: false,
@@ -64,23 +92,8 @@ export default function SettingsScreen() {
   const revenueCatPurchasePathVisible = Boolean(accessConfig.subscription_allowed && isRevenueCatConfigured());
 
   useEffect(() => {
-    authCheck()
-      .then((result) => {
-        setAccessConfig({
-          access_mode: result.access_mode ?? "code_only",
-          byok_provider: result.byok_provider ?? "",
-          subscription_entitled: result.subscription_entitled ?? result.entitled ?? false,
-          bring_your_own_key_active: result.bring_your_own_key_active ?? false,
-          phase9_api_key_access: result.phase9_api_key_access ?? false,
-          first_task_eligible: result.first_task_eligible ?? result.entitled ?? false,
-          relay_llm_turn_allowed: result.relay_llm_turn_allowed ?? false,
-          local_llm_turn_allowed: result.local_llm_turn_allowed ?? false,
-          access_code_only: result.access_code_only ?? true,
-          subscription_allowed: result.subscription_allowed ?? false,
-          access_code_grant_days: result.access_code_grant_days ?? 30
-        });
-      })
-      .catch(() => null);
+    refreshAccessConfig().catch(() => null);
+    refreshProviderOptions().catch(() => null);
 
     Notifications.getPermissionsAsync()
       .then((permissions) => {
@@ -100,6 +113,41 @@ export default function SettingsScreen() {
       })
       .catch(() => null);
   }, []);
+
+  async function refreshAccessConfig() {
+    const result = await authCheck();
+    const next = {
+      access_mode: result.access_mode ?? "code_only",
+      byok_provider: result.byok_provider ?? "",
+      subscription_entitled: result.subscription_entitled ?? result.entitled ?? false,
+      bring_your_own_key_active: result.bring_your_own_key_active ?? false,
+      phase9_api_key_access: result.phase9_api_key_access ?? false,
+      first_task_eligible: result.first_task_eligible ?? result.entitled ?? false,
+      relay_llm_turn_allowed: result.relay_llm_turn_allowed ?? false,
+      local_llm_turn_allowed: result.local_llm_turn_allowed ?? false,
+      access_code_only: result.access_code_only ?? true,
+      subscription_allowed: result.subscription_allowed ?? false,
+      access_code_grant_days: result.access_code_grant_days ?? 30
+    };
+    setAccessConfig(next);
+    if (!selectedProvider && next.byok_provider) {
+      setSelectedProvider(next.byok_provider);
+    }
+    return next;
+  }
+
+  async function refreshProviderOptions() {
+    setProviderOptionsBusy(true);
+    try {
+      const providers = await getLocalProviderOptions();
+      setProviderOptions(providers);
+      if (!selectedProvider && providers[0]) {
+        setSelectedProvider(accessConfig.byok_provider || providers[0].id);
+      }
+    } finally {
+      setProviderOptionsBusy(false);
+    }
+  }
 
   async function refreshStats() {
     try {
@@ -136,6 +184,161 @@ export default function SettingsScreen() {
     }
     const latest = await getState();
     return latest.runtime_id ?? "";
+  }
+
+  function providerLabel(providerId: string) {
+    return (providerOptions.find((option) => option.id === providerId)?.label ?? providerId) || "unknown provider";
+  }
+
+  function activeRouteLabel() {
+    if (accessConfig.local_llm_turn_allowed || accessConfig.access_mode === "local_byok") {
+      return `BYOK: ${providerLabel(accessConfig.byok_provider)}`;
+    }
+    if (accessConfig.relay_llm_turn_allowed || accessConfig.access_mode !== "local_byok") {
+      return "xMilo hosted access";
+    }
+    return "unknown";
+  }
+
+  async function waitForRouteTruth(
+    expected: { mode: "local_byok"; provider: string } | { mode: "hosted" }
+  ) {
+    let lastReason = "route_not_checked";
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const [runtimeStatus, ready] = await Promise.all([
+        getXMiloclawRuntimeStatus().catch(() => null),
+        getReady().catch(() => null)
+      ]);
+      if (runtimeStatus) {
+        setRuntimeRouteStatus(runtimeStatus);
+      }
+      const llmMode = runtimeStatus?.llmMode ?? ready?.llm_mode ?? "unknown";
+      const byokProvider = runtimeStatus?.byokProvider ?? ready?.byok_provider ?? "";
+      const localTurn = runtimeStatus?.localLlmTurnAllowed ?? ready?.local_llm_turn_allowed ?? false;
+      const relayTurn = runtimeStatus?.relayLlmTurnAllowed ?? ready?.relay_llm_turn_allowed ?? false;
+      const hostReady = runtimeStatus?.hostReady !== false && ready?.ok !== false;
+
+      if (expected.mode === "local_byok") {
+        if (hostReady && llmMode === "local_byok" && byokProvider === expected.provider && localTurn === true && relayTurn === false) {
+          return { llmMode, byokProvider, localTurn, relayTurn };
+        }
+      } else if (hostReady && llmMode !== "local_byok" && relayTurn === true && localTurn === false) {
+        return { llmMode, byokProvider, localTurn, relayTurn };
+      }
+
+      lastReason = `llm=${llmMode} provider=${byokProvider || "none"} local=${String(localTurn)} relay=${String(relayTurn)}`;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error(`Runtime route did not confirm ${expected.mode} (${lastReason}).`);
+  }
+
+  async function settleAfterProviderSwitch(expected: { mode: "local_byok"; provider: string } | { mode: "hosted" }) {
+    resetRuntimeTaskProof();
+    setRuntimeRouteStatus(await restartXMiloclawRuntimeHost());
+    const route = await waitForRouteTruth(expected);
+    await refreshRuntimeState().catch(() => null);
+    await refreshAccessConfig().catch(() => null);
+    return route;
+  }
+
+  async function assertNoActiveTaskBeforeProviderSwitch() {
+    const latest = await getState().catch(() => null);
+    const activeTask = latest?.active_task ?? state.active_task;
+    if (activeTask) {
+      throw new Error("Milo has an active task. Let it finish or stop it before switching access mode.");
+    }
+  }
+
+  async function switchToHostedAccess() {
+    setProviderSwitchBusy(true);
+    setProviderSwitchError("");
+    setProviderSwitchStatus("Switching new tasks to hosted access...");
+    try {
+      await assertNoActiveTaskBeforeProviderSwitch();
+      await deactivateXMiloclawLocalByokRouting();
+      await settleAfterProviderSwitch({ mode: "hosted" });
+      setProviderSwitchStatus("New tasks now use xMilo hosted access. Local BYOK config was preserved.");
+      Alert.alert("Hosted access active", "New tasks now use xMilo hosted access. Local BYOK config was preserved.");
+    } catch (error: any) {
+      const message = error?.message ?? "Could not switch to hosted access.";
+      setProviderSwitchError(message);
+      Alert.alert("Hosted switch failed", message);
+    } finally {
+      setProviderSwitchBusy(false);
+    }
+  }
+
+  async function switchToByokProvider() {
+    if (!selectedProvider) {
+      Alert.alert("Choose provider", "Select a local provider first.");
+      return;
+    }
+    const providerConfig = providerOptions.find((option) => option.id === selectedProvider);
+    const trimmedKey = providerKey.trim();
+    const trimmedBaseUrl = providerBaseUrl.trim();
+    const trimmedModel = providerModel.trim();
+    setProviderSwitchBusy(true);
+    setProviderSwitchError("");
+    setProviderSwitchStatus(`Switching new tasks to ${providerLabel(selectedProvider)}...`);
+    try {
+      await assertNoActiveTaskBeforeProviderSwitch();
+      const existing = await getXMiloclawLocalByokStatus();
+      const resolved = await resolveLocalProviderConfig({
+        provider: selectedProvider,
+        base_url: trimmedBaseUrl,
+        model: trimmedModel,
+        has_api_key: Boolean(trimmedKey),
+        key_file_ready: existing.provider === selectedProvider && existing.keyFileReady
+      });
+      if (!resolved.local_turn_allowed) {
+        throw new Error(providerSwitchFailureMessage(resolved));
+      }
+      await saveXMiloclawLocalByokApiKey(resolved.provider, trimmedKey, resolved.base_url, resolved.model);
+      await assertSavedByokConfig(resolved);
+      await settleAfterProviderSwitch({ mode: "local_byok", provider: resolved.provider });
+      setProviderKey("");
+      setProviderBaseUrl("");
+      setProviderModel("");
+      setProviderSwitchStatus(`New tasks now use ${providerConfig?.label ?? resolved.provider}.`);
+      Alert.alert("BYOK provider active", `New tasks now use ${providerConfig?.label ?? resolved.provider}.`);
+    } catch (error: any) {
+      const message = error?.message ?? `Could not switch to ${providerLabel(selectedProvider)}.`;
+      setProviderSwitchError(`${providerLabel(selectedProvider)}: ${message}`);
+      Alert.alert("BYOK switch failed", `${providerLabel(selectedProvider)}: ${message}`);
+    } finally {
+      setProviderSwitchBusy(false);
+    }
+  }
+
+  async function assertSavedByokConfig(resolved: LocalProviderResolvedConfig) {
+    const localStatus = await getXMiloclawLocalByokStatus();
+    if (localStatus.provider !== resolved.provider) {
+      throw new Error("Saved provider did not match the sidecar-resolved provider.");
+    }
+    if (resolved.key_required && !localStatus.keyFileReady) {
+      throw new Error("Saved local provider key was not ready after write.");
+    }
+    if (resolved.base_url_required && !localStatus.baseUrlReady) {
+      throw new Error("Saved local provider base URL was not ready after write.");
+    }
+    if (resolved.model && localStatus.model !== resolved.model) {
+      throw new Error("Saved local provider model did not match the sidecar-resolved model.");
+    }
+  }
+
+  function providerSwitchFailureMessage(resolved: LocalProviderResolvedConfig) {
+    const label = providerLabel(resolved.provider || selectedProvider);
+    switch (resolved.readiness_reason) {
+      case "missing_key":
+        return `${label} needs a local API key before it can handle new tasks.`;
+      case "missing_base_url":
+      case "local_provider_base_url_required":
+        return `${label} needs a base URL before it can handle new tasks.`;
+      case "missing_model":
+        return `${label} needs a model before it can handle new tasks.`;
+      default:
+        return `${label} is not ready: ${resolved.readiness_reason || "provider configuration was rejected"}.`;
+    }
   }
 
   async function restorePurchases() {
@@ -242,6 +445,16 @@ export default function SettingsScreen() {
       Alert.alert("Test notice sent", "If Android still blocks it, reopen app settings and restore notification permission there.");
     } catch (error: any) {
       Alert.alert("Test failed", error?.message ?? "Unknown error");
+    }
+  }
+
+  async function refreshCapabilityTruth() {
+    try {
+      const next = await refreshXMiloclawCapabilityState();
+      setCapabilityState(next);
+      Alert.alert("Capability check updated", "xMilo refreshed the app-owned capability truth snapshot.");
+    } catch (error: any) {
+      Alert.alert("Capability check failed", error?.message ?? "Unknown error");
     }
   }
 
@@ -474,6 +687,103 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
+        <View style={styles.toggleCard}>
+          <View style={styles.toggleLabels}>
+            <Text style={styles.toggleTitle}>Access mode</Text>
+            <Text style={styles.toggleSubtitle}>
+              Current route: {activeRouteLabel()}.
+            </Text>
+          </View>
+          <Text style={styles.toggleHint}>
+            Mode: {(runtimeRouteStatus?.llmMode ?? accessConfig.access_mode) || "unknown"} · Provider:{" "}
+            {(runtimeRouteStatus?.byokProvider ?? accessConfig.byok_provider) || "—"} · Local turn:{" "}
+            {String(runtimeRouteStatus?.localLlmTurnAllowed ?? accessConfig.local_llm_turn_allowed)} · Relay turn:{" "}
+            {String(runtimeRouteStatus?.relayLlmTurnAllowed ?? accessConfig.relay_llm_turn_allowed)}
+          </Text>
+
+          <Pressable
+            style={[styles.secondaryButton, providerSwitchBusy && styles.disabledButton]}
+            onPress={switchToHostedAccess}
+            disabled={providerSwitchBusy}
+          >
+            <Text style={styles.buttonText}>Use xMilo hosted access</Text>
+          </Pressable>
+
+          <Text style={[styles.toggleTitle, { marginTop: 16 }]}>Use my own API key</Text>
+          {providerOptionsBusy ? <ActivityIndicator color="#C4B5FD" style={{ marginTop: 12 }} /> : null}
+          <View style={styles.providerGrid}>
+            {providerOptions.map((option) => {
+              const selected = selectedProvider === option.id;
+              return (
+                <Pressable
+                  key={option.id}
+                  style={[styles.providerPill, selected && styles.providerPillSelected]}
+                  onPress={() => {
+                    setSelectedProvider(option.id);
+                    setProviderBaseUrl("");
+                    setProviderModel("");
+                    setProviderSwitchError("");
+                  }}
+                  disabled={providerSwitchBusy}
+                >
+                  <Text style={[styles.providerPillText, selected && styles.providerPillTextSelected]}>{option.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {selectedProvider ? (
+            <>
+              {providerOptions.find((option) => option.id === selectedProvider)?.key_required ? (
+                <TextInput
+                  style={styles.normalInput}
+                  placeholder={`${providerLabel(selectedProvider)} API key`}
+                  placeholderTextColor="#6B7280"
+                  value={providerKey}
+                  onChangeText={setProviderKey}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
+                />
+              ) : (
+                <Text style={styles.toggleHint}>{providerLabel(selectedProvider)} does not require an API key.</Text>
+              )}
+              <TextInput
+                style={styles.normalInput}
+                placeholder="Base URL, optional unless provider requires it"
+                placeholderTextColor="#6B7280"
+                value={providerBaseUrl}
+                onChangeText={setProviderBaseUrl}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={styles.normalInput}
+                placeholder="Model, optional for provider default"
+                placeholderTextColor="#6B7280"
+                value={providerModel}
+                onChangeText={setProviderModel}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Text style={styles.toggleHint}>
+                Default: {providerOptions.find((option) => option.id === selectedProvider)?.default_model || "sidecar default"} · Base URL:{" "}
+                {providerOptions.find((option) => option.id === selectedProvider)?.default_base_url || "enter local URL"}
+              </Text>
+              <Pressable
+                style={[styles.button, providerSwitchBusy && styles.disabledButton]}
+                onPress={switchToByokProvider}
+                disabled={providerSwitchBusy}
+              >
+                <Text style={styles.buttonText}>{providerSwitchBusy ? "Switching..." : `Use ${providerLabel(selectedProvider)}`}</Text>
+              </Pressable>
+            </>
+          ) : null}
+
+          {providerSwitchStatus ? <Text style={styles.toggleHint}>{providerSwitchStatus}</Text> : null}
+          {providerSwitchError ? <Text style={styles.errorText}>{providerSwitchError}</Text> : null}
+        </View>
+
         <Pressable style={styles.button} onPress={refreshStats}>
           <Text style={styles.buttonText}>Refresh storage stats</Text>
         </Pressable>
@@ -548,6 +858,26 @@ export default function SettingsScreen() {
             {notificationEnabled
               ? "Local notices are currently allowed."
               : "Local notices are not confirmed yet. If Android later turns them off, reopen app settings and turn them back on for the magic to work."}
+          </Text>
+        </View>
+
+        <View style={styles.toggleCard}>
+          <View style={styles.toggleLabels}>
+            <Text style={styles.toggleTitle}>Capability truth</Text>
+            <Text style={styles.toggleSubtitle}>
+              Checks what xMilo can truthfully declare, what Android has granted, and whether an app-owned tool is actually live-proven.
+            </Text>
+          </View>
+          <Pressable style={styles.secondaryButton} onPress={refreshCapabilityTruth}>
+            <Text style={styles.buttonText}>Refresh capability check</Text>
+          </Pressable>
+          <Text style={styles.toggleHint}>
+            {capabilityState
+              ? `Last checked: ${new Date(capabilityState.checked_at).toLocaleTimeString()} · items: ${Object.keys(capabilityState.capabilities ?? {}).length}`
+              : "No current capability snapshot in this settings session."}
+          </Text>
+          <Text style={styles.toggleHint}>
+            Camera, microphone, location, and sensors are not usable just because permission exists. Milo can claim them only after a live xMilo tool is available and tested.
           </Text>
         </View>
 
@@ -733,6 +1063,7 @@ const styles = StyleSheet.create({
   body: { color: "#CBD5E1", lineHeight: 22, marginTop: 8 },
   button: { marginTop: 16, backgroundColor: "#2563EB", borderRadius: 14, paddingVertical: 14, alignItems: "center" },
   secondaryButton: { marginTop: 12, backgroundColor: "#1F2937", borderRadius: 14, paddingVertical: 14, alignItems: "center" },
+  disabledButton: { opacity: 0.55 },
   buttonText: { color: "#FFFFFF", fontWeight: "700" },
   launchCard: { marginTop: 16, backgroundColor: "#0F172A", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#312E81" },
   launchTitle: { color: "#C4B5FD", fontWeight: "700", fontSize: 15 },
@@ -748,6 +1079,22 @@ const styles = StyleSheet.create({
     color: "#F8FAFC",
     letterSpacing: 2
   },
+  normalInput: {
+    marginTop: 12,
+    backgroundColor: "#111827",
+    borderWidth: 1,
+    borderColor: "#374151",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: "#F8FAFC"
+  },
+  providerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
+  providerPill: { borderWidth: 1, borderColor: "#334155", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: "#111827" },
+  providerPillSelected: { borderColor: "#C4B5FD", backgroundColor: "#312E81" },
+  providerPillText: { color: "#CBD5E1", fontWeight: "700" },
+  providerPillTextSelected: { color: "#FFFFFF" },
+  errorText: { color: "#FCA5A5", marginTop: 10, lineHeight: 20 },
   statsCard: { marginTop: 18, backgroundColor: "#0F172A", borderRadius: 14, padding: 14, gap: 6 },
   statsTitle: { color: "#F8FAFC", fontWeight: "700" },
   statsRow: { color: "#CBD5E1" },

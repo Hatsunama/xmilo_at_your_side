@@ -244,6 +244,7 @@ export async function authCheck(): Promise<{
   entitled: boolean;
   expires_at: string;
   access_mode?: string;
+  llm_mode?: string;
   byok_provider?: string;
   subscription_entitled?: boolean;
   bring_your_own_key_active?: boolean;

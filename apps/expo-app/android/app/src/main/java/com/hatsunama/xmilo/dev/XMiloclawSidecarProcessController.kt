@@ -23,6 +23,7 @@ object XMiloclawSidecarProcessController {
   private const val PREFS_NAME = "xmilo_runtime_host"
   private const val PREFS_TOKEN_KEY = "localhost_bearer_token"
   private const val PREFS_RUNTIME_ID_KEY = "runtime_id"
+  private const val PREFS_ACCESS_MODE_KEY = "access_mode"
   private const val PREFS_BYOK_PROVIDER_KEY = "byok_provider"
   private const val PREFS_BYOK_BASE_URL_KEY = "byok_base_url"
   private const val PREFS_BYOK_MODEL_KEY = "byok_model"
@@ -293,11 +294,7 @@ object XMiloclawSidecarProcessController {
     val resolvedModel = model.trim()
     val appContext = context.applicationContext
     val keyFile = localBYOKKeyFile(appContext, providerToken)
-    if (trimmedKey.isBlank()) {
-      if (keyFile.exists() && !keyFile.delete()) {
-        throw IllegalStateException("could not clear local key file")
-      }
-    } else {
+    if (trimmedKey.isNotBlank()) {
       val parent = keyFile.parentFile
       if (parent != null && !(parent.mkdirs() || parent.isDirectory)) {
         throw IllegalStateException("could not prepare local key directory")
@@ -312,6 +309,7 @@ object XMiloclawSidecarProcessController {
     appContext
       .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .edit()
+      .putString(PREFS_ACCESS_MODE_KEY, "local_byok")
       .putString(PREFS_BYOK_PROVIDER_KEY, providerToken)
       .putString(PREFS_BYOK_BASE_URL_KEY, trimmedBaseUrl)
       .putString(PREFS_BYOK_MODEL_KEY, resolvedModel)
@@ -321,9 +319,22 @@ object XMiloclawSidecarProcessController {
     return status
   }
 
+  fun deactivateLocalBYOKRouting(context: Context): JSONObject {
+    val appContext = context.applicationContext
+    appContext
+      .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putString(PREFS_ACCESS_MODE_KEY, "hosted")
+      .apply()
+    val status = localBYOKStatus(appContext)
+    status.put("bridgeProof", localBYOKBridgeProof(status, "hosted_route_selected"))
+    return status
+  }
+
   fun localBYOKStatus(context: Context): JSONObject {
     val appContext = context.applicationContext
     val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val accessMode = prefs.getString(PREFS_ACCESS_MODE_KEY, null).orEmpty()
     val provider = prefs.getString(PREFS_BYOK_PROVIDER_KEY, null)?.let { providerStorageTokenOrNull(it) }.orEmpty()
     val keyFile = localBYOKKeyFile(appContext, provider)
     val baseUrl = prefs.getString(PREFS_BYOK_BASE_URL_KEY, null).orEmpty()
@@ -332,6 +343,7 @@ object XMiloclawSidecarProcessController {
     val baseUrlReady = baseUrl.isNotBlank()
     return JSONObject()
       .put("provider", provider)
+      .put("accessMode", accessMode)
       .put("keyFileReady", keyFileReady)
       .put("keyFilePath", keyFile.absolutePath)
       .put("baseUrlReady", baseUrlReady)
@@ -348,6 +360,7 @@ object XMiloclawSidecarProcessController {
         "sidecar_ready_probe",
         "task_route_surface_ready",
         "permission_state_snapshot" -> operation
+        "capability_state_snapshot" -> operation
         else -> "runtime_host_status"
       }
     val verified =
@@ -355,6 +368,7 @@ object XMiloclawSidecarProcessController {
         "native_sidecar_payload_ready" -> status.runtimeFilesPrepared
         "sidecar_ready_probe" -> status.bridgeConnected && status.taskRouteSurfaceReady
         "task_route_surface_ready" -> status.taskRouteSurfaceReady
+        "capability_state_snapshot" -> status.hostReady
         "permission_state_snapshot" ->
           status.notificationsGranted &&
             status.appearOnTopGranted &&
@@ -400,24 +414,29 @@ object XMiloclawSidecarProcessController {
     return proof
   }
 
-  private fun localBYOKBridgeProof(status: JSONObject): JSONObject {
+  private fun localBYOKBridgeProof(status: JSONObject, operationMode: String = "local_byok_selected"): JSONObject {
     val keyFileReady = status.optBoolean("keyFileReady", false)
+    val byokReady = status.optBoolean("byokReady", false)
+    val hostedSelected = operationMode == "hosted_route_selected"
     val proof =
       baseBridgeProof(
         operation = "byok_key_storage",
-        verified = keyFileReady,
+        verified = hostedSelected || byokReady,
         summary =
-          if (keyFileReady) {
-            "Android bridge verified local provider key storage."
+          if (hostedSelected) {
+            "Android bridge deactivated local BYOK routing while preserving local provider config."
+          } else if (byokReady) {
+            "Android bridge verified local provider configuration."
           } else {
-            "Android bridge did not verify local provider key storage."
+            "Android bridge did not verify local provider configuration."
           },
-        blockingReason = if (keyFileReady) null else "byok_key_file_not_ready"
+        blockingReason = if (hostedSelected || byokReady) null else "byok_config_not_ready"
       )
     proof.put(
       "details",
       JSONObject()
         .put("provider", sanitizeProofText(status.optString("provider", "")))
+        .put("access_mode", sanitizeProofText(status.optString("accessMode", "")))
         .put("key_file_ready", keyFileReady)
         .put("base_url_ready", status.optBoolean("baseUrlReady", false))
         .put("model_configured", status.optString("model", "").isNotBlank())
@@ -446,6 +465,7 @@ object XMiloclawSidecarProcessController {
       "native_sidecar_payload_ready" -> "native_sidecar_payload_not_ready"
       "sidecar_ready_probe" -> "sidecar_ready_probe_not_verified:${status.lastReadyCategory}"
       "task_route_surface_ready" -> "task_route_surface_not_ready:${status.lastReadyCategory}"
+      "capability_state_snapshot" -> "capability_state_not_verified:${status.lastReadyCategory}"
       "permission_state_snapshot" -> "permission_state_incomplete"
       "runtime_host_start" -> status.lastError ?: "runtime_host_start_not_ready:${status.lastRuntimeStage}"
       "runtime_host_restart" -> status.lastError ?: "runtime_host_restart_not_ready:${status.lastRuntimeStage}"
@@ -541,7 +561,9 @@ object XMiloclawSidecarProcessController {
     val byokKeyReady = byokKeyFile?.let { it.exists() && it.length() > 0 } == true
     val byokBaseUrl = prefs.getString(PREFS_BYOK_BASE_URL_KEY, null).orEmpty()
     val byokModel = prefs.getString(PREFS_BYOK_MODEL_KEY, null).orEmpty()
-    val localBYOKActive = byokProvider != null && (byokKeyReady || byokBaseUrl.isNotBlank() || byokModel.isNotBlank())
+    val selectedAccessMode = prefs.getString(PREFS_ACCESS_MODE_KEY, null).orEmpty()
+    val savedBYOKReady = byokProvider != null && (byokKeyReady || byokBaseUrl.isNotBlank() || byokModel.isNotBlank())
+    val localBYOKActive = selectedAccessMode != "hosted" && savedBYOKReady
     val config =
       JSONObject()
         .put("host", HOST)

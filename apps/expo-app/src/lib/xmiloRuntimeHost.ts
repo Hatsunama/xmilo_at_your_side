@@ -10,7 +10,8 @@ export type AppBridgeVerifiedOperation =
   | "sidecar_ready_probe"
   | "task_route_surface_ready"
   | "byok_key_storage"
-  | "permission_state_snapshot";
+  | "permission_state_snapshot"
+  | "capability_state_snapshot";
 
 export type AppBridgeVerifiedProof = {
   proof_class: "app_bridge_verified";
@@ -71,6 +72,35 @@ export type XMiloclawRuntimeStatus = {
   bridgeProof?: AppBridgeVerifiedProof;
 };
 
+export type XMiloclawCapabilityStatus = {
+  declared?: boolean;
+  requested?: boolean;
+  granted?: boolean;
+  available?: boolean;
+  tool_available?: boolean;
+  tested?: boolean;
+  last_verified_at?: string;
+  failure_stage?: "manifest" | "permission" | "tool" | "device" | "runtime" | string;
+  grant_scope?: "while_using" | "one_time" | "denied" | "unknown" | string;
+  location_accuracy?: "precise" | "approximate" | "denied" | "unknown" | string;
+  media_access?: "all" | "limited" | "denied" | "unknown" | string;
+  accepted_for_setup?: boolean;
+  repair_hint?: string;
+  note?: string;
+};
+
+export type XMiloclawCapabilityState = {
+  schema_version: 1;
+  checked_at: string;
+  runtime_host: {
+    online: boolean;
+    version: string;
+    health: "ready" | "degraded" | "offline" | string;
+  };
+  capabilities: Record<string, XMiloclawCapabilityStatus>;
+  bridgeProof?: AppBridgeVerifiedProof;
+};
+
 type XMiloclawRuntimeModuleShape = {
   getStatus?: () => Promise<XMiloclawRuntimeStatus>;
   startRuntimeHost?: () => Promise<XMiloclawRuntimeStatus>;
@@ -81,7 +111,9 @@ type XMiloclawRuntimeModuleShape = {
   openBatteryOptimizationSettings?: () => Promise<boolean>;
   getLocalhostBearerToken?: () => Promise<string>;
   saveLocalByokApiKey?: (provider: string, apiKey: string, baseUrl: string, model: string) => Promise<string>;
+  deactivateLocalByokRouting?: () => Promise<string>;
   getLocalByokStatus?: () => Promise<string>;
+  getCapabilityState?: () => Promise<string>;
 };
 
 const nativeModule = NativeModules.XMiloclawRuntimeModule as XMiloclawRuntimeModuleShape | undefined;
@@ -196,6 +228,7 @@ export async function getXMiloclawLocalhostBearerToken() {
 
 export type LocalByokStatus = {
   provider: string;
+  accessMode: string;
   keyFileReady: boolean;
   keyFilePath: string;
   baseUrlReady: boolean;
@@ -208,6 +241,7 @@ function parseLocalByokStatus(raw: string): LocalByokStatus {
   const parsed = JSON.parse(raw) as Partial<LocalByokStatus>;
   return {
     provider: String(parsed.provider ?? ""),
+    accessMode: String(parsed.accessMode ?? ""),
     keyFileReady: Boolean(parsed.keyFileReady),
     keyFilePath: String(parsed.keyFilePath ?? ""),
     baseUrlReady: Boolean(parsed.baseUrlReady),
@@ -226,11 +260,68 @@ export async function saveXMiloclawLocalByokApiKey(provider: string, apiKey: str
   return status;
 }
 
+export async function deactivateXMiloclawLocalByokRouting() {
+  if (!nativeModule?.deactivateLocalByokRouting) {
+    throw new Error("Native local access-mode switching is not available in this build yet.");
+  }
+  const status = parseLocalByokStatus(await nativeModule.deactivateLocalByokRouting());
+  await submitAppBridgeProof(status.bridgeProof);
+  return status;
+}
+
 export async function getXMiloclawLocalByokStatus() {
   if (!nativeModule?.getLocalByokStatus) {
-    return { provider: "", keyFileReady: false, keyFilePath: "", baseUrlReady: false, model: "", byokReady: false } satisfies LocalByokStatus;
+    return { provider: "", accessMode: "", keyFileReady: false, keyFilePath: "", baseUrlReady: false, model: "", byokReady: false } satisfies LocalByokStatus;
   }
   return parseLocalByokStatus(await nativeModule.getLocalByokStatus());
+}
+
+export async function getXMiloclawCapabilityState(): Promise<XMiloclawCapabilityState> {
+  if (!nativeModule?.getCapabilityState) {
+    return {
+      schema_version: 1,
+      checked_at: new Date().toISOString(),
+      runtime_host: {
+        online: false,
+        version: "native_module_missing",
+        health: "offline"
+      },
+      capabilities: {
+        runtime_host: {
+          available: false,
+          tool_available: false,
+          tested: true,
+          failure_stage: "runtime",
+          note: "Native xMilo runtime host module is not available in this build."
+        }
+      }
+    };
+  }
+  const parsed = JSON.parse(await nativeModule.getCapabilityState()) as XMiloclawCapabilityState;
+  await submitAppBridgeProof(parsed.bridgeProof);
+  return sanitizeCapabilityStateForApp(parsed);
+}
+
+export async function refreshXMiloclawCapabilityState(): Promise<XMiloclawCapabilityState> {
+  const state = await getXMiloclawCapabilityState();
+  try {
+    const bearer = await resolveLocalhostBearerToken();
+    const response = await fetch(`${SIDECAR_BASE_URL}/runtime/capability-state`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearer}`
+      },
+      body: JSON.stringify(state)
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      console.warn(`xMilo capability state was not accepted: ${response.status} ${sanitizeProofLogText(text)}`);
+    }
+  } catch (error) {
+    console.warn(`xMilo capability state submission failed: ${sanitizeProofLogText(String((error as Error)?.message ?? error))}`);
+  }
+  return state;
 }
 
 export async function resolveLocalhostBearerToken() {
@@ -385,4 +476,41 @@ function sanitizeProofLogText(value: string) {
     .replace(/bearer\s+[A-Za-z0-9._-]{16,}/gi, "bearer <redacted>")
     .replace(/(api[_-]?key|provider[_-]?key|secret|token)\s*[:=]\s*[^\s,"'}]+/gi, "$1=<redacted>")
     .slice(0, 240);
+}
+
+function sanitizeCapabilityStateForApp(state: XMiloclawCapabilityState): XMiloclawCapabilityState {
+  const capabilities: Record<string, XMiloclawCapabilityStatus> = {};
+  for (const [name, capability] of Object.entries(state.capabilities ?? {})) {
+    capabilities[sanitizeCapabilityKey(name)] = {
+      declared: typeof capability.declared === "boolean" ? capability.declared : undefined,
+      requested: typeof capability.requested === "boolean" ? capability.requested : undefined,
+      granted: typeof capability.granted === "boolean" ? capability.granted : undefined,
+      available: typeof capability.available === "boolean" ? capability.available : undefined,
+      tool_available: typeof capability.tool_available === "boolean" ? capability.tool_available : undefined,
+      tested: typeof capability.tested === "boolean" ? capability.tested : undefined,
+      last_verified_at: typeof capability.last_verified_at === "string" ? sanitizeProofLogText(capability.last_verified_at) : undefined,
+      failure_stage: typeof capability.failure_stage === "string" ? sanitizeProofLogText(capability.failure_stage) : undefined,
+      grant_scope: typeof capability.grant_scope === "string" ? sanitizeProofLogText(capability.grant_scope) : undefined,
+      location_accuracy: typeof capability.location_accuracy === "string" ? sanitizeProofLogText(capability.location_accuracy) : undefined,
+      media_access: typeof capability.media_access === "string" ? sanitizeProofLogText(capability.media_access) : undefined,
+      accepted_for_setup: typeof capability.accepted_for_setup === "boolean" ? capability.accepted_for_setup : undefined,
+      repair_hint: typeof capability.repair_hint === "string" ? sanitizeProofLogText(capability.repair_hint) : undefined,
+      note: typeof capability.note === "string" ? sanitizeProofLogText(capability.note) : undefined
+    };
+  }
+  return {
+    schema_version: 1,
+    checked_at: typeof state.checked_at === "string" ? sanitizeProofLogText(state.checked_at) : new Date().toISOString(),
+    runtime_host: {
+      online: Boolean(state.runtime_host?.online),
+      version: sanitizeProofLogText(String(state.runtime_host?.version ?? "unknown")),
+      health: sanitizeProofLogText(String(state.runtime_host?.health ?? "unknown"))
+    },
+    capabilities,
+    bridgeProof: isAppBridgeVerifiedProof(state.bridgeProof) ? state.bridgeProof : undefined
+  };
+}
+
+function sanitizeCapabilityKey(value: string) {
+  return value.replace(/[^a-z0-9_:-]/gi, "_").slice(0, 64);
 }
