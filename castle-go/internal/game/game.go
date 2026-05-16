@@ -271,11 +271,14 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	if !g.initialized {
 		return
 	}
+	g.maybeApplyMainHallProceduralFallback()
+
 	// RoomScene.Draw takes a z-order value for Milo and a closure that draws him.
 	// This lets the scene interleave Milo correctly between props (painter's algorithm).
 	g.scene.Draw(screen, g.milo.ZOrder, func() {
 		g.milo.Draw(screen)
 	})
+	g.logFirstFrameContentProbe(screen)
 }
 
 func (g *Game) maybeApplyMainHallProceduralFallback() {
