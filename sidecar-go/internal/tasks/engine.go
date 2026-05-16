@@ -15,8 +15,10 @@ import (
 	"xmilo/sidecar-go/internal/db"
 	"xmilo/sidecar-go/internal/llm"
 	"xmilo/sidecar-go/internal/movement"
+	"xmilo/sidecar-go/internal/promptsecrecy"
 	"xmilo/sidecar-go/internal/rooms"
 	"xmilo/sidecar-go/internal/runtime"
+	"xmilo/sidecar-go/internal/runtimegate"
 	"xmilo/sidecar-go/internal/ws"
 	"xmilo/sidecar-go/shared/contracts"
 	"xmilo/sidecar-go/shared/plannerpolicy"
@@ -97,7 +99,15 @@ func (e *Engine) StartTask(ctx context.Context, prompt string) (*runtime.TaskSna
 	defer e.mu.Unlock()
 
 	assessment := e.assessPromptIntake(prompt)
+	preTaskDecision := runtimegate.EvaluatePreTask(prompt, time.Now().UTC())
 	if assessment.ChosenClosedAction != "START_TASK" && assessment.ChosenClosedAction != "ANSWER" {
+		if preTaskDecision.Outcome != runtimegate.OutcomeAllow {
+			if err := applyPreTaskGateDecision(assessment, preTaskDecision); err != nil {
+				return nil, assessment, err
+			}
+			e.emit("task.intake_evaluated", map[string]any{"surface": "start_task", "assessment": assessment})
+			return nil, assessment, errors.New(string(preTaskDecision.ReasonCode))
+		}
 		e.emit("task.intake_evaluated", map[string]any{"surface": "start_task", "assessment": assessment})
 		return nil, assessment, errors.New(strings.ToLower(assessment.ChosenClosedAction))
 	}
@@ -114,6 +124,13 @@ func (e *Engine) StartTask(ctx context.Context, prompt string) (*runtime.TaskSna
 		assessment.ChosenClosedAction = "REPORT_STATUS"
 		e.emit("task.intake_evaluated", map[string]any{"surface": "start_task", "assessment": assessment})
 		return nil, assessment, errors.New("active task already running")
+	}
+	if preTaskDecision.Outcome != runtimegate.OutcomeAllow {
+		if err := applyPreTaskGateDecision(assessment, preTaskDecision); err != nil {
+			return nil, assessment, err
+		}
+		e.emit("task.intake_evaluated", map[string]any{"surface": "start_task", "assessment": assessment})
+		return nil, assessment, errors.New(string(preTaskDecision.ReasonCode))
 	}
 	if err := e.invalidatePendingContinuationLocked("superseded_by_new_task"); err != nil {
 		return nil, assessment, err
@@ -193,7 +210,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		promptForRelay = "<resume_checkpoint>\n" + string(checkpointPayload) + "\n</resume_checkpoint>\n\n" + task.Prompt
 	}
 	if activeCtx, ok := e.activeStoredContext(); ok {
-		contextBlock := contextpolicy.PromptBlock(activeCtx)
+		contextBlock := e.contextPromptBlock(activeCtx)
 		promptForRelay = contextBlock + "\n\n" + task.Prompt
 		if checkpoint != nil {
 			checkpointPayload, _ := json.Marshal(checkpoint)
@@ -220,7 +237,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 			task.StuckReason = "entitlement_lost"
 			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 			_ = e.store.UpsertTask("interrupted", task)
-			_ = e.store.SetResumeCheckpoint(buildInterruptedCheckpoint(task, e.currentContextHash()))
+			_ = e.persistResumeCheckpoint(buildInterruptedCheckpoint(task, e.currentContextHash()))
 			_ = e.store.ClearApprovalState()
 			_ = e.store.ClearTask("active")
 			e.transitionTo("idle")
@@ -260,6 +277,8 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		}
 	}
 
+	relayResp = e.enforceModelActionGate(relayResp)
+
 	relayResp = e.enforceIntakeCeiling(task, checkpoint, relayResp, phase)
 
 	if checkpoint != nil {
@@ -267,6 +286,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 	}
 
 	relayResp = e.enforceCompletionEvidence(&task, checkpoint, relayResp)
+	relayResp = e.enforceMemoryPromotionGate(&task, relayResp)
 	e.recordEvidenceBoundary(&task, checkpoint, relayResp)
 
 	_ = e.store.AppendConversation("assistant", relayResp.ReportText)
@@ -290,7 +310,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 	if outcome.TaskStatus == "awaiting_user_choice" {
 		_ = e.store.UpsertTask("awaiting_user_choice", task)
 		_ = e.store.SetApprovalState(buildApprovalState(task.TaskID, outcome.Blocker, relayResp.Choices))
-		_ = e.store.SetResumeCheckpoint(buildApprovalCheckpoint(task, outcome.Blocker, relayResp.Choices, e.currentContextHash()))
+		_ = e.persistResumeCheckpoint(buildApprovalCheckpoint(task, outcome.Blocker, relayResp.Choices, e.currentContextHash()))
 	} else if outcome.TaskStatus == "resumable" {
 		checkpointToStore := checkpoint
 		if relayResp.ExecutionResult != nil {
@@ -298,7 +318,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		}
 		if checkpointToStore != nil {
 			_ = e.store.UpsertTask("interrupted", task)
-			_ = e.store.SetResumeCheckpoint(checkpointToStore)
+			_ = e.persistResumeCheckpoint(checkpointToStore)
 		}
 		_ = e.store.ClearApprovalState()
 		_ = e.store.ClearTask("awaiting_user_choice")
@@ -488,8 +508,52 @@ func easterEggMessage(code string) string {
 }
 
 func (e *Engine) emit(eventType string, payload map[string]any) {
-	_ = e.store.AppendPendingEvent(eventType, payload)
-	e.hub.Broadcast(eventType, payload)
+	sanitized := sanitizeEventPayload(payload)
+	_ = e.store.AppendPendingEvent(eventType, sanitized)
+	e.hub.Broadcast(eventType, sanitized)
+}
+
+func sanitizeEventPayload(payload map[string]any) map[string]any {
+	out := make(map[string]any, len(payload))
+	for key, value := range payload {
+		if promptsecrecy.FieldForbidden(key) {
+			continue
+		}
+		out[key] = sanitizeEventValue(value)
+	}
+	return out
+}
+
+func sanitizeEventValue(value any) any {
+	switch v := value.(type) {
+	case string:
+		return promptsecrecy.Redact(v)
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, value := range v {
+			out = append(out, promptsecrecy.Redact(value))
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, value := range v {
+			out = append(out, sanitizeEventValue(value))
+		}
+		return out
+	case map[string]any:
+		return sanitizeEventPayload(v)
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for key, value := range v {
+			if promptsecrecy.FieldForbidden(key) {
+				continue
+			}
+			out[key] = promptsecrecy.Redact(value)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func (e *Engine) transitionTo(next string) {
@@ -583,7 +647,7 @@ func (e *Engine) RecordChoice(taskID, choice, decision string) (*runtime.Approva
 		checkpoint.UpdatedAt = now
 		_ = e.store.UpsertTask("awaiting_user_choice", *task)
 		_ = e.store.SetApprovalState(approval)
-		_ = e.store.SetResumeCheckpoint(checkpoint)
+		_ = e.persistResumeCheckpoint(checkpoint)
 		e.emit("task.intake_evaluated", map[string]any{"surface": "task_choice", "assessment": assessment})
 		e.emit("task.blocked", map[string]any{"task_id": taskID, "attempt_id": task.AttemptID, "blocker": "user_denied_choice"})
 		return approval, assessment, nil
@@ -634,7 +698,7 @@ func (e *Engine) RecordChoice(taskID, choice, decision string) (*runtime.Approva
 	if err := e.store.SetApprovalState(approval); err != nil {
 		return nil, assessment, err
 	}
-	if err := e.store.SetResumeCheckpoint(checkpoint); err != nil {
+	if err := e.persistResumeCheckpoint(checkpoint); err != nil {
 		return nil, assessment, err
 	}
 	if err := e.store.UpsertTask("awaiting_user_choice", *task); err != nil {
@@ -734,6 +798,22 @@ func (e *Engine) RecordAppBridgeEvidence(evidence runtime.AppBridgeEvidence) (*r
 	if task.AttemptID == "" || evidence.AttemptID != task.AttemptID {
 		return nil, errors.New("app_bridge_evidence_attempt_mismatch")
 	}
+	decision := runtimegate.EvaluateToolAction(runtimegate.ToolActionInput{
+		ActionName:                "app_bridge_evidence",
+		ActionFamily:              runtimegate.ActionFamilyAppBridgeEvidence,
+		AppBridgeOperation:        evidence.Operation,
+		AppBridgeOperationAllowed: IsAllowedAppBridgeEvidenceOperation(evidence.Operation),
+		Payload: map[string]any{
+			"summary": evidence.Summary,
+		},
+	}, time.Now().UTC())
+	if decision.Outcome != runtimegate.OutcomeAllow {
+		sanitized, err := decision.Sanitized()
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("pre_tool_action:" + string(sanitized.ReasonCode))
+	}
 
 	boundary := e.ensureEvidenceBoundary(task, nil)
 	boundary.AppBridgeEvidence = append(boundary.AppBridgeEvidence, evidence)
@@ -752,7 +832,7 @@ func (e *Engine) RecordAppBridgeEvidence(evidence runtime.AppBridgeEvidence) (*r
 		} else {
 			checkpoint.EvidenceBoundary.AppBridgeEvidence = append(checkpoint.EvidenceBoundary.AppBridgeEvidence, evidence)
 		}
-		_ = e.store.SetResumeCheckpoint(checkpoint)
+		_ = e.persistResumeCheckpoint(checkpoint)
 	}
 
 	return &evidence, nil
@@ -903,6 +983,10 @@ func (e *Engine) enforceResumedTypedAction(task runtime.TaskSnapshot, checkpoint
 		return blockedTypedActionResponse(resp, "missing_typed_action", "Resume requires a typed check_state action before Milo can continue.")
 	}
 
+	if decision := e.evaluateToolAction(resp.ActionType, resp.ActionPayload, resp.ExpectedCheck, "model_resume_action"); decision.Outcome != runtimegate.OutcomeAllow {
+		return sanitizedToolActionBlockedResponse(resp, decision)
+	}
+
 	var result *contracts.ExecutionResult
 	switch resp.ActionType {
 	case "check_state":
@@ -998,6 +1082,209 @@ func (e *Engine) blockedIntakeResponse(resp contracts.RelayTurnResponse, assessm
 		resp.NextBlocker = reason
 	}
 	return resp
+}
+
+func (e *Engine) enforceModelActionGate(resp contracts.RelayTurnResponse) contracts.RelayTurnResponse {
+	verified := false
+	if resp.ExecutionResult != nil {
+		verified = resp.ExecutionResult.Verified
+	}
+	decision := runtimegate.EvaluateModelAction(runtimegate.ModelActionInput{
+		ActionType:         resp.ActionType,
+		CompletionStatus:   resp.CompletionStatus,
+		ContinuationStatus: resp.ContinuationStatus,
+		Summary:            resp.Summary,
+		ReportText:         resp.ReportText,
+		ThoughtText:        resp.ThoughtText,
+		NextBlocker:        resp.NextBlocker,
+		ExecutionVerified:  verified,
+	}, time.Now().UTC())
+	if decision.Outcome == runtimegate.OutcomeAllow {
+		return resp
+	}
+	sanitized, err := decision.Sanitized()
+	if err != nil {
+		sanitized = runtimegate.SanitizedDecision{
+			Outcome:     runtimegate.OutcomeBlock,
+			ReasonCode:  runtimegate.ReasonUnknownMalformedAction,
+			GatePhase:   runtimegate.PhasePreModelAction,
+			SafeSummary: "Milo blocked a malformed model action before it could affect runtime state.",
+		}
+	}
+	return sanitizedModelActionBlockedResponse(resp, sanitized)
+}
+
+func sanitizedModelActionBlockedResponse(resp contracts.RelayTurnResponse, decision runtimegate.SanitizedDecision) contracts.RelayTurnResponse {
+	summary := strings.TrimSpace(decision.SafeSummary)
+	if summary == "" {
+		summary = "Milo blocked unsafe model output before it could affect runtime state."
+	}
+	blocker := "model_action_gate:" + string(decision.ReasonCode)
+	resp.ThoughtText = summary
+	resp.Summary = summary
+	resp.ReportText = summary
+	resp.ActionType = "none"
+	resp.ActionPayload = nil
+	resp.ExpectedCheck = nil
+	resp.RequiresUserChoice = false
+	resp.Choices = nil
+	resp.CompletionStatus = "blocked"
+	resp.ContinuationStatus = "not_resumable"
+	resp.NextBlocker = blocker
+	resp.ExecutionResult = &contracts.ExecutionResult{
+		Status:         "rejected",
+		Verified:       false,
+		ResultSummary:  summary,
+		BlockingReason: blocker,
+	}
+	return resp
+}
+
+func (e *Engine) evaluateToolAction(actionName string, payload map[string]any, expected *contracts.ExpectedCheck, actionFamily string) runtimegate.SanitizedDecision {
+	expectedType := ""
+	if expected != nil {
+		expectedType = expected.CheckType
+	}
+	decision := runtimegate.EvaluateToolAction(runtimegate.ToolActionInput{
+		ActionName:        actionName,
+		ActionFamily:      actionFamily,
+		Payload:           payload,
+		ExpectedCheckType: expectedType,
+		CapabilityState:   e.latestCapabilityState(),
+	}, time.Now().UTC())
+	sanitized, err := decision.Sanitized()
+	if err != nil {
+		fallback := runtimegate.NewDecision(runtimegate.OutcomeBlock, runtimegate.ReasonUnknownMalformedAction, runtimegate.PhasePreToolAction, time.Now().UTC())
+		fallback.ActionFamily = actionFamily
+		fallback.ActionName = actionName
+		fallback.SafeSummary = "Milo blocked a malformed tool action before execution."
+		sanitized, _ = fallback.Sanitized()
+	}
+	return sanitized
+}
+
+func sanitizedToolActionBlockedResponse(resp contracts.RelayTurnResponse, decision runtimegate.SanitizedDecision) contracts.RelayTurnResponse {
+	summary := strings.TrimSpace(decision.SafeSummary)
+	if summary == "" {
+		summary = "Milo blocked an unsafe or unsupported runtime action before execution."
+	}
+	blocker := "tool_action_gate:" + string(decision.ReasonCode)
+	resp.ThoughtText = summary
+	resp.Summary = summary
+	resp.ReportText = summary
+	resp.ActionPayload = nil
+	resp.ExpectedCheck = nil
+	resp.RequiresUserChoice = false
+	resp.Choices = nil
+	resp.CompletionStatus = "blocked"
+	resp.ContinuationStatus = "not_resumable"
+	resp.NextBlocker = blocker
+	resp.ExecutionResult = &contracts.ExecutionResult{
+		Status:         "rejected",
+		Verified:       false,
+		ResultSummary:  summary,
+		BlockingReason: blocker,
+	}
+	return resp
+}
+
+func (e *Engine) enforceMemoryPromotionGate(task *runtime.TaskSnapshot, resp contracts.RelayTurnResponse) contracts.RelayTurnResponse {
+	if task == nil {
+		return resp
+	}
+	verifiedCompletion := false
+	if task.EvidenceBoundary != nil && task.EvidenceBoundary.CompletionEvidence != nil {
+		verifiedCompletion = task.EvidenceBoundary.CompletionEvidence.Verified
+	}
+	decision := runtimegate.EvaluateMemoryPromotion(runtimegate.MemoryPromotionInput{
+		Content:                    durableRelayContent(resp),
+		Source:                     "model_output",
+		Target:                     "archive_history",
+		VerifiedCompletionEvidence: verifiedCompletion,
+		ByteLength:                 len([]byte(durableRelayContent(resp))),
+	}, time.Now().UTC())
+	if decision.Outcome == runtimegate.OutcomeAllow {
+		return resp
+	}
+	sanitized, err := decision.Sanitized()
+	if err != nil {
+		fallback := runtimegate.NewDecision(runtimegate.OutcomeBlock, runtimegate.ReasonUnknownMalformedAction, runtimegate.PhasePreMemoryWrite, time.Now().UTC())
+		fallback.ActionFamily = runtimegate.ActionFamilyMemoryPromotion
+		fallback.SafeSummary = "Milo blocked unsafe content before durable memory or archive promotion."
+		sanitized, _ = fallback.Sanitized()
+	}
+	return sanitizedMemoryPromotionBlockedResponse(resp, sanitized)
+}
+
+func sanitizedMemoryPromotionBlockedResponse(resp contracts.RelayTurnResponse, decision runtimegate.SanitizedDecision) contracts.RelayTurnResponse {
+	summary := strings.TrimSpace(decision.SafeSummary)
+	if summary == "" {
+		summary = "Milo blocked unsafe content before durable memory or archive promotion."
+	}
+	blocker := "memory_promotion_gate:" + string(decision.ReasonCode)
+	resp.ThoughtText = summary
+	resp.Summary = summary
+	resp.ReportText = summary
+	resp.ActionPayload = nil
+	resp.ExpectedCheck = nil
+	resp.RequiresUserChoice = false
+	resp.Choices = nil
+	resp.CompletionStatus = "blocked"
+	resp.ContinuationStatus = "not_resumable"
+	resp.NextBlocker = blocker
+	resp.ExecutionResult = &contracts.ExecutionResult{
+		Status:         "rejected",
+		Verified:       false,
+		ResultSummary:  summary,
+		BlockingReason: blocker,
+	}
+	return resp
+}
+
+func durableRelayContent(resp contracts.RelayTurnResponse) string {
+	return strings.Join([]string{
+		resp.Summary,
+		resp.ReportText,
+		resp.ThoughtText,
+		resp.NextBlocker,
+		strings.Join(resp.Choices, "\n"),
+	}, "\n")
+}
+
+func (e *Engine) persistResumeCheckpoint(checkpoint *runtime.ResumeCheckpoint) error {
+	if checkpoint == nil {
+		return e.store.SetResumeCheckpoint(nil)
+	}
+	decision := runtimegate.EvaluateMemoryPromotion(runtimegate.MemoryPromotionInput{
+		Content: checkpointPromotionContent(checkpoint),
+		Source:  "runtime_checkpoint",
+		Target:  "resume_checkpoint",
+	}, time.Now().UTC())
+	if decision.Outcome != runtimegate.OutcomeAllow {
+		sanitized, err := decision.Sanitized()
+		if err != nil {
+			return err
+		}
+		return errors.New("pre_memory_write:" + string(sanitized.ReasonCode))
+	}
+	return e.store.SetResumeCheckpoint(checkpoint)
+}
+
+func checkpointPromotionContent(checkpoint *runtime.ResumeCheckpoint) string {
+	if checkpoint == nil {
+		return ""
+	}
+	var payloadParts []string
+	for key, value := range checkpoint.NextStepPayload {
+		payloadParts = append(payloadParts, key+"="+fmt.Sprint(value))
+	}
+	return strings.Join([]string{
+		checkpoint.Blocker,
+		checkpoint.ContinuationStatus,
+		checkpoint.NextStepType,
+		strings.Join(payloadParts, "\n"),
+		strings.Join(checkpoint.Choices, "\n"),
+	}, "\n")
 }
 
 func blockedTypedActionResponse(resp contracts.RelayTurnResponse, blocker, summary string) contracts.RelayTurnResponse {
@@ -1230,6 +1517,10 @@ func (e *Engine) executeResumeCheckpoint(task *runtime.TaskSnapshot, checkpoint 
 		ContinuationStatus: checkpoint.ContinuationStatus,
 		NextBlocker:        checkpoint.Blocker,
 		Choices:            append([]string(nil), checkpoint.Choices...),
+	}
+
+	if decision := e.evaluateToolAction(actionType, checkpoint.NextStepPayload, nil, "resume_checkpoint_action"); decision.Outcome != runtimegate.OutcomeAllow {
+		return sanitizedToolActionBlockedResponse(resp, decision)
 	}
 
 	switch actionType {
@@ -1526,6 +1817,7 @@ func updatedCheckpointFromResult(checkpoint *runtime.ResumeCheckpoint, result *c
 
 func (e *Engine) finalizeTask(task *runtime.TaskSnapshot, checkpoint *runtime.ResumeCheckpoint, relayResp contracts.RelayTurnResponse) {
 	relayResp = e.enforceCompletionEvidence(task, checkpoint, relayResp)
+	relayResp = e.enforceMemoryPromotionGate(task, relayResp)
 	e.recordEvidenceBoundary(task, checkpoint, relayResp)
 
 	_ = e.store.AppendConversation("assistant", relayResp.ReportText)
@@ -1561,14 +1853,14 @@ func (e *Engine) finalizeTask(task *runtime.TaskSnapshot, checkpoint *runtime.Re
 			checkpointToStore.ContextHash = e.currentContextHash()
 			checkpointToStore.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		}
-		_ = e.store.SetResumeCheckpoint(checkpointToStore)
+		_ = e.persistResumeCheckpoint(checkpointToStore)
 	case "resumable":
 		checkpointToStore := updatedCheckpointFromResult(checkpoint, relayResp.ExecutionResult)
 		if checkpointToStore != nil {
 			task.Slot = "interrupted"
 			task.Status = "resumable"
 			_ = e.store.UpsertTask("interrupted", *task)
-			_ = e.store.SetResumeCheckpoint(checkpointToStore)
+			_ = e.persistResumeCheckpoint(checkpointToStore)
 		}
 		_ = e.store.ClearApprovalState()
 		_ = e.store.ClearTask("awaiting_user_choice")
@@ -1804,6 +2096,35 @@ func (e *Engine) assessPromptIntake(prompt string) *runtime.IntakeAssessment {
 	return assessment
 }
 
+func applyPreTaskGateDecision(assessment *runtime.IntakeAssessment, decision runtimegate.Decision) error {
+	sanitized, err := decision.Sanitized()
+	if err != nil {
+		return err
+	}
+	assessment.SafetyDecision = &sanitized
+	assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, "pre_task_gate_blocked")
+	assessment.SecondaryFlags = appendUnique(assessment.SecondaryFlags, string(decision.ReasonCode))
+
+	switch decision.Outcome {
+	case runtimegate.OutcomeBlock:
+		assessment.ValidationState = "INVALID"
+		assessment.ChosenClosedAction = "REFUSE"
+	case runtimegate.OutcomeClarify:
+		assessment.ValidationState = "UNKNOWN_STATE"
+		assessment.ChosenClosedAction = "CLARIFY"
+	case runtimegate.OutcomeConfirm:
+		assessment.ValidationState = "PENDING_APPROVAL"
+		assessment.ChosenClosedAction = "REQUEST_CONFIRMATION"
+	case runtimegate.OutcomeSafeRedirect:
+		assessment.ValidationState = "BLOCKED"
+		assessment.ChosenClosedAction = "REDIRECT_SAFELY"
+	default:
+		assessment.ValidationState = "BLOCKED"
+		assessment.ChosenClosedAction = "SAFE_FALLBACK"
+	}
+	return nil
+}
+
 func assessChoiceIntake(taskID, choice, decision string) *runtime.IntakeAssessment {
 	assessment := &runtime.IntakeAssessment{
 		PrimaryClass:       "CLARIFICATION",
@@ -1888,6 +2209,28 @@ func (e *Engine) activeStoredContext() (contextpolicy.StoredContext, bool) {
 	activeCtx, _ := e.store.GetRuntimeConfig("active_context")
 	metaRaw, _ := e.store.GetRuntimeConfig("active_context_meta")
 	return contextpolicy.ParseStored(activeCtx, metaRaw, time.Now().UTC())
+}
+
+func (e *Engine) contextPromptBlock(stored contextpolicy.StoredContext) string {
+	decision := runtimegate.EvaluatePreContext(runtimegate.ContextInput{
+		Content:     stored.Content,
+		TrustTier:   stored.Meta.TrustTier,
+		Source:      stored.Meta.Source,
+		Legacy:      stored.Meta.Legacy,
+		ByteLength:  stored.Meta.ByteLength,
+		StructValid: true,
+	}, time.Now().UTC())
+	if decision.Outcome == runtimegate.OutcomeAllow {
+		return contextpolicy.PromptBlock(stored)
+	}
+	sanitized, err := decision.Sanitized()
+	if err != nil {
+		fallback := runtimegate.NewDecision(runtimegate.OutcomeBlock, runtimegate.ReasonUnknownMalformedAction, runtimegate.PhasePreContextInjection, time.Now().UTC())
+		fallback.ActionFamily = runtimegate.ActionFamilyContextInjection
+		fallback.SafeSummary = "Some untrusted context was omitted before model use."
+		sanitized, _ = fallback.Sanitized()
+	}
+	return runtimegate.OmittedContextNote(sanitized)
 }
 
 func (e *Engine) buildMemoryIntent(prompt, lower string, isWrite bool, injectionHits int) (*runtime.MemoryIntent, string) {

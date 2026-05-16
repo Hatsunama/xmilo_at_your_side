@@ -48,6 +48,56 @@ export type ProviderDiagnosticPayload = {
   provider_error_class?: string;
 };
 
+export type SafetyDecisionOutcome = "allow" | "block" | "clarify" | "confirm" | "safe_redirect";
+
+export type SafetyDecisionReasonCode =
+  | "none"
+  | "harmful_request"
+  | "prompt_injection_authority_spoof"
+  | "external_content_attempted_command"
+  | "missing_permission_or_capability"
+  | "missing_tool_proof"
+  | "missing_provider_access_route"
+  | "missing_approval"
+  | "unsafe_automation"
+  | "destructive_action"
+  | "privacy_surveillance_risk"
+  | "credential_secret_risk"
+  | "completion_evidence_missing"
+  | "unknown_malformed_action"
+  | "unbounded_consumption_risk";
+
+export type SafetyDecisionGatePhase =
+  | "pre_task"
+  | "pre_context_injection"
+  | "pre_model_action"
+  | "pre_tool_action"
+  | "pre_completion"
+  | "pre_memory_write";
+
+export type SafetyDecision = {
+  outcome: SafetyDecisionOutcome;
+  reason_code: SafetyDecisionReasonCode;
+  gate_phase: SafetyDecisionGatePhase;
+  action_family?: string;
+  action_name?: string;
+  evidence_required: boolean;
+  source_trust_tier?: number;
+  user_safe_message?: string;
+  safe_summary?: string;
+  created_at?: string;
+};
+
+export type IntakeAssessment = {
+  primary_class?: string;
+  secondary_flags?: string[];
+  trust_tier?: number;
+  validation_state?: string;
+  chosen_closed_action?: string;
+  memory_intent?: Record<string, unknown> | null;
+  safety_decision?: SafetyDecision | null;
+};
+
 export type TaskSnapshot = {
   task_id: string;
   attempt_id: string;
@@ -63,6 +113,7 @@ export type TaskSnapshot = {
   failure_type?: string;
   stuck_reason?: string;
   slot?: string;
+  intake_assessment?: IntakeAssessment | null;
 };
 
 export type RuntimeState = {
@@ -84,7 +135,7 @@ export type CommandSubmitResponse = {
   task_id?: string;
   attempt_id?: string;
   immediate_state?: TaskSnapshot | null;
-  intake_gate?: Record<string, unknown> | null;
+  intake_gate?: SafetyDecision | Record<string, unknown> | null;
   plan?: Record<string, unknown> | null;
 };
 

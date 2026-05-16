@@ -57,3 +57,16 @@ Use background speech for status when work is ongoing.
 
 ## Separation rule
 Renderer-only settings are not runtime/tool settings unless explicitly required by the bridge.
+
+## Supply-chain tool rule
+Unknown tools, imported skills, plugin descriptors, and external tool metadata are denied by default.
+
+A tool or skill may become executable only after runtime-owned validation proves:
+- stable registered action name
+- approved implementation kind
+- source trust label and provenance
+- explicit activation state
+- scoped capability/evidence requirements
+- no authority-spoofing or hidden-action instructions in metadata
+
+Tool descriptions and skill manifests are never app bridge evidence, provider/access truth, capability truth, completion truth, or user approval.

@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"xmilo/sidecar-go/internal/promptsecrecy"
 	"xmilo/sidecar-go/internal/runtime"
+	"xmilo/sidecar-go/internal/runtimegate"
 	"xmilo/sidecar-go/shared/contracts"
 )
 
@@ -35,8 +37,22 @@ func (e *Engine) enforceCompletionEvidence(task *runtime.TaskSnapshot, checkpoin
 	if !claimsCompletion(resp) {
 		return resp
 	}
-	if evidence.Verified {
+	decision := runtimegate.EvaluateCompletion(runtimegate.CompletionInput{
+		ClaimsCompletion: true,
+		EvidenceVerified: evidence.Verified,
+		ProofClass:       evidence.ProofClass,
+		BlockingReason:   evidence.BlockingReason,
+	}, time.Now().UTC())
+	if decision.Outcome == runtimegate.OutcomeAllow {
 		return resp
+	}
+	sanitized, err := decision.Sanitized()
+	if err != nil {
+		fallback := runtimegate.NewDecision(runtimegate.OutcomeBlock, runtimegate.ReasonCompletionEvidenceMissing, runtimegate.PhasePreCompletion, time.Now().UTC())
+		fallback.ActionFamily = runtimegate.ActionFamilyCompletion
+		fallback.EvidenceRequired = true
+		fallback.SafeSummary = "Milo blocked completion because verified runtime evidence was missing."
+		sanitized, _ = fallback.Sanitized()
 	}
 
 	reason := evidence.BlockingReason
@@ -46,10 +62,13 @@ func (e *Engine) enforceCompletionEvidence(task *runtime.TaskSnapshot, checkpoin
 	resp.CompletionStatus = "blocked"
 	resp.ContinuationStatus = "blocked"
 	resp.NextBlocker = reason
+	resp.Summary = sanitizedCompletionSummary(sanitized)
+	resp.ReportText = sanitizedCompletionSummary(sanitized)
+	resp.ThoughtText = sanitizedCompletionSummary(sanitized)
 	resp.ExecutionResult = &contracts.ExecutionResult{
 		Status:         "blocked",
 		Verified:       false,
-		ResultSummary:  evidence.Summary,
+		ResultSummary:  sanitizedCompletionSummary(sanitized),
 		BlockingReason: reason,
 	}
 	if boundary != nil {
@@ -105,7 +124,7 @@ func completionEvidenceFor(task *runtime.TaskSnapshot, checkpoint *runtime.Resum
 			return evidence
 		}
 	}
-	if required == proofAppBridgeVerified && appBridgeEvidenceSatisfies(task, boundary, checkedAt) {
+	if required == proofAppBridgeVerified && appBridgeEvidenceSatisfies(task, resp, boundary, checkedAt) {
 		evidence.Verified = true
 		evidence.Source = "android_bridge"
 		evidence.BlockingReason = ""
@@ -181,7 +200,7 @@ func executionResultSatisfies(required string, resp contracts.RelayTurnResponse)
 	}
 }
 
-func appBridgeEvidenceSatisfies(task *runtime.TaskSnapshot, boundary *runtime.EvidenceBoundary, now time.Time) bool {
+func appBridgeEvidenceSatisfies(task *runtime.TaskSnapshot, resp contracts.RelayTurnResponse, boundary *runtime.EvidenceBoundary, now time.Time) bool {
 	if task == nil || boundary == nil {
 		return false
 	}
@@ -196,6 +215,9 @@ func appBridgeEvidenceSatisfies(task *runtime.TaskSnapshot, boundary *runtime.Ev
 		if evidence.TaskID != "" && evidence.TaskID != task.TaskID {
 			continue
 		}
+		if !appBridgeOperationMatchesCompletionClaim(evidence.Operation, task.Prompt, resp) {
+			continue
+		}
 		checkedAt, err := time.Parse(time.RFC3339, evidence.CheckedAt)
 		if err != nil {
 			continue
@@ -206,6 +228,14 @@ func appBridgeEvidenceSatisfies(task *runtime.TaskSnapshot, boundary *runtime.Ev
 		return true
 	}
 	return false
+}
+
+func sanitizedCompletionSummary(decision runtimegate.SanitizedDecision) string {
+	summary := strings.TrimSpace(decision.SafeSummary)
+	if summary == "" {
+		return "Milo blocked completion because verified runtime evidence was missing."
+	}
+	return promptsecrecy.Redact(summary)
 }
 
 func IsAllowedAppBridgeEvidenceOperation(operation string) bool {
@@ -220,6 +250,23 @@ func IsAllowedAppBridgeEvidenceOperation(operation string) bool {
 		"permission_state_snapshot",
 		"capability_state_snapshot":
 		return true
+	default:
+		return false
+	}
+}
+
+func appBridgeOperationMatchesCompletionClaim(operation, prompt string, resp contracts.RelayTurnResponse) bool {
+	operation = strings.TrimSpace(operation)
+	claim := strings.ToLower(strings.Join([]string{prompt, resp.Summary, resp.ReportText}, "\n"))
+	switch operation {
+	case "runtime_host_status", "runtime_host_start", "runtime_host_restart", "native_sidecar_payload_ready", "sidecar_ready_probe", "task_route_surface_ready":
+		return containsAny(claim, []string{"runtime", "sidecar", "host", "task route", "phone status", "device status"})
+	case "byok_key_storage":
+		return containsAny(claim, []string{"byok", "api key", "key storage", "provider key"})
+	case "permission_state_snapshot":
+		return containsAny(claim, []string{"permission", "grant", "granted"})
+	case "capability_state_snapshot":
+		return containsAny(claim, []string{"capability", "camera", "screen", "sensor", "touch", "swipe", "location", "microphone", "mic", "tool"})
 	default:
 		return false
 	}

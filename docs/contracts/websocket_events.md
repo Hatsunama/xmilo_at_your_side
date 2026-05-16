@@ -44,6 +44,60 @@ WebSocket URL:
 - `trophy.created`
 - `trophy.conjure_failed`
 
+## Safety Decision Contract
+
+Phase 14 runtime gates currently expose sanitized safety decisions through existing runtime/task response structures, such as `intake_assessment.safety_decision`. No standalone WebSocket event is emitted for safety decisions in this slice.
+
+Sanitized safety decisions may include only these stable fields:
+
+- `outcome`
+- `reason_code`
+- `gate_phase`
+- `action_family`
+- `action_name`
+- `evidence_required`
+- `source_trust_tier`
+- `user_safe_message`
+- `safe_summary`
+- `created_at`
+
+Approved `outcome` values:
+
+- `allow`
+- `block`
+- `clarify`
+- `confirm`
+- `safe_redirect`
+
+Approved `gate_phase` values:
+
+- `pre_task`
+- `pre_context_injection`
+- `pre_model_action`
+- `pre_tool_action`
+- `pre_completion`
+- `pre_memory_write`
+
+Approved `reason_code` values:
+
+- `none`
+- `harmful_request`
+- `prompt_injection_authority_spoof`
+- `external_content_attempted_command`
+- `missing_permission_or_capability`
+- `missing_tool_proof`
+- `missing_provider_access_route`
+- `missing_approval`
+- `unsafe_automation`
+- `destructive_action`
+- `privacy_surveillance_risk`
+- `credential_secret_risk`
+- `completion_evidence_missing`
+- `unknown_malformed_action`
+- `unbounded_consumption_risk`
+
+Safety decision and runtime-visible surfaces must not include `raw_prompt`, `system_prompt`, `developer_prompt`, `hidden_prompt`, `chain_of_thought`, `scratchpad`, `internal_detail`, raw model output, raw context payloads, raw memory/archive payloads, raw tool payloads, private tool payloads, secrets, API keys, tokens, auth headers, provider config, request bodies, response bodies, or credentials.
+
 ## Source boundaries
 
 - Sidecar WebSocket events are sidecar runtime truth and are tagged as `sidecar_runtime` by the app bridge when they enter the Expo runtime.

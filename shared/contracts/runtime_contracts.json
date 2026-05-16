@@ -4,6 +4,80 @@
     "task_id",
     "attempt_id"
   ],
+  "safety_decision_contract": {
+    "outcomes": [
+      "allow",
+      "block",
+      "clarify",
+      "confirm",
+      "safe_redirect"
+    ],
+    "reason_codes": [
+      "none",
+      "harmful_request",
+      "prompt_injection_authority_spoof",
+      "external_content_attempted_command",
+      "missing_permission_or_capability",
+      "missing_tool_proof",
+      "missing_provider_access_route",
+      "missing_approval",
+      "unsafe_automation",
+      "destructive_action",
+      "privacy_surveillance_risk",
+      "credential_secret_risk",
+      "completion_evidence_missing",
+      "unknown_malformed_action",
+      "unbounded_consumption_risk"
+    ],
+    "gate_phases": [
+      "pre_task",
+      "pre_context_injection",
+      "pre_model_action",
+      "pre_tool_action",
+      "pre_completion",
+      "pre_memory_write"
+    ],
+    "sanitized_fields": [
+      "outcome",
+      "reason_code",
+      "gate_phase",
+      "action_family",
+      "action_name",
+      "evidence_required",
+      "source_trust_tier",
+      "user_safe_message",
+      "safe_summary",
+      "created_at"
+    ],
+    "forbidden_visible_fields": [
+      "raw_prompt",
+      "system_prompt",
+      "developer_prompt",
+      "hidden_prompt",
+      "chain_of_thought",
+      "scratchpad",
+      "internal_detail",
+      "InternalDetail",
+      "raw_model_output",
+      "raw_context",
+      "raw_context_payload",
+      "raw_memory_payload",
+      "raw_archive_payload",
+      "raw_tool_payload",
+      "private_tool_payload",
+      "provider_config",
+      "auth_headers",
+      "api_key",
+      "token",
+      "request_body",
+      "response_body",
+      "headers",
+      "tokens",
+      "api_keys",
+      "credentials"
+    ],
+    "current_websocket_event": null
+  },
   "runtime_events": {
     "archive.record_created": {
       "required_payload_fields": [
@@ -298,6 +372,17 @@
     "ProviderDiagnosticPayload": [
       "task_id",
       "attempt_id"
+    ],
+    "SafetyDecision": [
+      "outcome",
+      "reason_code",
+      "gate_phase",
+      "evidence_required"
+    ],
+    "IntakeAssessment": [
+      "primary_class",
+      "chosen_closed_action",
+      "safety_decision"
     ]
   },
   "castle_event_structs": {

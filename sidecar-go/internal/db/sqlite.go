@@ -11,6 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"xmilo/sidecar-go/internal/promptsecrecy"
 	"xmilo/sidecar-go/internal/runtime"
 )
 
@@ -46,6 +47,10 @@ func (s *Store) migrate() error {
 		{2, migration002},
 		{3, migration003},
 		{4, migration004},
+		{5, migration005},
+		{6, migration006},
+		{7, migration007},
+		{8, migration008},
 	}
 
 	current := 0
@@ -90,7 +95,7 @@ func (s *Store) SetRuntimeConfigJSON(key string, value any) error {
 		_, err := s.DB.Exec(`DELETE FROM runtime_config WHERE key = ?`, key)
 		return err
 	}
-	raw, err := json.Marshal(value)
+	raw, err := json.Marshal(sanitizeRuntimeValue(value))
 	if err != nil {
 		return err
 	}
@@ -132,6 +137,12 @@ func (s *Store) GetFlag(key string) (string, error) {
 }
 
 func (s *Store) UpsertTask(slot string, t runtime.TaskSnapshot) error {
+	if !isAllowedTaskSlot(slot) {
+		return errors.New("unsupported_task_slot:" + slot)
+	}
+	if strings.TrimSpace(t.TaskID) == "" {
+		return errors.New("task_slot_missing_task_id")
+	}
 	intakeJSON, err := encodeIntakeAssessment(t.IntakeAssessment)
 	if err != nil {
 		return err
@@ -164,6 +175,9 @@ func (s *Store) UpsertTask(slot string, t runtime.TaskSnapshot) error {
 }
 
 func (s *Store) GetTask(slot string) (*runtime.TaskSnapshot, error) {
+	if !isAllowedTaskSlot(slot) {
+		return nil, errors.New("unsupported_task_slot:" + slot)
+	}
 	row := s.DB.QueryRow(`
         SELECT task_id, attempt_id, prompt, intent, room_id, anchor_id, status, started_at, updated_at, retry_count, max_retries, failure_type, stuck_reason
  , intake_assessment, evidence_boundary
@@ -194,13 +208,25 @@ func (s *Store) GetTask(slot string) (*runtime.TaskSnapshot, error) {
 }
 
 func (s *Store) ClearTask(slot string) error {
+	if !isAllowedTaskSlot(slot) {
+		return errors.New("unsupported_task_slot:" + slot)
+	}
 	_, err := s.DB.Exec(`DELETE FROM task_slots WHERE slot = ?`, slot)
 	return err
 }
 
+func isAllowedTaskSlot(slot string) bool {
+	switch strings.TrimSpace(slot) {
+	case "active", "queued", "interrupted", "awaiting_user_choice":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Store) AddTaskHistory(taskID, prompt, status, summary string) error {
 	_, err := s.DB.Exec(`INSERT INTO task_history(task_id, prompt, status, summary, created_at) VALUES(?, ?, ?, ?, ?)`,
-		taskID, prompt, status, summary, time.Now().UTC().Format(time.RFC3339))
+		taskID, promptsecrecy.Redact(prompt), status, promptsecrecy.Redact(summary), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
@@ -211,7 +237,7 @@ func (s *Store) AppendConversation(role, content string) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO conversation_tail(role, content, created_at) VALUES(?, ?, ?)`, role, content, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if _, err := tx.Exec(`INSERT INTO conversation_tail(role, content, created_at) VALUES(?, ?, ?)`, role, promptsecrecy.Redact(content), time.Now().UTC().Format(time.RFC3339)); err != nil {
 		return err
 	}
 
@@ -246,13 +272,52 @@ func (s *Store) GetConversationTail() ([]map[string]string, error) {
 }
 
 func (s *Store) AppendPendingEvent(eventType string, payload any) error {
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(sanitizeRuntimeValue(payload))
 	if err != nil {
 		return err
 	}
 	_, err = s.DB.Exec(`INSERT INTO pending_events(event_type, payload_json, created_at) VALUES(?, ?, ?)`,
 		eventType, string(raw), time.Now().UTC().Format(time.RFC3339))
 	return err
+}
+
+func sanitizeRuntimeValue(value any) any {
+	switch v := value.(type) {
+	case string:
+		return promptsecrecy.Redact(v)
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, value := range v {
+			if promptsecrecy.FieldForbidden(key) {
+				continue
+			}
+			out[key] = sanitizeRuntimeValue(value)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for key, value := range v {
+			if promptsecrecy.FieldForbidden(key) {
+				continue
+			}
+			out[key] = promptsecrecy.Redact(value)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, value := range v {
+			out = append(out, sanitizeRuntimeValue(value))
+		}
+		return out
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, value := range v {
+			out = append(out, promptsecrecy.Redact(value))
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func (s *Store) StorageStats(dbPath string) (map[string]any, error) {

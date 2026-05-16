@@ -1,5 +1,7 @@
 package runtime
 
+import "xmilo/sidecar-go/internal/runtimegate"
+
 type HealthResponse struct {
 	OK        bool   `json:"ok"`
 	Service   string `json:"service"`
@@ -78,12 +80,13 @@ type ResumeCheckpoint struct {
 }
 
 type IntakeAssessment struct {
-	PrimaryClass       string        `json:"primary_class"`
-	SecondaryFlags     []string      `json:"secondary_flags"`
-	TrustTier          int           `json:"trust_tier"`
-	ValidationState    string        `json:"validation_state"`
-	ChosenClosedAction string        `json:"chosen_closed_action"`
-	MemoryIntent       *MemoryIntent `json:"memory_intent,omitempty"`
+	PrimaryClass       string                         `json:"primary_class"`
+	SecondaryFlags     []string                       `json:"secondary_flags"`
+	TrustTier          int                            `json:"trust_tier"`
+	ValidationState    string                         `json:"validation_state"`
+	ChosenClosedAction string                         `json:"chosen_closed_action"`
+	MemoryIntent       *MemoryIntent                  `json:"memory_intent,omitempty"`
+	SafetyDecision     *runtimegate.SanitizedDecision `json:"safety_decision,omitempty"`
 }
 
 type MemoryIntent struct {

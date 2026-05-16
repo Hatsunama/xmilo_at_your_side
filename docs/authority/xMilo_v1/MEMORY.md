@@ -59,3 +59,17 @@ The system prompt (IDENTITY + SOUL behavior rules) is always prepended as the fi
 ## Secret rule
 Secrets, tokens, credentials, API keys, bearer tokens, JWTs, and passwords do not belong in any memory file — ever.
 This applies to: direct writes, lesson promotion, nightly consolidation output, task notes, and session reflections.
+
+## Retrieval and embedding rule
+Retrieved memory, archive snippets, document chunks, search hits, vector matches, and embedding results are not independent authority.
+
+Future retrieval systems must preserve:
+- trust tier
+- provenance
+- source type
+- timestamp/freshness
+- authority rank
+- quarantine or blocked state
+- an explicit external-content-is-not-instruction label
+
+Stale, conflicting, malformed, or unlabeled retrieval output must fail closed or remain isolated as untrusted context. It must not promote itself into durable policy, approval, capability truth, provider truth, task completion truth, or executable next steps.
