@@ -1,11 +1,28 @@
 import type { CommandSubmitResponse, EventEnvelope } from "../types/contracts";
 import { addArchiveRecord, initArchiveDb } from "./archiveDb";
 import { SIDECAR_BASE_URL } from "./config";
+import type { SettingsReportSubmitPayload } from "./reportBundle";
 import {
   captureTaskAttemptIdentityFromSidecarPayload,
   clearCurrentTaskAttemptIdentity,
   resolveLocalhostBearerToken
 } from "./xmiloRuntimeHost";
+
+export class SidecarRequestError extends Error {
+  path: string;
+  status: number;
+  errorClass?: string;
+  errorCode?: string;
+
+  constructor(message: string, path: string, status: number, fields?: { errorClass?: string; errorCode?: string }) {
+    super(message);
+    this.name = "SidecarRequestError";
+    this.path = path;
+    this.status = status;
+    this.errorClass = fields?.errorClass;
+    this.errorCode = fields?.errorCode;
+  }
+}
 
 async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
   const bearer = await resolveLocalhostBearerToken();
@@ -21,7 +38,7 @@ async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
       }
     });
   } catch (error) {
-    throw new Error(toUserFacingLocalProviderError(String((error as Error)?.message ?? error)));
+    throw new SidecarRequestError(toUserFacingLocalProviderError(String((error as Error)?.message ?? error)), path, 0);
   }
 
   const text = await response.text();
@@ -34,7 +51,10 @@ async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const rawMessage = String(data?.error_code === "ACTIVE_TASK_RUNNING" ? data.error_code : data?.error ?? data?.reason ?? response.statusText);
-    throw new Error(toUserFacingLocalProviderError(rawMessage));
+    throw new SidecarRequestError(toUserFacingLocalProviderError(rawMessage), path, response.status, {
+      errorClass: safeResponseString(data?.error_class),
+      errorCode: safeResponseString(data?.error_code)
+    });
   }
   captureTaskAttemptIdentityFromSidecarPayload(data, `sidecar:${path}`);
   if (path === "/state" && isObjectRecord(data) && !data.active_task) {
@@ -91,6 +111,13 @@ function sanitizeErrorMessage(message: string) {
     .replace(/bearer\s+[A-Za-z0-9._-]{16,}/gi, "bearer <redacted>")
     .replace(/[A-Za-z0-9_-]{48,}/g, "<redacted>")
     .slice(0, 240);
+}
+
+function safeResponseString(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  if (!/^[a-zA-Z0-9_.:-]{1,80}$/.test(clean)) return undefined;
+  return clean;
 }
 
 // ─── Core sidecar calls ───────────────────────────────────────────────────────
@@ -348,6 +375,23 @@ export async function submitAIReport(payload: {
   model_name?: string;
 }) {
   return request("/report/ai", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export type SettingsReportProof = {
+  accepted?: boolean;
+  report_id?: string;
+  status?: string;
+  received_at?: string;
+  client_report_id?: string;
+  bundle_hash?: string;
+  duplicate?: boolean;
+};
+
+export async function submitSettingsReport(payload: SettingsReportSubmitPayload): Promise<SettingsReportProof> {
+  return request<SettingsReportProof>("/report/settings", {
     method: "POST",
     body: JSON.stringify(payload)
   });

@@ -1,13 +1,16 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"xmilo/relay-go/internal/config"
 	"xmilo/relay-go/internal/db"
@@ -109,6 +112,7 @@ func (a *App) Start(ctx context.Context) error {
 	// Error reporting (auth optional — best-effort)
 	mux.HandleFunc("/error/report", a.handleErrorReport)
 	mux.HandleFunc("/report/ai", a.authRequired(a.handleAIContentReport))
+	mux.HandleFunc("/report/settings", a.authRequired(a.handleSettingsReport))
 
 	// RevenueCat billing webhook
 	mux.HandleFunc("/billing/revenuecat", a.handleRevenueCat)
@@ -121,6 +125,8 @@ func (a *App) Start(ctx context.Context) error {
 	mux.HandleFunc("/admin/errors", a.adminRequired(a.handleAdminErrors))
 	mux.HandleFunc("/admin/ai-reports", a.adminRequired(a.handleAdminAIReports))
 	mux.HandleFunc("/admin/ai-reports/status", a.adminRequired(a.handleAdminAIReportStatus))
+	mux.HandleFunc("/admin/settings-reports", a.adminRequired(a.handleAdminSettingsReports))
+	mux.HandleFunc("/admin/settings-reports/status", a.adminRequired(a.handleAdminSettingsReportStatus))
 
 	server := &http.Server{Addr: a.cfg.HTTPAddr, Handler: mux}
 	go func() {
@@ -587,6 +593,196 @@ func (a *App) handleAIContentReport(w http.ResponseWriter, r *http.Request, clai
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+const maxSettingsReportBodyBytes int64 = 1 << 20
+
+type settingsReportRequest struct {
+	ClientReportID      string          `json:"client_report_id"`
+	CreatedAt           string          `json:"created_at"`
+	BundleSchemaVersion int             `json:"bundle_schema_version"`
+	BundleType          string          `json:"bundle_type"`
+	BundleHash          string          `json:"bundle_hash"`
+	AppVersion          string          `json:"app_version"`
+	RuntimeID           string          `json:"runtime_id"`
+	SidecarVersion      string          `json:"sidecar_version"`
+	ReportReason        string          `json:"report_reason"`
+	UserNote            string          `json:"user_note"`
+	Bundle              json.RawMessage `json:"bundle"`
+}
+
+type settingsReportProof struct {
+	Accepted       bool   `json:"accepted"`
+	ReportID       string `json:"report_id"`
+	Status         string `json:"status"`
+	ReceivedAt     string `json:"received_at"`
+	ClientReportID string `json:"client_report_id"`
+	BundleHash     string `json:"bundle_hash"`
+	Duplicate      bool   `json:"duplicate"`
+}
+
+func (a *App) handleSettingsReport(w http.ResponseWriter, r *http.Request, claims map[string]any) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	deviceUserID, _ := claims["sub"].(string)
+	if deviceUserID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing device identity"})
+		return
+	}
+
+	var req settingsReportRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxSettingsReportBodyBytes)
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "settings report exceeds 1 MiB limit"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	req.ClientReportID = strings.TrimSpace(req.ClientReportID)
+	req.BundleType = strings.TrimSpace(req.BundleType)
+	if req.BundleType == "" {
+		req.BundleType = "settings_report"
+	}
+	req.BundleHash = strings.TrimSpace(req.BundleHash)
+	req.AppVersion = strings.TrimSpace(req.AppVersion)
+	req.RuntimeID = strings.TrimSpace(req.RuntimeID)
+	req.SidecarVersion = strings.TrimSpace(req.SidecarVersion)
+	req.ReportReason = strings.TrimSpace(req.ReportReason)
+	req.UserNote = strings.TrimSpace(req.UserNote)
+
+	if req.ClientReportID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "client_report_id is required"})
+		return
+	}
+	if req.BundleSchemaVersion != 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bundle_schema_version must be 1"})
+		return
+	}
+	if req.BundleType != "settings_report" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported bundle_type"})
+		return
+	}
+	if req.CreatedAt != "" {
+		if _, err := time.Parse(time.RFC3339, req.CreatedAt); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "created_at must be RFC3339"})
+			return
+		}
+	}
+
+	bundleJSON := bytes.TrimSpace(req.Bundle)
+	if len(bundleJSON) == 0 || !bytes.HasPrefix(bundleJSON, []byte("{")) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bundle must be a JSON object"})
+		return
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(bundleJSON, &bundle); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bundle must be valid JSON"})
+		return
+	}
+	if hasBlockedSettingsReportField(bundle) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bundle contains blocked sensitive field"})
+		return
+	}
+
+	proof, err := a.storeSettingsReport(r.Context(), deviceUserID, req, bundleJSON)
+	if err != nil {
+		if err.Error() == "client_report_id_hash_mismatch" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not store settings report"})
+		return
+	}
+	writeJSON(w, http.StatusOK, proof)
+}
+
+func (a *App) storeSettingsReport(ctx context.Context, deviceUserID string, req settingsReportRequest, bundleJSON []byte) (settingsReportProof, error) {
+	now := time.Now().UTC()
+	reportID := "sr_" + uuid.NewString()
+	var proof settingsReportProof
+
+	err := a.store.Pool.QueryRow(ctx, `
+		INSERT INTO settings_report_bundles
+			(report_id, device_user_id, client_report_id, bundle_schema_version, bundle_type, bundle_hash,
+			 bundle_size_bytes, app_version, runtime_id, sidecar_version, report_reason, user_note,
+			 bundle_json, status, received_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, 'new', $14, $14)
+		ON CONFLICT (device_user_id, client_report_id) DO NOTHING
+		RETURNING report_id, status, received_at, client_report_id, bundle_hash
+	`, reportID, deviceUserID, req.ClientReportID, req.BundleSchemaVersion, req.BundleType, req.BundleHash,
+		len(bundleJSON), req.AppVersion, req.RuntimeID, req.SidecarVersion, req.ReportReason, req.UserNote,
+		string(bundleJSON), now).Scan(&proof.ReportID, &proof.Status, &now, &proof.ClientReportID, &proof.BundleHash)
+	if err == nil {
+		proof.Accepted = true
+		proof.ReceivedAt = now.Format(time.RFC3339)
+		proof.Duplicate = false
+		return proof, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return settingsReportProof{}, err
+	}
+
+	var existingReceivedAt time.Time
+	err = a.store.Pool.QueryRow(ctx, `
+		SELECT report_id, status, received_at, client_report_id, bundle_hash
+		FROM settings_report_bundles
+		WHERE device_user_id = $1 AND client_report_id = $2
+	`, deviceUserID, req.ClientReportID).Scan(&proof.ReportID, &proof.Status, &existingReceivedAt, &proof.ClientReportID, &proof.BundleHash)
+	if err != nil {
+		return settingsReportProof{}, err
+	}
+	if proof.BundleHash != req.BundleHash {
+		return settingsReportProof{}, errors.New("client_report_id_hash_mismatch")
+	}
+	proof.Accepted = true
+	proof.ReceivedAt = existingReceivedAt.Format(time.RFC3339)
+	proof.Duplicate = true
+	return proof, nil
+}
+
+func hasBlockedSettingsReportField(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if isBlockedSettingsReportKey(key) || hasBlockedSettingsReportField(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if hasBlockedSettingsReportField(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isBlockedSettingsReportKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	compact := strings.ReplaceAll(normalized, "_", "")
+	switch normalized {
+	case "authorization", "cookie", "session_jwt", "jwt", "api_key", "secret", "password", "token", "prompt_text", "conversation_text":
+		return true
+	default:
+		return compact == "apikey" ||
+			strings.HasSuffix(normalized, "_api_key") ||
+			strings.HasSuffix(compact, "apikey") ||
+			strings.HasSuffix(normalized, "_token") ||
+			strings.HasSuffix(normalized, "_secret") ||
+			strings.HasSuffix(normalized, "_password")
+	}
+}
+
 // ─── RevenueCat webhook ───────────────────────────────────────────────────────
 
 // POST /billing/revenuecat
@@ -728,6 +924,155 @@ func (a *App) handleAdminAIReportStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *App) handleAdminSettingsReports(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	rows, err := a.store.Pool.Query(r.Context(), `
+		SELECT report_id, device_user_id, client_report_id, bundle_schema_version, bundle_type, bundle_hash,
+		       bundle_size_bytes, app_version, runtime_id, sidecar_version, report_reason, user_note,
+		       status, review_note, reviewed_by, received_at, updated_at, reviewed_at,
+		       COALESCE(bundle_json->'summary', 'null'::jsonb)::text
+		FROM settings_report_bundles
+		ORDER BY received_at DESC
+		LIMIT 100`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list settings reports"})
+		return
+	}
+	defer rows.Close()
+
+	var list []map[string]any
+	for rows.Next() {
+		var (
+			reportID            string
+			deviceUserID        string
+			clientReportID      string
+			bundleSchemaVersion int
+			bundleType          string
+			bundleHash          string
+			bundleSizeBytes     int
+			appVersion          string
+			runtimeID           string
+			sidecarVersion      string
+			reportReason        string
+			userNote            string
+			status              string
+			reviewNote          string
+			reviewedBy          string
+			receivedAt          time.Time
+			updatedAt           time.Time
+			reviewedAt          *time.Time
+			summaryJSON         string
+		)
+		if err := rows.Scan(&reportID, &deviceUserID, &clientReportID, &bundleSchemaVersion, &bundleType, &bundleHash,
+			&bundleSizeBytes, &appVersion, &runtimeID, &sidecarVersion, &reportReason, &userNote,
+			&status, &reviewNote, &reviewedBy, &receivedAt, &updatedAt, &reviewedAt, &summaryJSON); err != nil {
+			continue
+		}
+		item := map[string]any{
+			"report_id":             reportID,
+			"device_user_id":        deviceUserID,
+			"client_report_id":      clientReportID,
+			"bundle_schema_version": bundleSchemaVersion,
+			"bundle_type":           bundleType,
+			"bundle_hash":           bundleHash,
+			"bundle_size_bytes":     bundleSizeBytes,
+			"app_version":           appVersion,
+			"runtime_id":            runtimeID,
+			"sidecar_version":       sidecarVersion,
+			"report_reason":         reportReason,
+			"user_note":             userNote,
+			"status":                status,
+			"review_note":           reviewNote,
+			"reviewed_by":           reviewedBy,
+			"received_at":           receivedAt.Format(time.RFC3339),
+			"updated_at":            updatedAt.Format(time.RFC3339),
+		}
+		if reviewedAt != nil {
+			item["reviewed_at"] = reviewedAt.Format(time.RFC3339)
+		} else {
+			item["reviewed_at"] = nil
+		}
+		if summary := decodeSettingsReportSummary(summaryJSON); summary != nil {
+			item["bundle_summary"] = summary
+		}
+		list = append(list, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list settings reports"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings_reports": list})
+}
+
+func (a *App) handleAdminSettingsReportStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		ReportID   string `json:"report_id"`
+		Status     string `json:"status"`
+		ReviewNote string `json:"review_note"`
+		ReviewedBy string `json:"reviewed_by"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	req.ReportID = strings.TrimSpace(req.ReportID)
+	req.Status = strings.TrimSpace(strings.ToLower(req.Status))
+	req.ReviewNote = strings.TrimSpace(req.ReviewNote)
+	req.ReviewedBy = strings.TrimSpace(req.ReviewedBy)
+	if req.ReportID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "report_id is required"})
+		return
+	}
+	if !isAllowedSettingsReportStatus(req.Status) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid settings report status"})
+		return
+	}
+	now := time.Now().UTC()
+	tag, err := a.store.Pool.Exec(r.Context(), `
+		UPDATE settings_report_bundles
+		SET status = $2, review_note = $3, reviewed_by = $4, reviewed_at = $5, updated_at = $5
+		WHERE report_id = $1
+	`, req.ReportID, req.Status, req.ReviewNote, req.ReviewedBy, now)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not update settings report"})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "settings report not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func decodeSettingsReportSummary(raw string) any {
+	var summary any
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		return nil
+	}
+	switch summary.(type) {
+	case map[string]any, []any:
+		return summary
+	default:
+		return nil
+	}
+}
+
+func isAllowedSettingsReportStatus(status string) bool {
+	switch status {
+	case "new", "triaged", "confirmed", "dismissed", "rule_update_needed":
+		return true
+	default:
+		return false
+	}
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────

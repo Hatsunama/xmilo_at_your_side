@@ -1,0 +1,5 @@
+.env
+bin/
+milo-relay.exe
+*.log
+*.tmp

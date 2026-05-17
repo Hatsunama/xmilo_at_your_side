@@ -41,6 +41,9 @@ object XMiloclawSidecarProcessController {
   private val sensitiveKeyPattern =
     Regex("""(?i)("?(?:bearer_token|localhost_bearer_token|authorization|api_key|secret|token|jwt|xai|openai|anthropic|provider_key|byok_key_file)"?\s*[:=]\s*")([^"]+)(")""")
   private val longSecretLikePattern = Regex("""(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])""")
+  private val safeSidecarDiagnosticPrefixes =
+    listOf("XMILO_SIDECAR_HTTP_", "XMILO_SIDECAR_AUTH_CHECK_", "XMILO_SIDECAR_RELAY_SESSION_")
+  private val safeSidecarDiagnosticEventPattern = Regex("""XMILO_SIDECAR_[A-Z0-9_]{1,80}""")
 
   @Volatile
   private var process: Process? = null
@@ -774,7 +777,6 @@ object XMiloclawSidecarProcessController {
               }
             }
             if (shouldStop) break
-            // Keep draining to avoid process blockage, but store/log only the first sanitized line.
           }
         }
       } catch (_: Exception) {
@@ -823,9 +825,16 @@ object XMiloclawSidecarProcessController {
         .replace(jwtPattern, "[REDACTED_JWT]")
         .replace(authHeaderPattern, "\$1[REDACTED]")
         .replace(sensitiveKeyPattern, "\$1[REDACTED]\$3")
-        .replace(longSecretLikePattern, "[REDACTED_LONG_VALUE]")
+        .replace(longSecretLikePattern) { match ->
+          if (isSafeSidecarDiagnosticEvent(match.value)) match.value else "[REDACTED_LONG_VALUE]"
+        }
     return redacted.take(MAX_PROCESS_OUTPUT_LINE_CHARS).ifBlank { "[empty]" }
   }
+
+  private fun isSafeSidecarDiagnosticEvent(value: String): Boolean =
+    value.length <= 96 &&
+      safeSidecarDiagnosticEventPattern.matches(value) &&
+      safeSidecarDiagnosticPrefixes.any { value.startsWith(it) }
 
   private fun sanitizeProofText(raw: String): String =
     sanitizeProcessOutput(raw)

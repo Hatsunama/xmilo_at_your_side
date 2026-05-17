@@ -301,3 +301,46 @@ func (c *Client) DeleteAccount(ctx context.Context) error {
 func (c *Client) SubmitAIReport(ctx context.Context, payload map[string]any) error {
 	return c.requestAuthedJSON(ctx, http.MethodPost, "/report/ai", payload, nil)
 }
+
+func (c *Client) SubmitSettingsReport(ctx context.Context, payload map[string]any) (map[string]any, int, error) {
+	jwt, err := c.JWT()
+	if err != nil {
+		return nil, 0, err
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/report/settings", bytes.NewReader(raw))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if jwt != "" {
+		req.Header.Set("Authorization", "Bearer "+jwt)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	if resp.StatusCode >= 400 {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &e)
+		if e.Error != "" {
+			return nil, resp.StatusCode, errors.New(e.Error)
+		}
+		return nil, resp.StatusCode, fmt.Errorf("/report/settings failed: %s", resp.Status)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return out, resp.StatusCode, nil
+}

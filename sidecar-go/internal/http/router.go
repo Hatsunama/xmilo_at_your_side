@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -62,15 +64,6 @@ func NewApp(cfg config.Config) (*App, error) {
 	getJWT := func() (string, error) { return store.GetRuntimeConfig("relay_session_jwt") }
 	relayClient := relay.New(cfg.RelayBaseURL, getJWT)
 
-	// Bootstrap JWT on first launch.
-	// relay_session_jwt is empty on a fresh install → relay returns 401 on every /llm/turn
-	// → tasks immediately go stuck. This pre-fills the JWT so the first task can proceed.
-	if existing, _ := store.GetRuntimeConfig("relay_session_jwt"); existing == "" {
-		if err := bootstrapRelaySession(cfg, store); err != nil {
-			_ = err // Non-fatal: sidecar starts; tasks go stuck until relay reachable.
-		}
-	}
-
 	hub := ws.NewHub()
 	var turnClient tasks.TurnClient = relayClient
 	if cfg.LocalBYOKActive() {
@@ -108,11 +101,6 @@ func (a *App) Start(ctx context.Context) error {
 
 	maintenance.Start(ctx, a.store, a.hub)
 
-	// Proactive JWT refresh — wakes every minute, refreshes when expiry < 10 min away.
-	// This means email verification shows up in the entitled claim within ~1 minute
-	// without requiring any app-side action (user just waits or taps /auth/check).
-	go a.runJWTRefresher(ctx)
-
 	mux := http.NewServeMux()
 	mux.Handle("/health", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleHealth)))
 	mux.Handle("/ready", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleReady)))
@@ -121,8 +109,6 @@ func (a *App) Start(ctx context.Context) error {
 	// Auth passthrough: sidecar is the sole relay caller; app never speaks to relay directly.
 	mux.Handle("/auth/register", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthRegister)))
 	mux.Handle("/auth/invite", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthInvite)))
-	// /auth/check forces an immediate relay refresh and returns the current entitled status.
-	// The app calls this right after the user taps "I verified my email".
 	mux.Handle("/auth/check", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthCheck)))
 	// /auth/refresh receives a JWT pushed down from the app (e.g. after RevenueCat purchase).
 	mux.Handle("/auth/refresh", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthRefresh)))
@@ -153,6 +139,7 @@ func (a *App) Start(ctx context.Context) error {
 	mux.Handle("/state", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleState)))
 	mux.Handle("/storage/stats", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleStorageStats)))
 	mux.Handle("/report/ai", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAIReport)))
+	mux.Handle("/report/settings", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleSettingsReport)))
 	mux.Handle("/reset", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleReset)))
 	mux.Handle("/trophy/conjure", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.stub("trophy conjure not yet implemented"))))
 	mux.Handle("/inspector/open", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.stub("inspector open not yet implemented"))))
@@ -163,6 +150,13 @@ func (a *App) Start(ctx context.Context) error {
 		Addr:    net.JoinHostPort(a.cfg.Host, strconv.Itoa(a.cfg.Port)),
 		Handler: mux,
 	}
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_HTTP_LISTENER_BIND_ATTEMPT", "host", a.cfg.Host, "port", strconv.Itoa(a.cfg.Port), "address", server.Addr)
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_HTTP_LISTENER_BIND_FAILED", "error_class", classifySidecarHTTPStartupError(err))
+		return err
+	}
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_HTTP_LISTENER_BOUND", "host", a.cfg.Host, "port", strconv.Itoa(a.cfg.Port), "address", server.Addr)
 
 	a.hub.Broadcast("runtime.ready", map[string]any{
 		"ready":            true,
@@ -176,8 +170,81 @@ func (a *App) Start(ctx context.Context) error {
 		_ = server.Shutdown(context.Background())
 		_ = a.store.Close()
 	}()
+	go a.runJWTRefresher(ctx)
+	go func() { _ = a.ensureRelaySession(ctx) }()
 
-	return server.ListenAndServe()
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_HTTP_SERVE_STARTED", "address", server.Addr)
+	err = server.Serve(listener)
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_HTTP_SERVE_EXITED", "error_class", classifySidecarHTTPStartupError(err))
+	return err
+}
+
+func sidecarHTTPStartupProofLine(event string, fields ...string) string {
+	var b strings.Builder
+	b.WriteString(event)
+	for i := 0; i+1 < len(fields); i += 2 {
+		key := sanitizeSidecarHTTPStartupProofPart(fields[i])
+		value := sanitizeSidecarHTTPStartupProofPart(fields[i+1])
+		if key == "" || value == "" {
+			continue
+		}
+		b.WriteByte(' ')
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(value)
+	}
+	return b.String()
+}
+
+func emitSidecarHTTPStartupProof(event string, fields ...string) {
+	fmt.Fprintln(os.Stdout, sidecarHTTPStartupProofLine(event, fields...))
+}
+
+func sanitizeSidecarHTTPStartupProofPart(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-' || r == '.' || r == ':' || r == '[' || r == ']':
+			b.WriteRune(r)
+		}
+		if b.Len() >= 160 {
+			break
+		}
+	}
+	return b.String()
+}
+
+func classifySidecarHTTPStartupError(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		return "server_closed"
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "address already in use"):
+		return "address_in_use"
+	case strings.Contains(text, "permission denied"):
+		return "permission_denied"
+	case strings.Contains(text, "bind"):
+		return "bind_failed"
+	case strings.Contains(text, "listen"):
+		return "listen_failed"
+	case strings.Contains(text, "closed network connection"):
+		return "network_closed"
+	case strings.Contains(text, "timeout") || strings.Contains(text, "deadline exceeded"):
+		return "timeout"
+	default:
+		return "other"
+	}
 }
 
 // ─── Proactive JWT refresh ────────────────────────────────────────────────────
@@ -213,6 +280,78 @@ func (a *App) maybeRefreshJWT(ctx context.Context) {
 	}
 	_ = a.store.SetRuntimeConfig("relay_session_jwt", newJWT)
 	_ = a.store.SetRuntimeConfig("relay_expires_at", newExpiry)
+}
+
+const (
+	authSessionRelayUnreachable = "relay_unreachable"
+	authSessionRelayHTTPError   = "relay_http_error"
+	authSessionBadResponse      = "relay_bad_response"
+	authSessionEmptyJWT         = "relay_empty_jwt"
+	authSessionConfigMissing    = "relay_config_missing"
+	authSessionStoreFailed      = "relay_session_store_failed"
+	authSessionUnknownFailure   = "relay_session_unknown_failure"
+)
+
+type authSessionError struct {
+	class  string
+	status int
+}
+
+func (e authSessionError) Error() string {
+	if e.class == "" {
+		return authSessionUnknownFailure
+	}
+	return e.class
+}
+
+func authSessionErrorClass(err error) string {
+	var sessionErr authSessionError
+	if errors.As(err, &sessionErr) && sessionErr.class != "" {
+		return sessionErr.class
+	}
+	return authSessionUnknownFailure
+}
+
+func authSessionErrorStatus(err error) string {
+	var sessionErr authSessionError
+	if errors.As(err, &sessionErr) && sessionErr.status > 0 {
+		return strconv.Itoa(sessionErr.status)
+	}
+	return ""
+}
+
+func (a *App) ensureRelaySession(ctx context.Context) error {
+	sessionJWT, err := a.store.GetRuntimeConfig("relay_session_jwt")
+	if err != nil {
+		return authSessionError{class: authSessionStoreFailed}
+	}
+	expiresRaw, err := a.store.GetRuntimeConfig("relay_expires_at")
+	if err != nil {
+		return authSessionError{class: authSessionStoreFailed}
+	}
+	if strings.TrimSpace(sessionJWT) != "" {
+		if expiresRaw != "" {
+			expiresAt, err := time.Parse(time.RFC3339, expiresRaw)
+			if err == nil && time.Until(expiresAt) > time.Minute {
+				return nil
+			}
+		}
+		refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		newJWT, newExpiry, err := a.relayClient.Refresh(refreshCtx)
+		if err == nil {
+			if err := a.store.SetRuntimeConfig("relay_session_jwt", newJWT); err != nil {
+				return authSessionError{class: authSessionStoreFailed}
+			}
+			if err := a.store.SetRuntimeConfig("relay_expires_at", newExpiry); err != nil {
+				return authSessionError{class: authSessionStoreFailed}
+			}
+			return nil
+		}
+	}
+	bootstrapCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return bootstrapRelaySession(bootstrapCtx, a.cfg, a.store)
 }
 
 // ─── Auth passthrough handlers ────────────────────────────────────────────────
@@ -285,64 +424,55 @@ func (a *App) handleAuthInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAuthCheck forces an immediate relay refresh and returns the new entitled status.
-// The app calls this after user verifies email — gets entitled=true within seconds.
 func (a *App) handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 	if a.cfg.LocalBYOKActive() {
 		writeJSON(w, http.StatusOK, a.localAccessStatus())
 		return
 	}
-	newJWT, newExpiry, err := a.relayClient.Refresh(r.Context())
-	if err != nil {
-		// If the stored JWT is invalid (e.g., after reinstall), bootstrap a fresh session
-		// instead of leaving the app stranded in a persistent 401 loop.
-		errText := err.Error()
-		if strings.Contains(errText, "401") && strings.Contains(strings.ToLower(errText), "invalid token") {
-			if bootErr := bootstrapRelaySession(a.cfg, a.store); bootErr == nil {
-				if storedJWT, _ := a.store.GetRuntimeConfig("relay_session_jwt"); storedJWT != "" {
-					expiresAt, _ := a.store.GetRuntimeConfig("relay_expires_at")
-					writeJSON(w, http.StatusOK, map[string]any{
-						"ok":                     true,
-						"device_user_id":         jwtStringClaim(storedJWT, "sub"),
-						"entitled":               jwtEntitledClaim(storedJWT),
-						"expires_at":             expiresAt,
-						"access_mode":            jwtStringClaim(storedJWT, "access_mode"),
-						"access_code_only":       jwtBoolClaim(storedJWT, "access_code_only"),
-						"trial_allowed":          jwtBoolClaim(storedJWT, "trial_allowed"),
-						"subscription_allowed":   jwtBoolClaim(storedJWT, "subscription_allowed"),
-						"access_code_grant_days": jwtIntClaim(storedJWT, "access_code_grant_days"),
-						"verified_email":         jwtStringClaim(storedJWT, "verified_email"),
-						"email_verified":         jwtBoolClaim(storedJWT, "email_verified"),
-						"two_factor_enabled":     jwtBoolClaim(storedJWT, "two_factor_enabled"),
-						"two_factor_ok":          jwtBoolClaim(storedJWT, "two_factor_ok"),
-						"website_handoff_ready":  jwtBoolClaim(storedJWT, "website_handoff_ready"),
-					})
-					return
-				}
-			}
-		}
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "entitled": false})
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_AUTH_CHECK_SESSION_ENSURE_STARTED")
+	if err := a.ensureRelaySession(r.Context()); err != nil {
+		class := authSessionErrorClass(err)
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_AUTH_CHECK_SESSION_ENSURE_FAILED", "error_class", class)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_check_failed", "error_class": class, "entitled": false})
 		return
 	}
-	_ = a.store.SetRuntimeConfig("relay_session_jwt", newJWT)
-	_ = a.store.SetRuntimeConfig("relay_expires_at", newExpiry)
-	_ = a.store.SetRuntimeConfig("relay_device_user_id", jwtStringClaim(newJWT, "sub"))
+	sessionJWT, err := a.store.GetRuntimeConfig("relay_session_jwt")
+	if err != nil {
+		class := authSessionStoreFailed
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_AUTH_CHECK_SESSION_ENSURE_FAILED", "error_class", class)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_check_failed", "error_class": class, "entitled": false})
+		return
+	}
+	expiresAt, err := a.store.GetRuntimeConfig("relay_expires_at")
+	if err != nil {
+		class := authSessionStoreFailed
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_AUTH_CHECK_SESSION_ENSURE_FAILED", "error_class", class)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_check_failed", "error_class": class, "entitled": false})
+		return
+	}
+	if strings.TrimSpace(sessionJWT) == "" {
+		class := authSessionEmptyJWT
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_AUTH_CHECK_SESSION_ENSURE_FAILED", "error_class", class)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_check_failed", "error_class": class, "entitled": false})
+		return
+	}
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_AUTH_CHECK_SESSION_ENSURE_READY")
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":                     true,
-		"device_user_id":         jwtStringClaim(newJWT, "sub"),
-		"entitled":               jwtEntitledClaim(newJWT),
-		"expires_at":             newExpiry,
-		"access_mode":            jwtStringClaim(newJWT, "access_mode"),
-		"access_code_only":       jwtBoolClaim(newJWT, "access_code_only"),
-		"trial_allowed":          jwtBoolClaim(newJWT, "trial_allowed"),
-		"subscription_allowed":   jwtBoolClaim(newJWT, "subscription_allowed"),
-		"access_code_grant_days": jwtIntClaim(newJWT, "access_code_grant_days"),
-		"verified_email":         jwtStringClaim(newJWT, "verified_email"),
-		"email_verified":         jwtBoolClaim(newJWT, "email_verified"),
-		"two_factor_enabled":     jwtBoolClaim(newJWT, "two_factor_enabled"),
-		"two_factor_ok":          jwtBoolClaim(newJWT, "two_factor_ok"),
-		"website_handoff_ready":  jwtBoolClaim(newJWT, "website_handoff_ready"),
+		"device_user_id":         jwtStringClaim(sessionJWT, "sub"),
+		"entitled":               jwtEntitledClaim(sessionJWT),
+		"expires_at":             expiresAt,
+		"access_mode":            jwtStringClaim(sessionJWT, "access_mode"),
+		"access_code_only":       jwtBoolClaim(sessionJWT, "access_code_only"),
+		"trial_allowed":          jwtBoolClaim(sessionJWT, "trial_allowed"),
+		"subscription_allowed":   jwtBoolClaim(sessionJWT, "subscription_allowed"),
+		"access_code_grant_days": jwtIntClaim(sessionJWT, "access_code_grant_days"),
+		"verified_email":         jwtStringClaim(sessionJWT, "verified_email"),
+		"email_verified":         jwtBoolClaim(sessionJWT, "email_verified"),
+		"two_factor_enabled":     jwtBoolClaim(sessionJWT, "two_factor_enabled"),
+		"two_factor_ok":          jwtBoolClaim(sessionJWT, "two_factor_ok"),
+		"website_handoff_ready":  jwtBoolClaim(sessionJWT, "website_handoff_ready"),
 	})
 }
 
@@ -1006,6 +1136,50 @@ func (a *App) handleAIReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+const maxSettingsReportBodyBytes int64 = 1 << 20
+
+func (a *App) handleSettingsReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSettingsReportBodyBytes)
+	defer r.Body.Close()
+	var payload map[string]any
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "settings report exceeds 1 MiB limit"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if payload == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "settings report must be a JSON object"})
+		return
+	}
+	payload["runtime_id"] = a.cfg.RuntimeID
+	payload["sidecar_version"] = buildinfo.Version
+	reportCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := a.ensureRelaySession(reportCtx); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	proof, statusCode, err := a.relayClient.SubmitSettingsReport(reportCtx, payload)
+	if err != nil {
+		if statusCode == 0 {
+			statusCode = http.StatusBadGateway
+		}
+		writeJSON(w, statusCode, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, proof)
+}
+
 func (a *App) handleReset(w http.ResponseWriter, r *http.Request) {
 	task, err := a.store.GetTask("active")
 	if err != nil {
@@ -1232,21 +1406,39 @@ func jwtClaims(token string) map[string]any {
 	return claims
 }
 
-// bootstrapRelaySession calls POST /session/start and stores the returned JWT.
-func bootstrapRelaySession(cfg config.Config, store *db.Store) error {
+func bootstrapRelaySession(ctx context.Context, cfg config.Config, store *db.Store) error {
+	if strings.TrimSpace(cfg.RelayBaseURL) == "" {
+		err := authSessionError{class: authSessionConfigMissing}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", err.class)
+		return err
+	}
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_STARTED")
 	reqBody, _ := json.Marshal(map[string]string{"device_name": "xmilo-sidecar"})
 	httpClient := netutil.NewResilientHTTPClient(15 * time.Second)
-	resp, err := httpClient.Post(cfg.RelayBaseURL+"/session/start", "application/json", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.RelayBaseURL+"/session/start", bytes.NewReader(reqBody))
 	if err != nil {
-		return err
+		sessionErr := authSessionError{class: authSessionConfigMissing}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class)
+		return sessionErr
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		sessionErr := authSessionError{class: authSessionRelayUnreachable}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class)
+		return sessionErr
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		sessionErr := authSessionError{class: authSessionBadResponse, status: resp.StatusCode}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class, "status", authSessionErrorStatus(sessionErr))
+		return sessionErr
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("session/start failed: %s", string(raw))
+		sessionErr := authSessionError{class: authSessionRelayHTTPError, status: resp.StatusCode}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class, "status", authSessionErrorStatus(sessionErr))
+		return sessionErr
 	}
 	var out struct {
 		DeviceUserID string `json:"device_user_id"`
@@ -1254,15 +1446,32 @@ func bootstrapRelaySession(cfg config.Config, store *db.Store) error {
 		ExpiresAt    string `json:"expires_at"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return err
+		sessionErr := authSessionError{class: authSessionBadResponse, status: resp.StatusCode}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class, "status", authSessionErrorStatus(sessionErr))
+		return sessionErr
 	}
 	if out.SessionJWT == "" {
-		return fmt.Errorf("session/start returned empty jwt")
+		sessionErr := authSessionError{class: authSessionEmptyJWT, status: resp.StatusCode}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class, "status", authSessionErrorStatus(sessionErr))
+		return sessionErr
 	}
-	_ = store.SetRuntimeConfig("relay_session_jwt", out.SessionJWT)
-	_ = store.SetRuntimeConfig("relay_expires_at", out.ExpiresAt)
+	if err := store.SetRuntimeConfig("relay_session_jwt", out.SessionJWT); err != nil {
+		sessionErr := authSessionError{class: authSessionStoreFailed, status: resp.StatusCode}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class, "status", authSessionErrorStatus(sessionErr))
+		return sessionErr
+	}
+	if err := store.SetRuntimeConfig("relay_expires_at", out.ExpiresAt); err != nil {
+		sessionErr := authSessionError{class: authSessionStoreFailed, status: resp.StatusCode}
+		emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class, "status", authSessionErrorStatus(sessionErr))
+		return sessionErr
+	}
 	if out.DeviceUserID != "" {
-		_ = store.SetRuntimeConfig("relay_device_user_id", out.DeviceUserID)
+		if err := store.SetRuntimeConfig("relay_device_user_id", out.DeviceUserID); err != nil {
+			sessionErr := authSessionError{class: authSessionStoreFailed, status: resp.StatusCode}
+			emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_FAILED", "error_class", sessionErr.class, "status", authSessionErrorStatus(sessionErr))
+			return sessionErr
+		}
 	}
+	emitSidecarHTTPStartupProof("XMILO_SIDECAR_RELAY_SESSION_BOOTSTRAP_READY")
 	return nil
 }

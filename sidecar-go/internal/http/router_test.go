@@ -1,7 +1,9 @@
 package httpx
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"xmilo/sidecar-go/internal/config"
 	"xmilo/sidecar-go/internal/contextpolicy"
 	"xmilo/sidecar-go/internal/db"
+	"xmilo/sidecar-go/internal/relay"
 	"xmilo/sidecar-go/internal/runtime"
 	"xmilo/sidecar-go/internal/tasks"
 )
@@ -213,6 +216,397 @@ func TestHandleAuthCheckLocalBYOKIgnoresHostedSessionState(t *testing.T) {
 	}
 }
 
+func TestHandleAuthCheckBootstrapsFreshRelaySessionWithoutJWT(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	sessionJWT := testUnsignedJWT(t, map[string]any{
+		"sub":                    "device-fresh",
+		"entitled":               false,
+		"access_mode":            "code_only",
+		"access_code_only":       true,
+		"trial_allowed":          false,
+		"subscription_allowed":   false,
+		"access_code_grant_days": 30,
+		"verified_email":         "",
+		"email_verified":         false,
+		"two_factor_enabled":     false,
+		"two_factor_ok":          false,
+		"website_handoff_ready":  false,
+	})
+	var sessionStartCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/session/start" {
+			t.Fatalf("unexpected relay path %s", r.URL.Path)
+		}
+		sessionStartCalls++
+		writeJSON(w, http.StatusOK, map[string]any{
+			"device_user_id": "device-fresh",
+			"session_jwt":    sessionJWT,
+			"expires_at":     time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		})
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg:   config.Config{RelayBaseURL: server.URL},
+		store: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/auth/check", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	app.handleAuthCheck(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if sessionStartCalls != 1 {
+		t.Fatalf("expected one session bootstrap, got %d", sessionStartCalls)
+	}
+	storedJWT, _ := store.GetRuntimeConfig("relay_session_jwt")
+	if storedJWT != sessionJWT {
+		t.Fatalf("expected stored bootstrap jwt")
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["ok"] != true || out["device_user_id"] != "device-fresh" || out["entitled"] != false {
+		t.Fatalf("unexpected auth check response: %#v", out)
+	}
+}
+
+func TestHandleAuthCheckBootstrapHTTPErrorReturnsSafeClass(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/session/start" {
+			t.Fatalf("unexpected relay path %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"raw relay body jwt token api_key user_note bundle_json should not return"}`))
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg:   config.Config{RelayBaseURL: server.URL},
+		store: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/auth/check", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	app.handleAuthCheck(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	assertAuthCheckSafeFailure(t, rec.Body.Bytes(), authSessionRelayHTTPError)
+}
+
+func TestHandleAuthCheckBootstrapUnreachableReturnsSafeClass(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("relay should be closed before auth check")
+	}))
+	relayURL := server.URL
+	server.Close()
+
+	app := &App{
+		cfg:   config.Config{RelayBaseURL: relayURL},
+		store: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/auth/check", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	app.handleAuthCheck(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	assertAuthCheckSafeFailure(t, rec.Body.Bytes(), authSessionRelayUnreachable)
+}
+
+func TestHandleAuthCheckBootstrapBadResponseReturnsSafeClass(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{not-json jwt token api_key}`))
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg:   config.Config{RelayBaseURL: server.URL},
+		store: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/auth/check", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	app.handleAuthCheck(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	assertAuthCheckSafeFailure(t, rec.Body.Bytes(), authSessionBadResponse)
+}
+
+func TestHandleAuthCheckBootstrapEmptyJWTReturnsSafeClass(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"device_user_id": "device-empty",
+			"session_jwt":    "",
+			"expires_at":     time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		})
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg:   config.Config{RelayBaseURL: server.URL},
+		store: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/auth/check", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	app.handleAuthCheck(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	assertAuthCheckSafeFailure(t, rec.Body.Bytes(), authSessionEmptyJWT)
+}
+
+func TestNewAppDoesNotBootstrapRelayBeforeHTTPStart(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.Error(w, "unexpected relay call", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	app, err := NewApp(config.Config{
+		DBPath:       filepath.Join(t.TempDir(), "sidecar.db"),
+		MindRoot:     testMindRoot(t),
+		RelayBaseURL: server.URL,
+		RuntimeID:    "test-runtime",
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	defer app.store.Close()
+	if called {
+		t.Fatal("NewApp called relay before HTTP start")
+	}
+}
+
+func TestSidecarHTTPStartupProofLinesAreSafeAndStable(t *testing.T) {
+	line := sidecarHTTPStartupProofLine(
+		"XMILO_SIDECAR_HTTP_LISTENER_BOUND",
+		"host",
+		"127.0.0.1",
+		"port",
+		"42817",
+		"address",
+		"127.0.0.1:42817",
+		"bad key",
+		"value with spaces",
+	)
+	if line != "XMILO_SIDECAR_HTTP_LISTENER_BOUND host=127.0.0.1 port=42817 address=127.0.0.1:42817 badkey=valuewithspaces" {
+		t.Fatalf("unexpected proof line: %q", line)
+	}
+}
+
+func TestSidecarHTTPStartupErrorClassesAreSafe(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{nil, "none"},
+		{http.ErrServerClosed, "server_closed"},
+		{errors.New("listen tcp 127.0.0.1:42817: bind: address already in use"), "address_in_use"},
+		{errors.New("listen tcp 127.0.0.1:42817: bind: permission denied"), "permission_denied"},
+		{errors.New("some private startup failure"), "other"},
+	}
+	for _, tc := range cases {
+		if got := classifySidecarHTTPStartupError(tc.err); got != tc.want {
+			t.Fatalf("classifySidecarHTTPStartupError(%v)=%q want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestHandleHealthDoesNotRequireRelaySessionOrProvider(t *testing.T) {
+	app := &App{
+		cfg: config.Config{
+			RelayBaseURL: "http://127.0.0.1:1",
+			LLMMode:      "local_byok",
+			BYOKKeyFile:  filepath.Join(t.TempDir(), "missing.key"),
+		},
+		startedAt: time.Now().UTC(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	app.handleHealth(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["ok"] != true || out["service"] != "xmilo-sidecar" {
+		t.Fatalf("unexpected health response: %#v", out)
+	}
+}
+
+func TestHandleSettingsReportFailsWithoutRelaySessionProof(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "relay unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg:         config.Config{RelayBaseURL: server.URL, RuntimeID: "test-runtime"},
+		store:       store,
+		relayClient: relay.New(server.URL, func() (string, error) { return store.GetRuntimeConfig("relay_session_jwt") }),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/report/settings", strings.NewReader(`{"client_report_id":"client-1","bundle_schema_version":1,"bundle":{"summary":{}}}`))
+	rec := httptest.NewRecorder()
+
+	app.handleSettingsReport(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["accepted"] == true || out["report_id"] != nil {
+		t.Fatalf("settings report failure must not invent proof: %#v", out)
+	}
+}
+
+func TestHandleSettingsReportBootstrapsSessionAndRequiresRelayProof(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	sessionJWT := testUnsignedJWT(t, map[string]any{"sub": "device-report", "entitled": false})
+	var sawSessionStart bool
+	var sawSettingsReport bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/session/start":
+			sawSessionStart = true
+			writeJSON(w, http.StatusOK, map[string]any{
+				"device_user_id": "device-report",
+				"session_jwt":    sessionJWT,
+				"expires_at":     time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+			})
+		case "/report/settings":
+			sawSettingsReport = true
+			if r.Header.Get("Authorization") != "Bearer "+sessionJWT {
+				t.Fatalf("settings report missing bootstrapped relay auth")
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"accepted":         true,
+				"report_id":        "settings-report-1",
+				"status":           "new",
+				"received_at":      time.Now().UTC().Format(time.RFC3339),
+				"client_report_id": "client-1",
+				"bundle_hash":      "hash-1",
+				"duplicate":        false,
+			})
+		default:
+			t.Fatalf("unexpected relay path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg:         config.Config{RelayBaseURL: server.URL, RuntimeID: "test-runtime"},
+		store:       store,
+		relayClient: relay.New(server.URL, func() (string, error) { return store.GetRuntimeConfig("relay_session_jwt") }),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/report/settings", strings.NewReader(`{"client_report_id":"client-1","bundle_schema_version":1,"bundle":{"summary":{}}}`))
+	rec := httptest.NewRecorder()
+
+	app.handleSettingsReport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !sawSessionStart || !sawSettingsReport {
+		t.Fatalf("expected session bootstrap and settings report forwarding, got start=%v report=%v", sawSessionStart, sawSettingsReport)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["accepted"] != true || out["report_id"] != "settings-report-1" {
+		t.Fatalf("settings report must preserve relay proof, got %#v", out)
+	}
+}
+
+func TestHandleAIReportStillSubmitsFlatReport(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if gotPath != "/report/ai" {
+			t.Fatalf("unexpected path %s", gotPath)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg:         config.Config{RuntimeID: "test-runtime"},
+		relayClient: relay.New(server.URL, func() (string, error) { return "relay-jwt", nil }),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/report/ai", strings.NewReader(`{"task_id":"task-1","event_type":"ai_output","report_reason":"bad","output_text":"flat output"}`))
+	rec := httptest.NewRecorder()
+
+	app.handleAIReport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if gotPath != "/report/ai" {
+		t.Fatalf("expected /report/ai, got %s", gotPath)
+	}
+}
+
 func TestHandleLocalProviderOptionsReturnsSidecarPolicy(t *testing.T) {
 	app := &App{}
 	req := httptest.NewRequest(http.MethodGet, "/local-provider/options", http.NoBody)
@@ -240,6 +634,17 @@ func TestHandleLocalProviderOptionsReturnsSidecarPolicy(t *testing.T) {
 			t.Fatalf("openai must remain https-only by default: %#v", provider)
 		}
 	}
+}
+
+func testMindRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, name := range []string{"IDENTITY.md", "SOUL.md", "SECURITY.md", "TOOLS.md", "USER.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("test"), 0o600); err != nil {
+			t.Fatalf("write mind file: %v", err)
+		}
+	}
+	return root
 }
 
 func TestHandleLocalProviderResolveRejectsCloudHTTP(t *testing.T) {
@@ -534,4 +939,36 @@ func TestHandleAppBridgeEvidenceRejectsMissingAndMismatchedCorrelation(t *testin
 
 func timeNow() time.Time {
 	return time.Now().UTC()
+}
+
+func assertAuthCheckSafeFailure(t *testing.T, body []byte, wantClass string) {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out["error"] != "auth_check_failed" {
+		t.Fatalf("expected safe error, got %#v", out)
+	}
+	if out["error_class"] != wantClass {
+		t.Fatalf("expected class %s, got %#v", wantClass, out)
+	}
+	if out["entitled"] != false {
+		t.Fatalf("expected entitled false, got %#v", out)
+	}
+	text := string(body)
+	for _, forbidden := range []string{"raw relay body", "api_key", "user_note", "bundle_json", "Bearer ", "Authorization"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("response leaked forbidden text %q in %s", forbidden, text)
+		}
+	}
+}
+
+func testUnsignedJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	return "e30." + base64.RawURLEncoding.EncodeToString(raw) + ".sig"
 }

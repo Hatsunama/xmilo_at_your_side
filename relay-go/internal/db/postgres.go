@@ -112,6 +112,30 @@ func (s *Store) migrate(ctx context.Context) error {
             review_note    TEXT NOT NULL DEFAULT '',
             created_at     TIMESTAMPTZ NOT NULL
         )`,
+		`CREATE TABLE IF NOT EXISTS settings_report_bundles (
+            report_id             TEXT PRIMARY KEY,
+            device_user_id        TEXT NOT NULL REFERENCES device_users(device_user_id),
+            client_report_id      TEXT NOT NULL,
+            bundle_schema_version INTEGER NOT NULL,
+            bundle_type           TEXT NOT NULL DEFAULT 'settings_report',
+            bundle_hash           TEXT NOT NULL DEFAULT '',
+            bundle_size_bytes     INTEGER NOT NULL DEFAULT 0,
+            app_version           TEXT NOT NULL DEFAULT '',
+            runtime_id            TEXT NOT NULL DEFAULT '',
+            sidecar_version       TEXT NOT NULL DEFAULT '',
+            report_reason         TEXT NOT NULL DEFAULT '',
+            user_note             TEXT NOT NULL DEFAULT '',
+            bundle_json           JSONB NOT NULL,
+            status                TEXT NOT NULL DEFAULT 'new',
+            review_note           TEXT NOT NULL DEFAULT '',
+            reviewed_by           TEXT NOT NULL DEFAULT '',
+            received_at           TIMESTAMPTZ NOT NULL,
+            updated_at            TIMESTAMPTZ NOT NULL,
+            reviewed_at           TIMESTAMPTZ,
+            CONSTRAINT settings_report_bundles_status_check CHECK (
+                status IN ('new', 'triaged', 'confirmed', 'dismissed', 'rule_update_needed')
+            )
+        )`,
 		// Index for quick entitlement checks
 		`CREATE INDEX IF NOT EXISTS idx_entitlement_device
             ON entitlement_grants(device_user_id)
@@ -119,6 +143,12 @@ func (s *Store) migrate(ctx context.Context) error {
 		`ALTER TABLE llm_turns ADD COLUMN IF NOT EXISTS device_user_id TEXT REFERENCES device_users(device_user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_llm_turns_device_user ON llm_turns(device_user_id)`,
 		`ALTER TABLE ai_content_reports ADD COLUMN IF NOT EXISTS review_note TEXT NOT NULL DEFAULT ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_settings_report_bundles_device_client
+            ON settings_report_bundles(device_user_id, client_report_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_settings_report_bundles_status_received
+            ON settings_report_bundles(status, received_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_settings_report_bundles_device_received
+            ON settings_report_bundles(device_user_id, received_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS two_factor_credentials (
             email        TEXT PRIMARY KEY,
             secret       TEXT NOT NULL,
