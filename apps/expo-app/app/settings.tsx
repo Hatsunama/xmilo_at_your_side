@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { ActivityIndicator, Alert, Animated, InteractionManager, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
@@ -154,6 +154,37 @@ export default function SettingsScreen() {
     };
   }, [params.reportEntry, privacyHelpCardY, reportButtonLocalY, reportButtonPulse]);
 
+  const refreshAccessConfig = useCallback(async () => {
+    const result = await authCheck();
+    const next = {
+      access_mode: result.access_mode ?? "code_only",
+      byok_provider: result.byok_provider ?? "",
+      subscription_entitled: result.subscription_entitled ?? result.entitled ?? false,
+      bring_your_own_key_active: result.bring_your_own_key_active ?? false,
+      phase9_api_key_access: result.phase9_api_key_access ?? false,
+      first_task_eligible: result.first_task_eligible ?? result.entitled ?? false,
+      relay_llm_turn_allowed: result.relay_llm_turn_allowed ?? false,
+      local_llm_turn_allowed: result.local_llm_turn_allowed ?? false,
+      access_code_only: result.access_code_only ?? true,
+      subscription_allowed: result.subscription_allowed ?? false,
+      access_code_grant_days: result.access_code_grant_days ?? 30
+    };
+    setAccessConfig(next);
+    setSelectedProvider((current) => current || next.byok_provider);
+    return next;
+  }, []);
+
+  const refreshProviderOptions = useCallback(async () => {
+    setProviderOptionsBusy(true);
+    try {
+      const providers = await getLocalProviderOptions();
+      setProviderOptions(providers);
+      setSelectedProvider((current) => current || accessConfig.byok_provider || providers[0]?.id || "");
+    } finally {
+      setProviderOptionsBusy(false);
+    }
+  }, [accessConfig.byok_provider]);
+
   useEffect(() => {
     refreshAccessConfig().catch(() => null);
     refreshProviderOptions().catch(() => null);
@@ -175,42 +206,7 @@ export default function SettingsScreen() {
         });
       })
       .catch(() => null);
-  }, []);
-
-  async function refreshAccessConfig() {
-    const result = await authCheck();
-    const next = {
-      access_mode: result.access_mode ?? "code_only",
-      byok_provider: result.byok_provider ?? "",
-      subscription_entitled: result.subscription_entitled ?? result.entitled ?? false,
-      bring_your_own_key_active: result.bring_your_own_key_active ?? false,
-      phase9_api_key_access: result.phase9_api_key_access ?? false,
-      first_task_eligible: result.first_task_eligible ?? result.entitled ?? false,
-      relay_llm_turn_allowed: result.relay_llm_turn_allowed ?? false,
-      local_llm_turn_allowed: result.local_llm_turn_allowed ?? false,
-      access_code_only: result.access_code_only ?? true,
-      subscription_allowed: result.subscription_allowed ?? false,
-      access_code_grant_days: result.access_code_grant_days ?? 30
-    };
-    setAccessConfig(next);
-    if (!selectedProvider && next.byok_provider) {
-      setSelectedProvider(next.byok_provider);
-    }
-    return next;
-  }
-
-  async function refreshProviderOptions() {
-    setProviderOptionsBusy(true);
-    try {
-      const providers = await getLocalProviderOptions();
-      setProviderOptions(providers);
-      if (!selectedProvider && providers[0]) {
-        setSelectedProvider(accessConfig.byok_provider || providers[0].id);
-      }
-    } finally {
-      setProviderOptionsBusy(false);
-    }
-  }
+  }, [refreshAccessConfig, refreshProviderOptions]);
 
   async function refreshStats() {
     try {

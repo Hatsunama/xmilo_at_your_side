@@ -1,11 +1,11 @@
 import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   BackHandler,
   AppState,
-  Linking,
+  NativeModules,
   PermissionsAndroid,
   Pressable,
   ScrollView,
@@ -37,26 +37,24 @@ import {
   hasNativeXMiloclawRuntimeHost,
   openXMiloclawAccessibilitySettings,
   openXMiloclawBatteryOptimizationSettings,
+  openXMiloclawDataSaverSettings,
   openXMiloclawNotificationSettings,
   openXMiloclawOverlaySettings,
+  openXMiloclawSetupPermissionSettings,
   restartXMiloclawRuntimeHost,
-  refreshXMiloclawCapabilityState,
+  getXMiloclawSetupPermissionSnapshot,
+  recheckXMiloclawSetupPermissionSnapshot,
+  isSetupPermissionFinalReady,
   getXMiloclawLocalByokStatus,
   saveXMiloclawLocalByokApiKey,
   startXMiloclawRuntimeHost,
-  type XMiloclawCapabilityState,
+  type SetupPermissionSnapshot,
+  type SetupPermissionSnapshotRow,
   type XMiloclawRuntimeStatus
 } from "../src/lib/xmiloRuntimeHost";
 import { hasSetupCompletedOnce, markSetupCompletedOnce } from "../src/lib/setupCompletion";
 import { useApp } from "../src/state/AppContext";
 
-// ─── Step machine ─────────────────────────────────────────────────────────────
-// checking           → silent boot check for completed local runtime setup
-// waiting_sidecar    → hidden runtime-host startup flow
-// email              → collect email address
-// email_sent         → "check your inbox" + "I verified" polling
-// access_choice      → non-commerce launch access choices, including local BYOK
-// invite_input       → enter access code
 type Step =
   | "checking"
   | "waiting_sidecar"
@@ -104,11 +102,23 @@ type Page3RuntimeStep =
 
 type Page3PermissionStatus = "granted" | "missing" | "unknown";
 
-type Page3RowClass =
-  | "user_granted_checkable"
-  | "required_platform_capability"
-  | "required_but_not_yet_truthfully_mappable"
-  | "replace_with_exact_android_surface";
+type SetupPermissionActionRow = "camera" | "microphone" | "media" | "location" | "physical_activity";
+type SetupPermissionNativeAction = "request" | "open_settings" | "none";
+
+type SetupPermissionRequestResult = {
+  row?: string;
+  result?: string;
+  reason?: string;
+  permissions_count?: number;
+  all_granted?: boolean;
+  any_granted?: boolean;
+};
+
+type SetupPermissionNativeModule = {
+  requestSetupPermission?: (row: SetupPermissionActionRow) => Promise<SetupPermissionRequestResult>;
+};
+
+const setupPermissionNativeModule = NativeModules.XMiloclawRuntimeModule as SetupPermissionNativeModule | undefined;
 
 type Page3Snapshot = {
   savedAtMillis: number;
@@ -132,49 +142,21 @@ function getFreshPage3Snapshot(): Page3Snapshot | null {
   return lastPage3Snapshot;
 }
 
+function foregroundRuntimeComplete(status: XMiloclawRuntimeStatus | null): boolean {
+  return status?.runtimeHostStarted === true && status?.foregroundServiceStarted === true;
+}
+
 type AllowBasicRowId =
-  | "modify_delete_shared_storage"
-  | "read_shared_storage"
-  | "read_audio_files"
   | "show_notifications"
   | "accessibility_service_enabled"
-  | "read_locations_from_media_collection"
-  | "read_video_files"
-  | "read_image_files"
-  | "read_user_selected_images_videos"
-  | "view_network_connections"
-  | "full_network_access"
-  | "prevent_phone_sleeping"
-  | "control_vibration"
-  | "run_foreground_service"
-  | "run_background_service"
-  | "ask_ignore_battery_optimizations"
-  | "set_alarm"
-  | "send_text_message"
-  | "make_phone_call"
-  | "access_to_call_logs"
-  | "access_to_camera"
-  | "access_to_content"
-  | "access_to_files_media"
-  | "access_to_health_fitness_wellness"
-  | "access_to_location_all_the_time"
-  | "access_to_microphone"
-  | "access_to_music_audio"
-  | "access_to_notifications"
-  | "access_to_phone"
-  | "access_to_photos_videos"
-  | "access_to_sms"
-  | "allow_background_data_usage"
+  | "allow_data_usage_data_saver"
   | "appear_on_top"
   | "unrestricted_battery_access";
 
 type AllowBasicRowMeta = {
   id: AllowBasicRowId;
   label: string;
-  rowClass: Page3RowClass;
   androidMapping?: string;
-  blockingReason?: string;
-  recommendedReplacementLabel?: string;
 };
 
 type AdditionalAccessRowBehavior =
@@ -233,7 +215,7 @@ export default function SetupScreen() {
     Page3RuntimeStep
   >("hidden_runtime_host_path");
   const [runtimeStatus, setRuntimeStatus] = useState<XMiloclawRuntimeStatus | null>(null);
-  const [capabilityState, setCapabilityState] = useState<XMiloclawCapabilityState | null>(null);
+  const [setupPermissionSnapshot, setSetupPermissionSnapshot] = useState<SetupPermissionSnapshot | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [runtimeError, setRuntimeError] = useState("");
   const [reviewAtBottom, setReviewAtBottom] = useState(false);
@@ -253,21 +235,21 @@ export default function SetupScreen() {
     access_code_grant_days: 30
   });
   const subscriptionEntryVisible = Boolean(accessConfig.subscription_allowed && isRevenueCatConfigured());
-
-  function setupSeamSatisfied(status: XMiloclawRuntimeStatus | null) {
+  const setupSeamSatisfied = useCallback((status: XMiloclawRuntimeStatus | null) => {
     if (!status) return false;
     return (
       status.notificationsGranted &&
       status.appearOnTopGranted &&
       status.batteryUnrestricted &&
+      status.dataSaverUnrestricted &&
       status.accessibilityEnabled &&
       status.runtimeHostStarted &&
       status.bridgeConnected &&
       status.hostReady
     );
-  }
+  }, []);
 
-  function resetSetupToStep1() {
+  const resetSetupToStep1 = useCallback(() => {
     lastPage3Snapshot = null;
     setTrustIntroDismissed(false);
     setTrustPage(0);
@@ -278,7 +260,7 @@ export default function SetupScreen() {
     setReviewAtBottom(false);
     setReviewAcknowledged(false);
     setReturnReason("");
-  }
+  }, []);
 
   function blockOnMissingSetupProof(message: string): false {
     setRuntimeStep("re_check");
@@ -286,21 +268,15 @@ export default function SetupScreen() {
     return false;
   }
 
-  async function continueAfterSeamSatisfied() {
-    // Startup canon: this seam is satisfied by app-owned runtime-host + bridge verification.
-    // Deeper proof surfaces like `/auth/check` and `/state` are part of later, post-access phases.
+  const continueAfterSeamSatisfied = useCallback(async () => {
     try {
       await markSetupCompletedOnce();
     } catch {
-      // Keep setup usable even if the local "completed once" marker can't be written right now.
     }
-    // Post-seam: enter the final startup access gate (code or skip).
-    // This avoids the non-canon email/verification flow and avoids `/auth/check` at this stage.
     setStep("email");
     return true;
-  }
+  }, []);
 
-  // ── Boot: confirm local runtime setup seam, or wait for sidecar ───────────────
   useEffect(() => {
     async function boot() {
       const setupCompleted = await hasSetupCompletedOnce().catch(() => false);
@@ -310,7 +286,6 @@ export default function SetupScreen() {
         return;
       }
 
-      // Start with setup-seam truth, then access-contract checks after the seam is satisfied.
       let status: XMiloclawRuntimeStatus | null = null;
       try {
         status = await getXMiloclawRuntimeStatus();
@@ -336,8 +311,7 @@ export default function SetupScreen() {
       }
     }
     boot();
-    return () => {};
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [continueAfterSeamSatisfied, resetSetupToStep1, setupSeamSatisfied]);
 
   useEffect(() => {
     if (step !== "waiting_sidecar") return;
@@ -375,6 +349,83 @@ export default function SetupScreen() {
     return () => sub.remove();
   }, [runtimeStep, step, trustIntroDismissed, trustPage]);
 
+  const refreshRuntimeStatus = useCallback(async () => {
+    try {
+      const status = await getXMiloclawRuntimeStatus();
+      setRuntimeStatus(status);
+      return status;
+    } catch (error: any) {
+      setRuntimeError(error?.message ?? "Could not read runtime host status.");
+      return null;
+    }
+  }, []);
+
+  const isProviderSetupRuntimeReady = useCallback((status: XMiloclawRuntimeStatus | null) => {
+    return Boolean(status?.hostReady && status?.taskRouteSurfaceReady);
+  }, []);
+
+  const getFinalRuntimeMissing = useCallback((status: XMiloclawRuntimeStatus | null) => {
+    const snapshot =
+      status ?? {
+        notificationsGranted: false,
+        appearOnTopGranted: false,
+        batteryUnrestricted: false,
+        dataSaverUnrestricted: false,
+        dataSaverStatus: "unknown",
+        accessibilityEnabled: false,
+        runtimeHostStarted: false,
+        foregroundServiceStarted: false,
+        runtimeFilesPrepared: false,
+        sidecarProcessLaunched: false,
+        sidecarProcessAlive: false,
+        bridgeConnected: false,
+        taskRouteSurfaceReady: false,
+        hostReady: false
+      };
+
+    const missing: Array<"Data Saver unrestricted" | "Foreground service started" | "Runtime files prepared" | "Sidecar process alive" | "Bridge connected" | "Task route surface ready" | "Host ready"> = [];
+    if (!snapshot.dataSaverUnrestricted) missing.push("Data Saver unrestricted");
+    if (!(snapshot.foregroundServiceStarted ?? snapshot.runtimeHostStarted)) missing.push("Foreground service started");
+    if (!snapshot.runtimeFilesPrepared) missing.push("Runtime files prepared");
+    if (!snapshot.sidecarProcessAlive) missing.push("Sidecar process alive");
+    if (!snapshot.bridgeConnected) missing.push("Bridge connected");
+    if (!snapshot.taskRouteSurfaceReady) missing.push("Task route surface ready");
+    if (!snapshot.hostReady) missing.push("Host ready");
+    return missing;
+  }, []);
+
+  const runtimeNotReadyReason = useCallback((status: XMiloclawRuntimeStatus | null) => {
+    if (status?.lastError) return status.lastError;
+    const missing = getFinalRuntimeMissing(status);
+    return missing.length ? `Missing runtime readiness: ${missing.join(", ")}` : "Runtime host is not ready.";
+  }, [getFinalRuntimeMissing]);
+
+  const ensureProviderSetupRuntimeReady = useCallback(async () => {
+    if (!hasNativeXMiloclawRuntimeHost()) {
+      throw new Error("Native xMilo runtime host is not available in this build.");
+    }
+
+    const current = await getXMiloclawRuntimeStatus();
+    setRuntimeStatus(current);
+    if (isProviderSetupRuntimeReady(current)) {
+      return current;
+    }
+
+    const started = await startXMiloclawRuntimeHost();
+    setRuntimeStatus(started);
+    if (isProviderSetupRuntimeReady(started)) {
+      return started;
+    }
+
+    const restarted = await restartXMiloclawRuntimeHost();
+    setRuntimeStatus(restarted);
+    if (isProviderSetupRuntimeReady(restarted)) {
+      return restarted;
+    }
+
+    throw new Error(runtimeNotReadyReason(restarted));
+  }, [isProviderSetupRuntimeReady, runtimeNotReadyReason]);
+
   useEffect(() => {
     if (step !== "byok_choose_provider") return;
     let cancelled = false;
@@ -402,65 +453,7 @@ export default function SetupScreen() {
     return () => {
       cancelled = true;
     };
-  }, [step]);
-
-  async function refreshRuntimeStatus() {
-    try {
-      const status = await getXMiloclawRuntimeStatus();
-      setRuntimeStatus(status);
-      return status;
-    } catch (error: any) {
-      setRuntimeError(error?.message ?? "Could not read runtime host status.");
-      return null;
-    }
-  }
-
-  async function refreshCapabilityState() {
-    try {
-      const state = await refreshXMiloclawCapabilityState();
-      setCapabilityState(state);
-      return state;
-    } catch (error: any) {
-      setRuntimeError(error?.message ?? "Could not read xMilo capability state.");
-      return null;
-    }
-  }
-
-  function isProviderSetupRuntimeReady(status: XMiloclawRuntimeStatus | null) {
-    return Boolean(status?.hostReady && status?.taskRouteSurfaceReady);
-  }
-
-  function runtimeNotReadyReason(status: XMiloclawRuntimeStatus | null) {
-    if (status?.lastError) return status.lastError;
-    const missing = getFinalRuntimeMissing(status);
-    return missing.length ? `Missing runtime readiness: ${missing.join(", ")}` : "Runtime host is not ready.";
-  }
-
-  async function ensureProviderSetupRuntimeReady() {
-    if (!hasNativeXMiloclawRuntimeHost()) {
-      throw new Error("Native xMilo runtime host is not available in this build.");
-    }
-
-    const current = await getXMiloclawRuntimeStatus();
-    setRuntimeStatus(current);
-    if (isProviderSetupRuntimeReady(current)) {
-      return current;
-    }
-
-    const started = await startXMiloclawRuntimeHost();
-    setRuntimeStatus(started);
-    if (isProviderSetupRuntimeReady(started)) {
-      return started;
-    }
-
-    const restarted = await restartXMiloclawRuntimeHost();
-    setRuntimeStatus(restarted);
-    if (isProviderSetupRuntimeReady(restarted)) {
-      return restarted;
-    }
-
-    throw new Error(runtimeNotReadyReason(restarted));
-  }
+  }, [ensureProviderSetupRuntimeReady, step]);
 
   async function waitForByokReadinessAfterSave(resolved: {
     provider: string;
@@ -501,34 +494,7 @@ export default function SetupScreen() {
     throw new Error(`Local BYOK readiness was not confirmed after save (${lastReason}).`);
   }
 
-  function getFinalRuntimeMissing(status: XMiloclawRuntimeStatus | null) {
-    const snapshot =
-      status ?? {
-        notificationsGranted: false,
-        appearOnTopGranted: false,
-        batteryUnrestricted: false,
-        accessibilityEnabled: false,
-        runtimeHostStarted: false,
-        foregroundServiceStarted: false,
-        runtimeFilesPrepared: false,
-        sidecarProcessLaunched: false,
-        sidecarProcessAlive: false,
-        bridgeConnected: false,
-        taskRouteSurfaceReady: false,
-        hostReady: false
-      };
-
-    const missing: Array<"Foreground service started" | "Runtime files prepared" | "Sidecar process alive" | "Bridge connected" | "Task route surface ready" | "Host ready"> = [];
-    if (!(snapshot.foregroundServiceStarted ?? snapshot.runtimeHostStarted)) missing.push("Foreground service started");
-    if (!snapshot.runtimeFilesPrepared) missing.push("Runtime files prepared");
-    if (!snapshot.sidecarProcessAlive) missing.push("Sidecar process alive");
-    if (!snapshot.bridgeConnected) missing.push("Bridge connected");
-    if (!snapshot.taskRouteSurfaceReady) missing.push("Task route surface ready");
-    if (!snapshot.hostReady) missing.push("Host ready");
-    return missing;
-  }
-
-  async function runFinalRuntimeConfirmation() {
+  const runFinalRuntimeConfirmation = useCallback(async () => {
     setRuntimeBusy(true);
     setRuntimeError("");
     setFinalConfirmCheckedOnce(false);
@@ -542,13 +508,12 @@ export default function SetupScreen() {
     } finally {
       setRuntimeBusy(false);
     }
-  }
+  }, [continueAfterSeamSatisfied, getFinalRuntimeMissing, refreshRuntimeStatus]);
 
   useEffect(() => {
     if (step !== "waiting_sidecar") return;
     refreshRuntimeStatus();
-    refreshCapabilityState();
-  }, [step]);
+  }, [refreshRuntimeStatus, step]);
 
   useEffect(() => {
     if (step !== "waiting_sidecar" || runtimeStep !== "re_check") {
@@ -560,11 +525,8 @@ export default function SetupScreen() {
     if (finalConfirmAutoRanRef.current) return;
     finalConfirmAutoRanRef.current = true;
     runFinalRuntimeConfirmation();
-  }, [step, runtimeStep]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [runFinalRuntimeConfirmation, step, runtimeStep]);
 
-  // Page-3 stability/anti-regression: keep an in-memory snapshot so settings hops, app foregrounding,
-  // or in-app route churn can't silently re-stack trust + page-3 cards or clear the page-3 checklist
-  // within the same running process session.
   useEffect(() => {
     if (step !== "waiting_sidecar") return;
     const snap = getFreshPage3Snapshot();
@@ -617,23 +579,84 @@ export default function SetupScreen() {
     }
   }, [step, trustIntroDismissed, runtimeStep, runtimeError, trustPage]);
 
-  useEffect(() => {
-    if (step !== "waiting_sidecar" || runtimeStep !== "allow_basic_permissions") return;
-    computeChecklist(runtimeStatus);
-    const sub = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active") {
-        refreshRuntimeStatus().then((status) => computeChecklist(status));
-      }
-    });
-    return () => sub.remove();
-  }, [runtimeStep, runtimeStatus, step]);
+  const logSetupPermissionBreadcrumb = useCallback((event: string, fields?: Record<string, string | boolean | undefined>) => {
+    const parts = ["XMILO_SETUP_PERMISSION_PROOF", `event=${event}`];
+    for (const [key, value] of Object.entries(fields ?? {})) {
+      if (typeof value === "undefined") continue;
+      parts.push(`${key}=${String(value)}`);
+    }
+    console.info(parts.join(" "));
+  }, []);
 
-  async function computeChecklist(status: XMiloclawRuntimeStatus | null) {
+  function setupSnapshotRow(row: string, snapshot = setupPermissionSnapshot): SetupPermissionSnapshotRow | null {
+    return snapshot?.rows.find((item) => item.row === row) ?? null;
+  }
+
+  function setupSnapshotStatus(row: string): Page3PermissionStatus {
+    const item = setupSnapshotRow(row);
+    if (!item) return "unknown";
+    return item.complete ? "granted" : "missing";
+  }
+
+  function setupSnapshotAction(row: string): SetupPermissionNativeAction {
+    const action = setupSnapshotRow(row)?.allowed_action;
+    if (
+      action === "request" ||
+      action === "open_settings" ||
+      action === "none"
+    ) {
+      return action;
+    }
+    return "none";
+  }
+
+  function setupSnapshotReason(row: string): string {
+    return setupSnapshotRow(row)?.blocked_reason_key ?? "unknown";
+  }
+
+  function setupSnapshotHint(row: string): string {
+    const item = setupSnapshotRow(row);
+    if (!item) return "Permission state is not available yet.";
+    if (item.complete) return item.accepted_text ?? "Requirement is complete.";
+    return item.requirement_text ?? "Must complete this requirement";
+  }
+
+  const logSetupPermissionGate = useCallback((reviewed: boolean, complete: boolean) => {
+    logSetupPermissionBreadcrumb("gate", {
+      row: "foreground_runtime",
+      gate_reviewed: reviewed,
+      gate_permissions_complete: complete,
+      gate_ready: reviewed && complete,
+      source: "native_current"
+    });
+  }, [logSetupPermissionBreadcrumb]);
+
+  useEffect(() => {
+    if (step !== "waiting_sidecar" || runtimeStep !== "additional_access_review") return;
+    for (const row of setupPermissionSnapshot?.rows ?? []) {
+      logSetupPermissionBreadcrumb("action_state", {
+        row: row.row,
+        actionable: row.allowed_action !== "none",
+        action: row.allowed_action,
+        reason: row.blocked_reason_key ?? "none"
+      });
+      logSetupPermissionBreadcrumb("settings_correction_state", {
+        row: row.row,
+        prompt_state: row.prompt_state ?? "not_applicable",
+        can_request_now: row.can_request_now === true
+      });
+    }
+  }, [logSetupPermissionBreadcrumb, runtimeStep, setupPermissionSnapshot, step]);
+
+  const computeChecklist = useCallback(async (status: XMiloclawRuntimeStatus | null) => {
+    logSetupPermissionBreadcrumb("check_started", { source: "native_current" });
     const snapshot =
       status ?? {
         notificationsGranted: false,
         appearOnTopGranted: false,
         batteryUnrestricted: false,
+        dataSaverUnrestricted: false,
+        dataSaverStatus: "unknown",
         accessibilityEnabled: false,
         runtimeHostStarted: false,
         foregroundServiceStarted: false,
@@ -645,95 +668,72 @@ export default function SetupScreen() {
         hostReady: false
       };
 
-    async function checkAndroidPermission(permission: string) {
-      try {
-        const ok = await PermissionsAndroid.check(permission as any);
-        return ok ? "granted" : "missing";
-      } catch {
-        return "unknown";
-      }
-    }
-
     const entries: Array<Promise<[string, Page3PermissionStatus]>> = [];
 
     const set = (id: string, value: Page3PermissionStatus) => {
       entries.push(Promise.resolve([id, value]));
     };
 
-    const checkPerm = (id: string, permission: string) => {
-      entries.push(checkAndroidPermission(permission).then((value) => [id, value]));
-    };
-
     set("show_notifications", snapshot.notificationsGranted ? "granted" : "missing");
-    set("access_to_notifications", snapshot.notificationsGranted ? "granted" : "missing");
     set("appear_on_top", snapshot.appearOnTopGranted ? "granted" : "missing");
     set("unrestricted_battery_access", snapshot.batteryUnrestricted ? "granted" : "missing");
-    set("ask_ignore_battery_optimizations", snapshot.batteryUnrestricted ? "granted" : "missing");
+    set("allow_data_usage_data_saver", snapshot.dataSaverUnrestricted ? "granted" : "missing");
     set("accessibility_service_enabled", snapshot.accessibilityEnabled ? "granted" : "missing");
-    // Shared storage/media mapping (Android version dependent). Keep Phase 9 minimal:
-    // image/library access only, plus app storage through the document/image pickers.
-    checkPerm("read_shared_storage", "android.permission.READ_EXTERNAL_STORAGE");
-    checkPerm("read_image_files", "android.permission.READ_MEDIA_IMAGES");
-    checkPerm("full_network_access", "android.permission.INTERNET");
-    checkPerm("prevent_phone_sleeping", "android.permission.WAKE_LOCK");
-    checkPerm("control_vibration", "android.permission.VIBRATE");
-    checkPerm("run_foreground_service", "android.permission.FOREGROUND_SERVICE");
-    checkPerm("run_background_service", "android.permission.FOREGROUND_SERVICE");
-    // Exact alarms are a special app-op on modern Android; PermissionsAndroid.check is not a full truth source here.
-    // Keep blocking until a truthful AlarmManager.canScheduleExactAlarms() check is wired.
-    set("set_alarm", "unknown");
-
-    checkPerm("access_to_camera", "android.permission.CAMERA");
-    checkPerm("access_to_microphone", "android.permission.RECORD_AUDIO");
-    entries.push(checkAndroidPermission("android.permission.ACCESS_FINE_LOCATION").then((value) => ["additional_access_location", value]));
-
-    // Inventory truth repairs (derived/umbrella rows)
-    // access_to_photos_videos -> Phase 9 image-picker/library permission only; video is not a current setup ask.
-    // access_to_content/access_to_files_media -> mirrors any media/shared-storage read signal
-    // health/background-data remain blocking until a truthful mapping exists
-    set("access_to_health_fitness_wellness", "unknown");
 
     const results = await Promise.all(entries);
     const next: Record<string, Page3PermissionStatus> = {};
     for (const [id, value] of results) next[id] = value;
 
-    const strictCapabilityState = await refreshXMiloclawCapabilityState().catch(() => null);
-    if (strictCapabilityState) {
-      setCapabilityState(strictCapabilityState);
-      const capabilityStatus = (name: string): Page3PermissionStatus => {
-        const capability = strictCapabilityState.capabilities?.[name];
-        if (!capability) return "unknown";
-        return capability.accepted_for_setup ? "granted" : "missing";
-      };
-      next.access_to_camera = capabilityStatus("camera_rear");
-      next.access_to_microphone = capabilityStatus("microphone");
-      next.additional_access_location = capabilityStatus("location");
-      next.read_image_files = capabilityStatus("media_library");
-      next.access_to_photos_videos = capabilityStatus("media_library");
+    const nativeSnapshot = await getXMiloclawSetupPermissionSnapshot().catch(() => null);
+    setSetupPermissionSnapshot(nativeSnapshot);
+    if (nativeSnapshot) {
+      next.access_to_camera = nativeSnapshot.rows.find((row) => row.row === "camera")?.complete ? "granted" : "missing";
+      next.access_to_microphone = nativeSnapshot.rows.find((row) => row.row === "microphone")?.complete ? "granted" : "missing";
+      next.additional_access_location = nativeSnapshot.rows.find((row) => row.row === "location")?.complete ? "granted" : "missing";
+      next.read_image_files = nativeSnapshot.rows.find((row) => row.row === "media")?.complete ? "granted" : "missing";
+      next.access_to_photos_videos = nativeSnapshot.rows.find((row) => row.row === "media")?.complete ? "granted" : "missing";
+      next.physical_activity = nativeSnapshot.rows.find((row) => row.row === "physical_activity")?.complete ? "granted" : "missing";
+      next.run_foreground_service = nativeSnapshot.rows.find((row) => row.row === "foreground_runtime")?.complete ? "granted" : "missing";
+      next.run_background_service = next.run_foreground_service;
+      logSetupPermissionBreadcrumb("snapshot_consumed", {
+        schema_version: String(nativeSnapshot.schema_version),
+        permissions_complete: nativeSnapshot.gate.permissions_complete,
+        foreground_runtime_complete: nativeSnapshot.gate.foreground_runtime_complete,
+        final_ready_without_review: nativeSnapshot.gate.final_ready_without_review
+      });
     }
-
-    // Derived/umbrella labels (best-effort mapping without faking grants)
-    const anyMediaGranted =
-      next.read_shared_storage === "granted" ||
-      next.read_image_files === "granted";
-
-    if (!strictCapabilityState?.capabilities?.media_library) {
-      next.access_to_photos_videos = next.read_image_files === "granted"
-        ? "granted"
-        : next.read_image_files === "missing"
-          ? "missing"
-          : next.read_shared_storage === "granted"
-            ? "granted"
-            : "unknown";
-    }
-
-    next.access_to_content = anyMediaGranted ? "granted" : next.read_shared_storage === "missing" ? "missing" : "unknown";
-    next.access_to_files_media = anyMediaGranted ? "granted" : next.read_shared_storage === "missing" ? "missing" : "unknown";
 
     setPermissionChecklist(next);
     setChecklistUpdatedAtMillis(Date.now());
     return next;
-  }
+  }, [logSetupPermissionBreadcrumb]);
+
+  useEffect(() => {
+    if (step !== "waiting_sidecar" || (runtimeStep !== "allow_basic_permissions" && runtimeStep !== "additional_access_review")) return;
+    computeChecklist(runtimeStatus);
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        refreshRuntimeStatus().then((status) => computeChecklist(status));
+      }
+    });
+    return () => sub.remove();
+  }, [computeChecklist, refreshRuntimeStatus, runtimeStep, runtimeStatus, step]);
+
+  useEffect(() => {
+    if (step !== "waiting_sidecar" || runtimeStep !== "additional_access_review") return;
+    const complete = setupPermissionSnapshot?.gate.final_ready_without_review === true;
+    logSetupPermissionGate(reviewAtBottom, complete);
+    if (!complete && reviewAcknowledged) {
+      setReviewAcknowledged(false);
+    }
+  }, [
+    logSetupPermissionGate,
+    reviewAcknowledged,
+    reviewAtBottom,
+    runtimeStep,
+    setupPermissionSnapshot,
+    step
+  ]);
 
   async function requestAndroidPermission(permission: string) {
     try {
@@ -744,12 +744,124 @@ export default function SetupScreen() {
     }
   }
 
+  function safeSetupPermissionRequestResult(value: unknown): string {
+    return value === "completed" || value === "blocked" || value === "error" ? value : "unknown";
+  }
+
+  function safeSetupPermissionRequestReason(value: unknown): string {
+    if (
+      value === "granted" ||
+      value === "denied" ||
+      value === "blocked" ||
+      value === "request_error" ||
+      value === "activity_unavailable" ||
+      value === "native_unavailable" ||
+      value === "prompt_unavailable" ||
+      value === "permanently_denied" ||
+      value === "react_refresh" ||
+      value === "permission_verification_required" ||
+      value === "app_details_settings" ||
+      value === "settings_error" ||
+      value === "unknown"
+    ) {
+      return value;
+    }
+    return "unknown";
+  }
+
+  async function requestSetupPermissionRow(row: SetupPermissionActionRow, fallbackPermission?: string) {
+    logSetupPermissionBreadcrumb("request_invoked", { row });
+    try {
+      if (setupPermissionNativeModule?.requestSetupPermission) {
+        const result = await setupPermissionNativeModule.requestSetupPermission(row);
+        logSetupPermissionBreadcrumb("request_result", {
+          row,
+          result: safeSetupPermissionRequestResult(result?.result),
+          reason: safeSetupPermissionRequestReason(result?.reason)
+        });
+        return result?.all_granted === true;
+      }
+      if (fallbackPermission) {
+        const granted = await requestAndroidPermission(fallbackPermission);
+        logSetupPermissionBreadcrumb("request_result", {
+          row,
+          result: "completed",
+          reason: granted ? "granted" : "native_unavailable"
+        });
+        return granted;
+      }
+      logSetupPermissionBreadcrumb("request_result", { row, result: "blocked", reason: "native_unavailable" });
+      return false;
+    } catch {
+      logSetupPermissionBreadcrumb("request_result", { row, result: "error", reason: "request_error" });
+      return false;
+    }
+  }
+
+  async function dispatchSetupPermissionAction(row: SetupPermissionActionRow) {
+    const action = setupSnapshotAction(row);
+    const reason = setupSnapshotReason(row);
+    if (action === "none") return;
+    logSetupPermissionBreadcrumb("button_pressed", { row, action, reason });
+    logSetupPermissionBreadcrumb("action_dispatched", { row, action, reason });
+    if (action === "request") {
+      await requestSetupPermissionRow(row);
+      const status = await refreshRuntimeStatus();
+      await computeChecklist(status);
+      const latestSnapshot = await getXMiloclawSetupPermissionSnapshot().catch(() => null);
+      if (latestSnapshot) setSetupPermissionSnapshot(latestSnapshot);
+      return;
+    }
+    if (action === "open_settings") {
+      try {
+        const result = await openXMiloclawSetupPermissionSettings(row);
+        logSetupPermissionBreadcrumb("permission_settings_opened", {
+          row,
+          result: result?.opened === true,
+          reason: safeSetupPermissionRequestReason(result?.reason)
+        });
+      } catch {
+        logSetupPermissionBreadcrumb("permission_settings_opened", { row, result: false, reason: "settings_error" });
+        setRuntimeError("Android requires this permission to be fixed in system settings before setup can continue.");
+      }
+    }
+  }
+
+  async function recheckSetupPermissions() {
+    logSetupPermissionBreadcrumb("recheck_permissions_pressed", { source: "manual" });
+    logSetupPermissionBreadcrumb("recheck_permissions_started", { source: "manual" });
+    setRuntimeBusy(true);
+    setRuntimeError("");
+    try {
+      const previousRows = setupPermissionSnapshot?.rows ?? [];
+      const status = await refreshRuntimeStatus();
+      await computeChecklist(status);
+      const latestSnapshot = await recheckXMiloclawSetupPermissionSnapshot().catch(() => null);
+      if (latestSnapshot) setSetupPermissionSnapshot(latestSnapshot);
+      const changedRows = (latestSnapshot?.rows ?? [])
+        .filter((row) => previousRows.find((previous) => previous.row === row.row)?.complete !== row.complete)
+        .map((row) => `${row.row}:${row.complete ? "complete" : "incomplete"}`)
+        .join(",");
+      logSetupPermissionBreadcrumb("recheck_permissions_result", {
+        result: latestSnapshot ? "completed" : "blocked",
+        permissions_complete: latestSnapshot?.gate.permissions_complete === true,
+        foreground_runtime_complete: latestSnapshot?.gate.foreground_runtime_complete === true,
+        final_ready_without_review: latestSnapshot?.gate.final_ready_without_review === true,
+        rows_changed: changedRows || "none"
+      });
+    } catch {
+      logSetupPermissionBreadcrumb("recheck_permissions_result", { result: "error", reason: "request_error" });
+      setRuntimeError("Could not recheck permissions. Try again.");
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
   function syncRevenueCat(appUserID: string) {
     if (!appUserID || !isRevenueCatConfigured()) return;
     try {
       configureRevenueCat(appUserID);
     } catch {
-      // keep setup usable even when RevenueCat is not configured yet
     }
   }
 
@@ -764,8 +876,6 @@ export default function SetupScreen() {
     }
     return false;
   }
-
-  // ── Handlers ─────────────────────────────────────────────────────────────────
 
   async function handleSendEmail() {
     setError("");
@@ -845,7 +955,6 @@ export default function SetupScreen() {
   }
 
   async function handleStartTrial() {
-    // Trial clock starts on the first real /llm/turn call — nothing to do here.
     router.replace("/lair");
   }
 
@@ -939,8 +1048,6 @@ export default function SetupScreen() {
       setByokKey("");
       setByokBaseUrl("");
       setByokModel("");
-      // Continue straight into the Lair shell without leaving a modal over the live scene
-      // and without preserving setup in the back stack.
       router.replace("/lair");
     } catch (error: any) {
       Alert.alert("BYOK key not saved", error?.message ?? "Could not save local API key.");
@@ -948,8 +1055,6 @@ export default function SetupScreen() {
       setByokBusy(false);
     }
   }
-
-  // ── Screens ───────────────────────────────────────────────────────────────────
 
   if (step === "checking") {
     return (
@@ -968,25 +1073,26 @@ export default function SetupScreen() {
       {
         id: "show_notifications",
         label: "Show notifications",
-        rowClass: "user_granted_checkable",
         androidMapping: "Android: POST_NOTIFICATIONS (app-owned proof surface)"
       },
       {
         id: "appear_on_top",
         label: "Appear on top",
-        rowClass: "user_granted_checkable",
         androidMapping: "Android: overlay permission (app-owned proof surface)"
       },
       {
         id: "unrestricted_battery_access",
         label: "Unrestricted battery access",
-        rowClass: "user_granted_checkable",
         androidMapping: "Android: Unrestricted battery access (app-owned proof surface)"
+      },
+      {
+        id: "allow_data_usage_data_saver",
+        label: "Allow data usage while Data Saver is on",
+        androidMapping: "Android: Data Saver unrestricted data access (app-owned proof surface)"
       },
       {
         id: "accessibility_service_enabled",
         label: "Accessibility Service enabled",
-        rowClass: "user_granted_checkable",
         androidMapping: "Android: Accessibility Service (app-owned proof surface)"
       }
     ];
@@ -1002,6 +1108,8 @@ export default function SetupScreen() {
         notificationsGranted: false,
         appearOnTopGranted: false,
         batteryUnrestricted: false,
+        dataSaverUnrestricted: false,
+        dataSaverStatus: "unknown",
         accessibilityEnabled: false,
         runtimeHostStarted: false,
         foregroundServiceStarted: false,
@@ -1042,13 +1150,22 @@ export default function SetupScreen() {
         actionHint: "Tap to open Battery optimization settings."
       },
       {
-        id: "camera_microphone",
+        id: "camera",
         section: "requested_later_features",
-        label: "Camera / Microphone permission state",
+        label: "Camera permission state",
         behavior: "clickable_runtime_request",
         requiredForContinue: true,
-        status: combineStatuses(permissionChecklist.access_to_camera ?? "unknown", permissionChecklist.access_to_microphone ?? "unknown"),
-        actionHint: "Choose While using the app, not This time only. Android does not expose one-time versus while-using scope to this build after grant."
+        status: setupSnapshotStatus("camera"),
+        actionHint: setupSnapshotHint("camera")
+      },
+      {
+        id: "microphone",
+        section: "requested_later_features",
+        label: "Microphone permission state",
+        behavior: "clickable_runtime_request",
+        requiredForContinue: true,
+        status: setupSnapshotStatus("microphone"),
+        actionHint: setupSnapshotHint("microphone")
       },
       {
         id: "photos_videos",
@@ -1056,8 +1173,8 @@ export default function SetupScreen() {
         label: "Photos and videos",
         behavior: "clickable_runtime_request",
         requiredForContinue: true,
-        status: permissionChecklist.access_to_photos_videos ?? permissionChecklist.read_image_files ?? "unknown",
-        actionHint: "Choose Allow all photos and videos, not limited access."
+        status: setupSnapshotStatus("media"),
+        actionHint: setupSnapshotHint("media")
       },
       {
         id: "location",
@@ -1065,33 +1182,34 @@ export default function SetupScreen() {
         label: "Location permission state",
         behavior: "clickable_runtime_request",
         requiredForContinue: true,
-        status: permissionChecklist.additional_access_location ?? "unknown",
-        actionHint: "Choose While using the app, not This time only. Choose Precise location."
+        status: setupSnapshotStatus("location"),
+        actionHint: setupSnapshotHint("location")
+      },
+      {
+        id: "physical_activity",
+        section: "requested_later_features",
+        label: "Physical activity",
+        behavior: "clickable_runtime_request",
+        requiredForContinue: true,
+        status: setupSnapshotStatus("physical_activity"),
+        actionHint: setupSnapshotHint("physical_activity")
       },
       {
         id: "app_owned_hidden_runtime_execution",
         section: "internal_runtime_capabilities",
         label: "Foreground runtime service",
         behavior: "clickable_settings_path",
-        requiredForContinue: false,
-        status: (runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted) ? "granted" : "missing",
-        actionHint: (runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted)
-          ? "Foreground service is running; continue checking runtime files/process/readiness."
-          : "Tap to start the app-owned hidden runtime host."
+        requiredForContinue: true,
+        status: setupSnapshotStatus("foreground_runtime"),
+        actionHint: setupSnapshotHint("foreground_runtime")
       },
       {
         id: "foreground_background_service_capability",
         section: "internal_runtime_capabilities",
         label: "Foreground/background service capability",
         behavior: "visible_non_clickable_status",
-        requiredForContinue: false,
-        status:
-          hasNativeXMiloclawRuntimeHost()
-            ? combineStatuses(
-                permissionChecklist.run_foreground_service ?? "unknown",
-                permissionChecklist.run_background_service ?? "unknown"
-              )
-            : "unknown",
+        requiredForContinue: true,
+        status: setupSnapshotStatus("foreground_runtime"),
         actionHint: "Internal capability/state; no direct user-grant action on this screen."
       }
     ];
@@ -1100,6 +1218,7 @@ export default function SetupScreen() {
     if (!runtimeProof.notificationsGranted) requiredNowMissing.push("Show notifications");
     if (!runtimeProof.appearOnTopGranted) requiredNowMissing.push("Appear on top");
     if (!runtimeProof.batteryUnrestricted) requiredNowMissing.push("Unrestricted battery access");
+    if (!runtimeProof.dataSaverUnrestricted) requiredNowMissing.push("Allow data usage while Data Saver is on");
     if (!runtimeProof.accessibilityEnabled) requiredNowMissing.push("Accessibility Service enabled");
 
     function setMissingMessage(prefix: string, missing: string[]) {
@@ -1121,7 +1240,7 @@ export default function SetupScreen() {
       setTrustPage((current) => Math.min(TRUST_PAGES.length - 1, current + 1));
     }
 
-    async function handleOpenSetting(kind: "notifications" | "overlay" | "battery" | "accessibility") {
+    async function handleOpenSetting(kind: "notifications" | "overlay" | "battery" | "data_saver" | "accessibility") {
       try {
         setRuntimeError("");
         if (kind === "notifications") {
@@ -1130,6 +1249,8 @@ export default function SetupScreen() {
           await openXMiloclawOverlaySettings();
         } else if (kind === "battery") {
           await openXMiloclawBatteryOptimizationSettings();
+        } else if (kind === "data_saver") {
+          await openXMiloclawDataSaverSettings();
         } else {
           await openXMiloclawAccessibilitySettings();
         }
@@ -1150,20 +1271,16 @@ export default function SetupScreen() {
           await handleOpenSetting("overlay");
         } else if (row.id === "unrestricted_battery_access") {
           await handleOpenSetting("battery");
-        } else if (row.id === "camera_microphone") {
-          await requestAndroidPermission("android.permission.CAMERA");
-          await requestAndroidPermission("android.permission.RECORD_AUDIO");
+        } else if (row.id === "camera") {
+          await dispatchSetupPermissionAction("camera");
+        } else if (row.id === "microphone") {
+          await dispatchSetupPermissionAction("microphone");
         } else if (row.id === "photos_videos") {
-          await PermissionsAndroid.requestMultiple([
-            "android.permission.READ_MEDIA_IMAGES",
-            "android.permission.READ_MEDIA_VIDEO",
-            "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
-          ] as any);
+          await dispatchSetupPermissionAction("media");
         } else if (row.id === "location") {
-          await PermissionsAndroid.requestMultiple([
-            "android.permission.ACCESS_FINE_LOCATION",
-            "android.permission.ACCESS_COARSE_LOCATION"
-          ] as any);
+          await dispatchSetupPermissionAction("location");
+        } else if (row.id === "physical_activity") {
+          await dispatchSetupPermissionAction("physical_activity");
         } else if (row.id === "app_owned_hidden_runtime_execution") {
           const before = await refreshRuntimeStatus();
           if (!before?.runtimeHostStarted) {
@@ -1173,7 +1290,6 @@ export default function SetupScreen() {
 
                           const status = await refreshRuntimeStatus();
                           await computeChecklist(status);
-                          await refreshCapabilityState();
                         } finally {
         setRuntimeBusy(false);
       }
@@ -1190,9 +1306,11 @@ export default function SetupScreen() {
         if (!status.notificationsGranted) missing.push("Show notifications");
         if (!status.appearOnTopGranted) missing.push("Appear on top");
         if (!status.batteryUnrestricted) missing.push("Unrestricted battery access");
+        if (!status.dataSaverUnrestricted) missing.push("Allow data usage while Data Saver is on");
         if (!status.accessibilityEnabled) missing.push("Accessibility Service enabled");
         if (missing.length > 0) {
           setMissingMessage("Still missing", missing);
+          logSetupPermissionBreadcrumb("finish_blocked", { stage: "basic_permissions", reason: "permissions_incomplete" });
           return;
         }
         setReviewAtBottom(false);
@@ -1306,22 +1424,15 @@ export default function SetupScreen() {
                     const granted = status === "granted";
                     const actionableMissing = status === "missing";
 
-                    const getRowAction = (rowId: string): "notifications" | "overlay" | "battery" | "accessibility" | "request_permission" | null => {
+                    const getRowAction = (rowId: string): "notifications" | "overlay" | "battery" | "data_saver" | "accessibility" | null => {
                       if (rowId === "show_notifications") return "notifications" as const;
                       if (rowId === "appear_on_top") return "overlay" as const;
                       if (rowId === "unrestricted_battery_access") return "battery" as const;
+                      if (rowId === "allow_data_usage_data_saver") return "data_saver" as const;
                       if (rowId === "accessibility_service_enabled") return "accessibility" as const;
-                      if (
-                        rowId === "read_image_files" ||
-                        rowId === "access_to_camera" ||
-                        rowId === "access_to_microphone"
-                      ) {
-                        return "request_permission";
-                      }
                       return null;
                     };
 
-                    // Only allow a row click if it is explicitly missing (not unknown, not granted) and we have a real action.
                     const actionKind = actionableMissing ? getRowAction(key) : null;
                     const rowPressable = Boolean(actionKind);
 
@@ -1331,19 +1442,12 @@ export default function SetupScreen() {
                       try {
                         if (actionKind === "notifications") {
                           await requestAndroidPermission("android.permission.POST_NOTIFICATIONS");
-                        } else if (actionKind === "request_permission") {
-                          const byId: Record<string, string> = {
-                            read_image_files: "android.permission.READ_MEDIA_IMAGES",
-                            access_to_camera: "android.permission.CAMERA",
-                            access_to_microphone: "android.permission.RECORD_AUDIO"
-                          };
-                          const perm = byId[key];
-                          if (!perm) return;
-                          await requestAndroidPermission(perm);
                         } else if (actionKind === "overlay") {
                           await handleOpenSetting("overlay");
                         } else if (actionKind === "battery") {
                           await handleOpenSetting("battery");
+                        } else if (actionKind === "data_saver") {
+                          await handleOpenSetting("data_saver");
                         } else if (actionKind === "accessibility") {
                           await handleOpenSetting("accessibility");
                         }
@@ -1371,11 +1475,6 @@ export default function SetupScreen() {
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.checkLabel, labelStyle]}>{row.label}</Text>
                           {row.androidMapping ? <Text style={styles.checkSubLabel}>{row.androidMapping}</Text> : null}
-                          {row.rowClass === "required_but_not_yet_truthfully_mappable" || row.rowClass === "replace_with_exact_android_surface" ? (
-                            <Text style={styles.checkSubLabelWarn}>
-                              BLOCKING: {row.blockingReason || "No truthful mapping in this build."}
-                            </Text>
-                          ) : null}
                         </View>
                         <View style={[styles.checkBadge, badgeStyle]}>
                           <Text style={styles.checkBadgeText}>{badgeText}</Text>
@@ -1390,30 +1489,18 @@ export default function SetupScreen() {
                   for (const row of allowBasicInventory) {
                     const status = permissionChecklist[row.id] ?? "unknown";
                     if (status === "granted") continue;
-                    const prefix = row.rowClass === "required_but_not_yet_truthfully_mappable" || row.rowClass === "replace_with_exact_android_surface"
-                      ? "BLOCKING"
-                      : status.toUpperCase();
-                    if (row.rowClass === "replace_with_exact_android_surface") {
-                      missingLines.push(
-                        `${row.label} — ${prefix}. Needs canon-level exact Android surface label. Suggested: ${row.recommendedReplacementLabel || "TBD"}`
-                      );
-                      continue;
-                    }
-                    if (row.rowClass === "required_but_not_yet_truthfully_mappable") {
-                      missingLines.push(`${row.label} — ${prefix}. ${row.blockingReason || "No truthful mapping/check/action in this build."}`);
-                      continue;
-                    }
                     if (status === "unknown") {
                       missingLines.push(`${row.label} — UNKNOWN (cannot confirm from this build).`);
                       continue;
                     }
-                    // status === missing and checkable
-                    if (row.id === "show_notifications" || row.id === "access_to_notifications") {
+                    if (row.id === "show_notifications") {
                       missingLines.push(`${row.label} — tap the row to request, or allow in Notifications settings if prompted.`);
                     } else if (row.id === "appear_on_top") {
                       missingLines.push(`${row.label} — tap the row to open Appear-on-top settings.`);
-                    } else if (row.id === "unrestricted_battery_access" || row.id === "ask_ignore_battery_optimizations") {
+                    } else if (row.id === "unrestricted_battery_access") {
                       missingLines.push(`${row.label} — tap the row to open App info → Battery → Unrestricted.`);
+                    } else if (row.id === "allow_data_usage_data_saver") {
+                      missingLines.push(`${row.label} — tap the row to open Data Saver settings.`);
                     } else if (row.id === "accessibility_service_enabled") {
                       missingLines.push(`${row.label} — tap the row to open Accessibility settings, then Installed apps → xMilo → turn on.`);
                     } else {
@@ -1433,22 +1520,6 @@ export default function SetupScreen() {
                       <Text style={styles.fine}>Last re-check: {checklistUpdatedAtMillis ? new Date(checklistUpdatedAtMillis).toLocaleTimeString() : "—"}</Text>
 
                       <View style={styles.actionStack}>
-                        <Pressable
-                          style={[styles.linkButton, runtimeBusy && styles.linkButtonDisabled]}
-                          disabled={runtimeBusy}
-                          onPress={async () => {
-                            setRuntimeBusy(true);
-                            try {
-        const status = await refreshRuntimeStatus();
-        await computeChecklist(status);
-        await refreshCapabilityState();
-                            } finally {
-                              setRuntimeBusy(false);
-                            }
-                          }}
-                        >
-                          <Text style={styles.linkButtonText}>{runtimeBusy ? "Re-checking..." : "Recheck"}</Text>
-                        </Pressable>
                         <Pressable
                           style={[styles.linkButton, (!finishEnabled || runtimeBusy) && styles.linkButtonDisabled]}
                           disabled={!finishEnabled || runtimeBusy}
@@ -1470,27 +1541,14 @@ export default function SetupScreen() {
                 <Text style={styles.body}>
                   Disclosure only. Scroll to the bottom and acknowledge before continuing.
                 </Text>
-                <View style={styles.capabilityTruthBox}>
-                  <Text style={styles.checkLabel}>Live capability truth</Text>
-                  <Text style={styles.checkSubLabel}>
-                    {capabilityState
-                      ? `Last checked ${new Date(capabilityState.checked_at).toLocaleTimeString()}. Camera, microphone, and location are permission-state only until an xMilo-owned tool is live-proven.`
-                      : "Run a re-check to publish the app-owned capability snapshot before Milo claims phone access."}
-                  </Text>
-                  <Pressable
-                    style={[styles.linkButton, runtimeBusy && styles.linkButtonDisabled]}
-                    disabled={runtimeBusy}
-                    onPress={refreshCapabilityState}
-                  >
-                    <Text style={styles.linkButtonText}>Check capability truth</Text>
-                  </Pressable>
-                </View>
                 {(() => {
                   const requiredRowsMissing = additionalAccessRows
                     .filter((row) => row.requiredForContinue)
                     .filter((row) => row.status !== "granted")
                     .map((row) => `${row.label} — ${row.actionHint || "tap the row and re-check."}`);
-                  const continueEnabled = reviewAtBottom && reviewAcknowledged && requiredRowsMissing.length === 0 && !runtimeBusy;
+                  const nativeGateReady = setupPermissionSnapshot?.gate.final_ready_without_review === true;
+                  const continueEnabled = reviewAcknowledged && isSetupPermissionFinalReady(setupPermissionSnapshot, reviewAtBottom) && !runtimeBusy;
+                  const acknowledgeEnabled = reviewAtBottom && nativeGateReady && !runtimeBusy;
 
                   const renderSectionRows = (
                     section: AdditionalAccessRowMeta["section"],
@@ -1509,9 +1567,9 @@ export default function SetupScreen() {
                                 onPress: () => handleAdditionalAccessRowPress(row),
                                 accessibilityRole: "button",
                                 disabled: runtimeBusy,
-                                style: ({ pressed }: any) => [styles.checkRow, pressed && styles.checkRowPressed]
+                                style: ({ pressed }: any) => [styles.checkRow, granted && styles.checkRowGranted, pressed && styles.checkRowPressed]
                               }
-                            : { style: styles.checkRow };
+                            : { style: [styles.checkRow, granted && styles.checkRowGranted] };
 
                           return (
                             <RowContainer key={row.id} {...rowProps}>
@@ -1522,9 +1580,9 @@ export default function SetupScreen() {
                                 {row.actionHint ? (
                                   <Text
                                     style={
-                                      row.behavior === "visible_non_clickable_status"
-                                        ? styles.checkSubLabelWarn
-                                        : styles.checkSubLabel
+                                      granted
+                                        ? styles.checkSubLabel
+                                        : styles.checkSubLabelWarn
                                     }
                                   >
                                     {row.actionHint}
@@ -1586,10 +1644,10 @@ export default function SetupScreen() {
                 <Pressable
                   style={[
                     styles.ackPill,
-                    (!reviewAtBottom || runtimeBusy) && styles.linkButtonDisabled,
+                    (!acknowledgeEnabled || runtimeBusy) && styles.linkButtonDisabled,
                     reviewAcknowledged && styles.ackPillSelected
                   ]}
-                  disabled={!reviewAtBottom || runtimeBusy}
+                  disabled={!acknowledgeEnabled || runtimeBusy}
                   onPress={() => setReviewAcknowledged(true)}
                 >
                   <Text style={[styles.ackPillText, reviewAcknowledged && styles.ackPillTextSelected]}>
@@ -1604,16 +1662,57 @@ export default function SetupScreen() {
                       (!continueEnabled || runtimeBusy) && styles.linkButtonDisabled
                     ]}
                     disabled={!continueEnabled || runtimeBusy}
-                    onPress={() => {
-                      if (requiredRowsMissing.length > 0) {
-                        setRuntimeError(`Still missing: ${requiredRowsMissing.join(", ")}`);
-                        return;
+                    onPress={async () => {
+                      setRuntimeBusy(true);
+                      try {
+                        const status = await refreshRuntimeStatus();
+                        await computeChecklist(status);
+                        const latestSnapshot = await getXMiloclawSetupPermissionSnapshot().catch(() => setupPermissionSnapshot);
+                        if (latestSnapshot) setSetupPermissionSnapshot(latestSnapshot);
+                        const missingAfterRefresh: string[] = [];
+                        const latestRows = latestSnapshot?.rows ?? [];
+                        if (!latestRows.find((row) => row.row === "camera")?.complete) missingAfterRefresh.push("Camera access needs While using the app.");
+                        if (!latestRows.find((row) => row.row === "microphone")?.complete) missingAfterRefresh.push("Microphone access needs While using the app.");
+                        if (!latestRows.find((row) => row.row === "media")?.complete) missingAfterRefresh.push("Photos and videos need full access, not limited access.");
+                        if (!latestRows.find((row) => row.row === "location")?.complete) missingAfterRefresh.push("Location needs Precise and While using the app.");
+                        if (!latestRows.find((row) => row.row === "physical_activity")?.complete) missingAfterRefresh.push("Physical activity access is required.");
+                        if (latestSnapshot?.gate.foreground_runtime_complete !== true) missingAfterRefresh.push("Foreground runtime service must be running.");
+                        if (!reviewAtBottom) {
+                          logSetupPermissionBreadcrumb("finish_blocked", { stage: "additional_access", reason: "review_incomplete" });
+                          setRuntimeError("Review the full page before continuing.");
+                          return;
+                        }
+                        if (missingAfterRefresh.length > 0) {
+                          const blockedReason = latestSnapshot?.gate.foreground_runtime_complete !== true
+                            ? "foreground_runtime_incomplete"
+                            : "permissions_incomplete";
+                          logSetupPermissionBreadcrumb("finish_blocked", { stage: "additional_access", reason: blockedReason });
+                          setReviewAcknowledged(false);
+                          setRuntimeError(`Still missing: ${missingAfterRefresh.join(", ")}`);
+                          return;
+                        }
+                        if (!isSetupPermissionFinalReady(latestSnapshot, reviewAtBottom)) {
+                          logSetupPermissionBreadcrumb("finish_blocked", { stage: "additional_access", reason: "permissions_incomplete" });
+                          setReviewAcknowledged(false);
+                          setRuntimeError(`Still missing: ${(latestSnapshot?.gate.blocked_reasons ?? ["native permission proof"]).join(", ")}`);
+                          return;
+                        }
+                        logSetupPermissionBreadcrumb("additional_access_finish_ready", { stage: "additional_access" });
+                        setRuntimeError("");
+                        setRuntimeStep("prepare_hidden_runtime_host");
+                      } finally {
+                        setRuntimeBusy(false);
                       }
-                      setRuntimeError("");
-                      setRuntimeStep("prepare_hidden_runtime_host");
                     }}
                   >
                     <Text style={styles.linkButtonText}>Continue</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.linkButton, runtimeBusy && styles.linkButtonDisabled]}
+                    disabled={runtimeBusy}
+                    onPress={recheckSetupPermissions}
+                  >
+                    <Text style={styles.linkButtonText}>{runtimeBusy ? "Rechecking permissions..." : "Recheck permissions"}</Text>
                   </Pressable>
                 </View>
                 {requiredRowsMissing.length > 0 ? (
@@ -2093,8 +2192,6 @@ export default function SetupScreen() {
   return null;
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
 function StepRow({ n, text, sub }: { n: string; text: string; sub: string }) {
   return (
     <View style={styles.stepRow}>
@@ -2165,8 +2262,6 @@ function Btn({
     </Pressable>
   );
 }
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: CLR.bg },
@@ -2268,13 +2363,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#0B1224",
     borderColor: "#334155"
   },
-  capabilityTruthBox: {
-    gap: 10,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: "#0B1224",
-    borderWidth: 1,
-    borderColor: "#334155"
+  checkRowGranted: {
+    backgroundColor: "#052E22",
+    borderColor: "#10B981"
   },
   checkLabel: {
     flex: 1,

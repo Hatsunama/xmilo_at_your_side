@@ -89,3 +89,5 @@ apps/expo-app/android/app/src/main/jniLibs/**/*.so
 
 # Local-only xMilo planning/authority mirror
 docs/authority/xMilo_v1/
+
+artifacts/

@@ -12,7 +12,7 @@
  * Mount point: WakeWordController in app/_layout.tsx (inside AppProvider).
  */
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import * as Speech from "expo-speech";
 import {
   ExpoSpeechRecognitionModule,
@@ -69,7 +69,7 @@ export function useWakeWord() {
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Start recognition ────────────────────────────────────────────────────────
-  async function startListening() {
+  const startListening = useCallback(async () => {
     if (!activeRef.current) return;
 
     const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
@@ -81,7 +81,7 @@ export function useWakeWord() {
       continuous: false,         // we manually restart on "end" for reliability
       requiresOnDeviceRecognition: false,
     });
-  }
+  }, []);
 
   // ── Enable / disable ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -105,9 +105,7 @@ export function useWakeWord() {
       }
       ExpoSpeechRecognitionModule.stop();
     };
-  // startListening is defined inside the hook — stable identity, no dep needed.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wakeWordEnabled]);
+  }, [startListening, wakeWordEnabled]);
 
   // ── Speech result handler ─────────────────────────────────────────────────────
   useSpeechRecognitionEvent("result", (event) => {

@@ -7,6 +7,8 @@ data class XMiloclawRuntimeStatus(
   val notificationsGranted: Boolean,
   val appearOnTopGranted: Boolean,
   val batteryUnrestricted: Boolean,
+  val dataSaverUnrestricted: Boolean,
+  val dataSaverStatus: String,
   val accessibilityEnabled: Boolean,
   val runtimeHostStarted: Boolean,
   val foregroundServiceStarted: Boolean,
@@ -46,6 +48,8 @@ data class XMiloclawRuntimeStatus(
       putBoolean("notificationsGranted", notificationsGranted)
       putBoolean("appearOnTopGranted", appearOnTopGranted)
       putBoolean("batteryUnrestricted", batteryUnrestricted)
+      putBoolean("dataSaverUnrestricted", dataSaverUnrestricted)
+      putString("dataSaverStatus", dataSaverStatus)
       putBoolean("accessibilityEnabled", accessibilityEnabled)
       putBoolean("runtimeHostStarted", runtimeHostStarted)
       putBoolean("foregroundServiceStarted", foregroundServiceStarted)

@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.ConnectivityManager
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
@@ -38,6 +39,9 @@ object XMiloclawRuntimeController {
     } else {
       true
     }
+    val dataSaverStatus = dataSaverStatus(context)
+    val dataSaverUnrestricted = dataSaverStatus == "disabled" || dataSaverStatus == "whitelisted"
+    Log.i(TAG, "XMILO_RUNTIME_HOST data_saver_status status=$dataSaverStatus unrestricted=$dataSaverUnrestricted")
     val accessibilityEnabled = XMiloclawAccessibilityService.isEnabled(context)
     val foregroundServiceStarted = XMiloclawRuntimeService.isRunning
     val runtimeFilesPrepared = XMiloclawSidecarProcessController.runtimeFilesPrepared()
@@ -69,6 +73,8 @@ object XMiloclawRuntimeController {
       notificationsGranted = notificationsGranted,
       appearOnTopGranted = appearOnTopGranted,
       batteryUnrestricted = batteryUnrestricted,
+      dataSaverUnrestricted = dataSaverUnrestricted,
+      dataSaverStatus = dataSaverStatus,
       accessibilityEnabled = accessibilityEnabled,
       runtimeHostStarted = runtimeHostStarted,
       foregroundServiceStarted = foregroundServiceStarted,
@@ -105,6 +111,19 @@ object XMiloclawRuntimeController {
     Log.d(TAG, "snapshot foregroundServiceStarted=$foregroundServiceStarted runtimeFilesPrepared=$runtimeFilesPrepared sidecarProcessAlive=$sidecarProcessAlive bridgeConnected=$bridgeConnected taskRouteSurfaceReady=$taskRouteSurfaceReady hostReady=$hostReady stage=${status.lastRuntimeStage} health=${status.lastHealthCode}:${status.lastHealthCategory} ready=${status.lastReadyCode}:${status.lastReadyCategory} exit=${status.lastProcessExitCode ?: "—"} stderr=${status.firstSafeStderrCategory} stdout=${status.firstSafeStdoutCategory} lastError=${effectiveLastError ?: ""}")
     return status
   }
+
+  private fun dataSaverStatus(context: Context): String =
+    try {
+      val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+      when (connectivityManager?.restrictBackgroundStatus) {
+        ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED -> "disabled"
+        ConnectivityManager.RESTRICT_BACKGROUND_STATUS_WHITELISTED -> "whitelisted"
+        ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED -> "enabled"
+        else -> "unknown"
+      }
+    } catch (_: Exception) {
+      "unknown"
+    }
 
   fun start(context: Context): XMiloclawRuntimeStatus {
     val appContext = context.applicationContext
@@ -211,7 +230,6 @@ object XMiloclawRuntimeController {
         try {
           context.unbindService(connection)
         } catch (_: Exception) {
-          // ignore
         }
       }
     }

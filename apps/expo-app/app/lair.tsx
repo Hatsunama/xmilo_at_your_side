@@ -76,6 +76,8 @@ export default function WizardLairScreen() {
   const expandedChatMaxHeight = Math.round(windowHeight * 0.75);
   const dailyConversation = useDailyConversation(events, currentSubmitTaskId || state.active_task?.task_id);
   const chatMessages = dailyConversation.messages;
+  const loadDailyConversation = dailyConversation.loadDailyConversation;
+  const forceNextChatScrollRef = dailyConversation.forceNextChatScrollRef;
 
   // Chars added in a single onChangeText that signals a paste rather than typing.
   const PASTE_THRESHOLD = 800;
@@ -101,6 +103,10 @@ export default function WizardLairScreen() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
+  const leaveLair = useCallback(() => {
+    router.replace("/");
+  }, [router]);
+
   async function dismissFirstRunOverlay() {
     setFirstRunOverlayVisible(false);
     try {
@@ -117,7 +123,7 @@ export default function WizardLairScreen() {
       return true;
     });
     return () => subscription.remove();
-  }, []);
+  }, [leaveLair]);
 
   useEffect(() => {
     let disposed = false;
@@ -179,10 +185,6 @@ export default function WizardLairScreen() {
     setSendStatus("");
     setCurrentSubmitTaskId("");
   }, [taskProofResetVersion]);
-
-  function leaveLair() {
-    router.replace("/");
-  }
 
   function hidePrompt() {
     Keyboard.dismiss();
@@ -301,15 +303,15 @@ export default function WizardLairScreen() {
   }, [currentSubmitTaskId, events, state.active_task?.task_id]);
 
   useEffect(() => {
-    if (!chatExpanded || !dailyConversation.forceNextChatScrollRef.current) return;
-    dailyConversation.forceNextChatScrollRef.current = false;
+    if (!chatExpanded || !forceNextChatScrollRef.current) return;
+    forceNextChatScrollRef.current = false;
     requestAnimationFrame(() => chatScrollRef.current?.scrollToEnd({ animated: true }));
-  }, [chatExpanded, chatMessages.length, dailyConversation.forceNextChatScrollRef]);
+  }, [chatExpanded, chatMessages.length, forceNextChatScrollRef]);
 
   useFocusEffect(
     useCallback(() => {
-      void dailyConversation.loadDailyConversation();
-    }, [dailyConversation.loadDailyConversation])
+      void loadDailyConversation();
+    }, [loadDailyConversation])
   );
 
   const roomLabel = ROOM_LABELS[state.current_room_id ?? "main_hall"] ?? "Main Hall";

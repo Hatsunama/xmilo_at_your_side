@@ -72,6 +72,10 @@ export default function MainHallScreen() {
   } | null>(null);
   const conversationScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dailyConversation = useDailyConversation(events, currentSubmitTaskId || state.active_task?.task_id);
+  const conversationMessages = dailyConversation.messages;
+  const conversationChatNearBottomRef = dailyConversation.chatNearBottomRef;
+  const conversationForceNextChatScrollRef = dailyConversation.forceNextChatScrollRef;
+  const loadDailyConversation = dailyConversation.loadDailyConversation;
 
   const refreshReadyStatus = useCallback(async () => {
     try {
@@ -227,17 +231,17 @@ export default function MainHallScreen() {
   }, []);
 
   useEffect(() => {
-    const messageCount = dailyConversation.messages.length;
+    const messageCount = conversationMessages.length;
     const messageCountIncreased = messageCount > lastConversationMessageCountRef.current;
-    const newestMessage = messageCount > 0 ? dailyConversation.messages[messageCount - 1] : null;
+    const newestMessage = messageCount > 0 ? conversationMessages[messageCount - 1] : null;
     const newestMessageId = newestMessage?.id ?? null;
     const newestMessageChanged = Boolean(newestMessageId && newestMessageId !== lastConversationLastMessageIdRef.current);
     lastConversationMessageCountRef.current = messageCount;
     lastConversationLastMessageIdRef.current = newestMessageId;
 
-    if (dailyConversation.forceNextChatScrollRef.current) {
+    if (conversationForceNextChatScrollRef.current) {
       pendingConversationScrollRef.current = true;
-      dailyConversation.forceNextChatScrollRef.current = false;
+      conversationForceNextChatScrollRef.current = false;
     }
 
     const awaitedResponse = awaitingMainHallResponseScrollRef.current;
@@ -251,11 +255,11 @@ export default function MainHallScreen() {
       }
     }
 
-    if (messageCountIncreased && (pendingConversationScrollRef.current || dailyConversation.chatNearBottomRef.current)) {
+    if (messageCountIncreased && (pendingConversationScrollRef.current || conversationChatNearBottomRef.current)) {
       pendingConversationScrollRef.current = true;
       scheduleConversationScrollToEnd();
     }
-  }, [dailyConversation.chatNearBottomRef, dailyConversation.forceNextChatScrollRef, dailyConversation.messages.length, scheduleConversationScrollToEnd]);
+  }, [conversationChatNearBottomRef, conversationForceNextChatScrollRef, conversationMessages, scheduleConversationScrollToEnd]);
 
   useEffect(
     () => () => {
@@ -268,8 +272,8 @@ export default function MainHallScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void dailyConversation.loadDailyConversation();
-    }, [dailyConversation.loadDailyConversation])
+      void loadDailyConversation();
+    }, [loadDailyConversation])
   );
 
   async function refreshStagedInputs() {

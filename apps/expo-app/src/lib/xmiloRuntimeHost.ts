@@ -36,6 +36,8 @@ export type XMiloclawRuntimeStatus = {
   notificationsGranted: boolean;
   appearOnTopGranted: boolean;
   batteryUnrestricted: boolean;
+  dataSaverUnrestricted: boolean;
+  dataSaverStatus: string;
   accessibilityEnabled: boolean;
   runtimeHostStarted: boolean;
   foregroundServiceStarted?: boolean;
@@ -81,10 +83,14 @@ export type XMiloclawCapabilityStatus = {
   tested?: boolean;
   last_verified_at?: string;
   failure_stage?: "manifest" | "permission" | "tool" | "device" | "runtime" | string;
-  grant_scope?: "while_using" | "one_time" | "denied" | "unknown" | string;
+  grant_scope?: "while_using" | "denied" | "unknown" | string;
   location_accuracy?: "precise" | "approximate" | "denied" | "unknown" | string;
   media_access?: "all" | "limited" | "denied" | "unknown" | string;
   accepted_for_setup?: boolean;
+  currently_granted?: boolean;
+  prompt_state?: "requestable" | "settings_required" | "permanent_denial" | "prompt_unavailable" | "not_applicable" | string;
+  can_request_now?: boolean;
+  app_op_mode?: string;
   repair_hint?: string;
   note?: string;
 };
@@ -101,6 +107,41 @@ export type XMiloclawCapabilityState = {
   bridgeProof?: AppBridgeVerifiedProof;
 };
 
+export type SetupPermissionSnapshotRow = {
+  row: "camera" | "microphone" | "media" | "location" | "physical_activity" | "foreground_runtime" | string;
+  complete: boolean;
+  required: boolean;
+  status: string;
+  category?: string;
+  currently_granted?: boolean;
+  grant_scope?: string;
+  media_access?: string;
+  location_accuracy?: string;
+  prompt_state?: string;
+  allowed_action: "request" | "open_settings" | "none" | string;
+  blocked_reason_key?: string;
+  user_reason_key?: string;
+  can_request_now?: boolean;
+  app_op_mode?: string;
+  requirement_text?: string;
+  accepted_text?: string;
+};
+
+export type SetupPermissionSnapshot = {
+  schema_version: number;
+  generated_at_millis: number;
+  rows: SetupPermissionSnapshotRow[];
+  gate: {
+    permissions_complete: boolean;
+    foreground_runtime_complete: boolean;
+    review_required: boolean;
+    final_ready_without_review: boolean;
+    blocked_reasons: string[];
+  };
+  blocked_reasons: string[];
+  allowed_actions: Array<{ row: string; action: string }>;
+};
+
 type XMiloclawRuntimeModuleShape = {
   getStatus?: () => Promise<XMiloclawRuntimeStatus>;
   startRuntimeHost?: () => Promise<XMiloclawRuntimeStatus>;
@@ -109,11 +150,15 @@ type XMiloclawRuntimeModuleShape = {
   openNotificationSettings?: () => Promise<boolean>;
   openOverlaySettings?: () => Promise<boolean>;
   openBatteryOptimizationSettings?: () => Promise<boolean>;
+  openDataSaverSettings?: () => Promise<boolean>;
+  openSetupPermissionSettings?: (row: string) => Promise<{ row?: string; opened?: boolean; reason?: string }>;
   getLocalhostBearerToken?: () => Promise<string>;
   saveLocalByokApiKey?: (provider: string, apiKey: string, baseUrl: string, model: string) => Promise<string>;
   deactivateLocalByokRouting?: () => Promise<string>;
   getLocalByokStatus?: () => Promise<string>;
   getCapabilityState?: () => Promise<string>;
+  getSetupPermissionSnapshot?: () => Promise<SetupPermissionSnapshot>;
+  recheckSetupPermissionSnapshot?: () => Promise<SetupPermissionSnapshot>;
 };
 
 const nativeModule = NativeModules.XMiloclawRuntimeModule as XMiloclawRuntimeModuleShape | undefined;
@@ -148,6 +193,8 @@ export async function getXMiloclawRuntimeStatus(): Promise<XMiloclawRuntimeStatu
       notificationsGranted: false,
       appearOnTopGranted: false,
       batteryUnrestricted: false,
+      dataSaverUnrestricted: false,
+      dataSaverStatus: "unknown",
       accessibilityEnabled: false,
       runtimeHostStarted: false,
       foregroundServiceStarted: false,
@@ -213,6 +260,20 @@ export async function openXMiloclawBatteryOptimizationSettings() {
     throw new Error("Native battery optimization settings launch is not available in this build yet.");
   }
   return nativeModule.openBatteryOptimizationSettings();
+}
+
+export async function openXMiloclawDataSaverSettings() {
+  if (!nativeModule?.openDataSaverSettings) {
+    throw new Error("Native Data Saver settings launch is not available in this build yet.");
+  }
+  return nativeModule.openDataSaverSettings();
+}
+
+export async function openXMiloclawSetupPermissionSettings(row: string) {
+  if (!nativeModule?.openSetupPermissionSettings) {
+    throw new Error("Native setup permission settings launch is not available in this build yet.");
+  }
+  return nativeModule.openSetupPermissionSettings(row);
 }
 
 export async function getXMiloclawLocalhostBearerToken() {
@@ -322,6 +383,44 @@ export async function refreshXMiloclawCapabilityState(): Promise<XMiloclawCapabi
     console.warn(`xMilo capability state submission failed: ${sanitizeProofLogText(String((error as Error)?.message ?? error))}`);
   }
   return state;
+}
+
+export async function getXMiloclawSetupPermissionSnapshot(): Promise<SetupPermissionSnapshot> {
+  if (!nativeModule?.getSetupPermissionSnapshot) {
+    return {
+      schema_version: 1,
+      generated_at_millis: Date.now(),
+      rows: [],
+      gate: {
+        permissions_complete: false,
+        foreground_runtime_complete: false,
+        review_required: true,
+        final_ready_without_review: false,
+        blocked_reasons: ["native_snapshot_missing"]
+      },
+      blocked_reasons: ["native_snapshot_missing"],
+      allowed_actions: []
+    };
+  }
+  return nativeModule.getSetupPermissionSnapshot();
+}
+
+export async function recheckXMiloclawSetupPermissionSnapshot(): Promise<SetupPermissionSnapshot> {
+  if (nativeModule?.recheckSetupPermissionSnapshot) {
+    return nativeModule.recheckSetupPermissionSnapshot();
+  }
+  return getXMiloclawSetupPermissionSnapshot();
+}
+
+export function isSetupPermissionFinalReady(snapshot: SetupPermissionSnapshot | null | undefined, reviewedToBottom: boolean) {
+  if (!snapshot || !reviewedToBottom) return false;
+  const requiredRowsComplete = snapshot.rows.every((row) => row.required !== true || row.complete === true);
+  const foregroundRuntimeComplete = snapshot.rows.some((row) => row.row === "foreground_runtime" && row.complete === true);
+  return snapshot.gate.final_ready_without_review === true &&
+    snapshot.gate.permissions_complete === true &&
+    snapshot.gate.foreground_runtime_complete === true &&
+    requiredRowsComplete &&
+    foregroundRuntimeComplete;
 }
 
 export async function resolveLocalhostBearerToken() {
@@ -494,6 +593,10 @@ function sanitizeCapabilityStateForApp(state: XMiloclawCapabilityState): XMilocl
       location_accuracy: typeof capability.location_accuracy === "string" ? sanitizeProofLogText(capability.location_accuracy) : undefined,
       media_access: typeof capability.media_access === "string" ? sanitizeProofLogText(capability.media_access) : undefined,
       accepted_for_setup: typeof capability.accepted_for_setup === "boolean" ? capability.accepted_for_setup : undefined,
+      currently_granted: typeof capability.currently_granted === "boolean" ? capability.currently_granted : undefined,
+      prompt_state: typeof capability.prompt_state === "string" ? sanitizeProofLogText(capability.prompt_state) : undefined,
+      can_request_now: typeof capability.can_request_now === "boolean" ? capability.can_request_now : undefined,
+      app_op_mode: typeof capability.app_op_mode === "string" ? sanitizeProofLogText(capability.app_op_mode) : undefined,
       repair_hint: typeof capability.repair_hint === "string" ? sanitizeProofLogText(capability.repair_hint) : undefined,
       note: typeof capability.note === "string" ? sanitizeProofLogText(capability.note) : undefined
     };

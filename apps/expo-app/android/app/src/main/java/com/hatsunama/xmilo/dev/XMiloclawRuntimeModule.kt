@@ -9,6 +9,8 @@ import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
+import android.util.SparseArray
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -17,6 +19,8 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
+import com.facebook.react.modules.core.PermissionAwareActivity
+import com.facebook.react.modules.core.PermissionListener
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -25,7 +29,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) :
-  ReactContextBaseJavaModule(reactContext) {
+  ReactContextBaseJavaModule(reactContext), PermissionListener {
+
+  private val setupPermissionCallbacks = SparseArray<(Array<String>, IntArray, PermissionAwareActivity) -> Unit>()
+  private var setupPermissionRequestCode = 6100
+  private val setupPermissionController by lazy {
+    XMiloclawSetupPermissionController(reactContext)
+  }
 
   override fun getName(): String = "XMiloclawRuntimeModule"
 
@@ -125,6 +135,32 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
   }
 
   @ReactMethod
+  fun openDataSaverSettings(promise: Promise) {
+    try {
+      val dataSaverIntent = Intent(Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        data = android.net.Uri.parse("package:${reactContext.packageName}")
+      }
+      try {
+        reactContext.startActivity(dataSaverIntent)
+        Log.i("XMiloclawRuntime", "XMILO_RUNTIME_HOST data_saver_settings_opened result=true reason=data_saver_settings")
+        promise.resolve(true)
+      } catch (_: Exception) {
+        val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          data = android.net.Uri.parse("package:${reactContext.packageName}")
+        }
+        reactContext.startActivity(fallback)
+        Log.i("XMiloclawRuntime", "XMILO_RUNTIME_HOST data_saver_settings_opened result=true reason=app_details_fallback")
+        promise.resolve(true)
+      }
+    } catch (error: Exception) {
+      Log.i("XMiloclawRuntime", "XMILO_RUNTIME_HOST data_saver_settings_opened result=false reason=failed")
+      promise.reject("XMILO_RUNTIME_OPEN_DATA_SAVER_FAILED", error)
+    }
+  }
+
+  @ReactMethod
   fun getLocalhostBearerToken(promise: Promise) {
     try {
       promise.resolve(XMiloclawSidecarProcessController.resolveBearerToken(reactContext))
@@ -169,10 +205,125 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
     }
   }
 
+  @ReactMethod
+  fun getSetupPermissionSnapshot(promise: Promise) {
+    try {
+      val status = XMiloclawRuntimeController.snapshot(reactContext)
+      promise.resolve(jsonObjectToWritableMap(setupPermissionController.snapshot(status)))
+    } catch (error: Exception) {
+      promise.reject("XMILO_SETUP_PERMISSION_SNAPSHOT_FAILED", error)
+    }
+  }
+
+  @ReactMethod
+  fun recheckSetupPermissionSnapshot(promise: Promise) {
+    try {
+      val status = XMiloclawRuntimeController.snapshot(reactContext)
+      promise.resolve(jsonObjectToWritableMap(setupPermissionController.snapshot(status, true)))
+    } catch (error: Exception) {
+      promise.reject("XMILO_SETUP_PERMISSION_RECHECK_FAILED", error)
+    }
+  }
+
+  @ReactMethod
+  fun requestSetupPermission(row: String, promise: Promise) {
+    try {
+      val permissions = setupPermissionController.requestPermissions(row)
+      if (permissions.isEmpty()) {
+        promise.reject("XMILO_SETUP_PERMISSION_ROW_UNSUPPORTED", "unsupported_row")
+        return
+      }
+      val activity = reactContext.currentActivity
+      if (activity !is PermissionAwareActivity) {
+        promise.resolve(setupPermissionResult(row, "blocked", permissions, IntArray(0), "activity_unavailable"))
+        return
+      }
+      val requestCode = setupPermissionRequestCode++
+      setupPermissionCallbacks.put(requestCode) { requestedPermissions, grantResults, callbackActivity ->
+        val reason = setupPermissionResultReason(requestedPermissions, grantResults, callbackActivity)
+        if (row == "camera" || row == "microphone" || row == "location" || row == "media" || row == "physical_activity") {
+          setupPermissionController.onPermissionRequestCompleted(row, reason)
+        }
+        promise.resolve(setupPermissionResult(row, "completed", requestedPermissions, grantResults, reason))
+      }
+      activity.requestPermissions(permissions, requestCode, this)
+    } catch (error: Exception) {
+      promise.resolve(setupPermissionResult(row, "error", emptyArray(), IntArray(0), "request_error"))
+    }
+  }
+
+  @ReactMethod
+  fun openSetupPermissionSettings(row: String, promise: Promise) {
+    val map = Arguments.createMap()
+    map.putString("row", row)
+    try {
+      val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        data = android.net.Uri.parse("package:${reactContext.packageName}")
+      }
+      reactContext.startActivity(intent)
+      setupPermissionController.onPermissionSettingsOpened(row, true, "app_details_settings")
+      map.putBoolean("opened", true)
+      map.putString("reason", "app_details_settings")
+      promise.resolve(map)
+    } catch (_: Exception) {
+      setupPermissionController.onPermissionSettingsOpened(row, false, "settings_error")
+      map.putBoolean("opened", false)
+      map.putString("reason", "settings_error")
+      promise.resolve(map)
+    }
+  }
+
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<String>,
+    grantResults: IntArray
+  ): Boolean {
+    val callback = setupPermissionCallbacks[requestCode] ?: return false
+    val activity = reactContext.currentActivity
+    if (activity !is PermissionAwareActivity) {
+      setupPermissionCallbacks.remove(requestCode)
+      return true
+    }
+    callback.invoke(permissions, grantResults, activity)
+    setupPermissionCallbacks.remove(requestCode)
+    return setupPermissionCallbacks.size() == 0
+  }
+
   private fun XMiloclawRuntimeStatus.toProofWritableMap(operation: String): WritableMap {
     val map = toWritableMap()
     map.putMap("bridgeProof", jsonObjectToWritableMap(XMiloclawSidecarProcessController.runtimeStatusBridgeProof(this, operation)))
     return map
+  }
+
+  private fun setupPermissionResult(
+    row: String,
+    result: String,
+    permissions: Array<String>,
+    grantResults: IntArray,
+    reason: String
+  ): WritableMap {
+    val map = Arguments.createMap()
+    val allGranted = permissions.isNotEmpty() && grantResults.size >= permissions.size && grantResults.take(permissions.size).all { it == PackageManager.PERMISSION_GRANTED }
+    val anyGranted = grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+    map.putString("row", row)
+    map.putString("result", result)
+    map.putString("reason", reason)
+    map.putInt("permissions_count", permissions.size)
+    map.putBoolean("all_granted", allGranted)
+    map.putBoolean("any_granted", anyGranted)
+    return map
+  }
+
+  private fun setupPermissionResultReason(
+    permissions: Array<String>,
+    grantResults: IntArray,
+    activity: PermissionAwareActivity
+  ): String {
+    if (permissions.isEmpty()) return "prompt_unavailable"
+    if (grantResults.isEmpty()) return "blocked"
+    if (grantResults.size >= permissions.size && grantResults.take(permissions.size).all { it == PackageManager.PERMISSION_GRANTED }) return "granted"
+    return if (permissions.any { activity.shouldShowRequestPermissionRationale(it) }) "denied" else "blocked"
   }
 
   private fun buildCapabilityState(): JSONObject {
@@ -187,6 +338,12 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
     val fineLocationGranted = isPermissionGranted(Manifest.permission.ACCESS_FINE_LOCATION)
     val coarseLocationGranted = isPermissionGranted(Manifest.permission.ACCESS_COARSE_LOCATION)
     val locationAccuracy = locationAccuracy(fineLocationGranted, coarseLocationGranted)
+    val cameraSetupRow = setupPermissionController.rowSnapshot("camera")
+    val microphoneSetupRow = setupPermissionController.rowSnapshot("microphone")
+    val locationSetupRow = setupPermissionController.rowSnapshot("location")
+    val cameraGrantScope = cameraSetupRow.optString("grant_scope", "unknown")
+    val microphoneGrantScope = microphoneSetupRow.optString("grant_scope", "unknown")
+    val locationGrantScope = locationSetupRow.optString("grant_scope", "unknown")
     val mediaAccess = mediaAccess()
     val capabilities = JSONObject()
       .put("camera_rear", permissionedCapability(
@@ -197,9 +354,9 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
         toolAvailable = false,
         tested = false,
         checkedAt = checkedAt,
-        grantScope = permissionGrantScope(cameraGranted),
-        acceptedForSetup = cameraDeclared && cameraGranted,
-        repairHint = if (cameraGranted) "Permission is granted; Android does not expose one-time versus while-using scope to this build." else "Choose While using the app, not This time only.",
+        grantScope = cameraGrantScope,
+        acceptedForSetup = cameraDeclared && cameraGranted && cameraGrantScope == "while_using",
+        repairHint = if (cameraGrantScope == "while_using") JSONObject.NULL else "Camera access needs While using the app.",
         permissionOnlyNote = "Camera permission state is inspectable, but Phase 9 does not include an app-owned camera capture tool."
       ))
       .put("camera_front", permissionedCapability(
@@ -210,9 +367,9 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
         toolAvailable = false,
         tested = false,
         checkedAt = checkedAt,
-        grantScope = permissionGrantScope(cameraGranted),
-        acceptedForSetup = cameraDeclared && cameraGranted,
-        repairHint = if (cameraGranted) "Permission is granted; Android does not expose one-time versus while-using scope to this build." else "Choose While using the app, not This time only.",
+        grantScope = cameraGrantScope,
+        acceptedForSetup = cameraDeclared && cameraGranted && cameraGrantScope == "while_using",
+        repairHint = if (cameraGrantScope == "while_using") JSONObject.NULL else "Camera access needs While using the app.",
         permissionOnlyNote = "Front camera permission state is inspectable, but Phase 9 does not include an app-owned camera capture tool."
       ))
       .put("microphone", permissionedCapability(
@@ -223,9 +380,9 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
         toolAvailable = false,
         tested = false,
         checkedAt = checkedAt,
-        grantScope = permissionGrantScope(microphoneGranted),
-        acceptedForSetup = microphoneDeclared && microphoneGranted,
-        repairHint = if (microphoneGranted) "Permission is granted; Android does not expose one-time versus while-using scope to this build." else "Choose While using the app, not This time only.",
+        grantScope = microphoneGrantScope,
+        acceptedForSetup = microphoneDeclared && microphoneGranted && microphoneGrantScope == "while_using",
+        repairHint = if (microphoneGrantScope == "while_using") JSONObject.NULL else "Microphone access needs While using the app.",
         permissionOnlyNote = "Microphone permission state is inspectable, but Phase 9 does not include an app-owned audio capture/readout tool."
       ))
       .put("location", permissionedCapability(
@@ -236,13 +393,13 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
         toolAvailable = false,
         tested = false,
         checkedAt = checkedAt,
-        grantScope = permissionGrantScope(fineLocationGranted || coarseLocationGranted),
+        grantScope = locationGrantScope,
         locationAccuracy = locationAccuracy,
-        acceptedForSetup = fineLocationDeclared && fineLocationGranted && locationAccuracy == "precise",
+        acceptedForSetup = fineLocationDeclared && fineLocationGranted && locationAccuracy == "precise" && locationGrantScope == "while_using",
         repairHint = when {
-          locationAccuracy == "approximate" -> "Choose Precise location."
-          fineLocationGranted -> "Permission is granted; Android does not expose one-time versus while-using scope to this build."
-          else -> "Choose While using the app, not This time only. Choose Precise location."
+          locationAccuracy == "approximate" -> "Location needs Precise and While using the app."
+          locationGrantScope != "while_using" -> "Location needs Precise and While using the app."
+          else -> JSONObject.NULL
         },
         permissionOnlyNote = "Location permission state is inspectable, but Phase 9 does not include an app-owned location readout tool."
       ))
@@ -255,6 +412,9 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
         .put("tested", true)
         .put("media_access", mediaAccess)
         .put("accepted_for_setup", mediaAccess == "all")
+        .put("currently_granted", mediaAccess == "all" || mediaAccess == "limited")
+        .put("prompt_state", if (mediaAccess == "all") "not_applicable" else "requestable")
+        .put("can_request_now", mediaAccess != "all")
         .put("last_verified_at", checkedAt)
         .put("failure_stage", if (mediaAccess == "all") JSONObject.NULL else "permission")
         .put("repair_hint", if (mediaAccess == "all") JSONObject.NULL else "Choose Allow all photos and videos, not limited access.")
@@ -299,10 +459,17 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
     grantScope: String? = null,
     locationAccuracy: String? = null,
     acceptedForSetup: Boolean? = null,
-    repairHint: String? = null,
+    repairHint: Any? = null,
     permissionOnlyNote: String
-  ): JSONObject =
-    JSONObject()
+  ): JSONObject {
+    val setupRowName = when (permission) {
+      Manifest.permission.CAMERA -> "camera"
+      Manifest.permission.RECORD_AUDIO -> "microphone"
+      Manifest.permission.ACCESS_FINE_LOCATION -> "location"
+      else -> ""
+    }
+    val setupRow = if (setupRowName.isNotEmpty()) setupPermissionController.rowSnapshot(setupRowName) else null
+    return JSONObject()
       .put("declared", declared)
       .put("requested", declared)
       .put("granted", granted)
@@ -315,6 +482,12 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
         if (locationAccuracy != null) put("location_accuracy", locationAccuracy)
         if (acceptedForSetup != null) put("accepted_for_setup", acceptedForSetup)
         if (repairHint != null) put("repair_hint", repairHint)
+        if (setupRow != null) {
+          put("currently_granted", setupRow.optBoolean("currently_granted", granted))
+          put("prompt_state", setupRow.optString("prompt_state", "requestable"))
+          put("can_request_now", setupRow.optBoolean("can_request_now", false))
+          put("app_op_mode", setupRow.optString("app_op_mode", "unknown"))
+        }
       }
       .put("failure_stage", when {
         !declared -> "manifest"
@@ -325,6 +498,7 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
         else -> JSONObject.NULL
       })
       .put("note", permissionOnlyNote)
+  }
 
   private fun sensorCapability(sensorManager: SensorManager?, sensorType: Int, checkedAt: String): JSONObject {
     val exists = sensorManager?.getDefaultSensor(sensorType) != null
@@ -362,9 +536,6 @@ class XMiloclawRuntimeModule(private val reactContext: ReactApplicationContext) 
 
   private fun isPermissionGranted(permission: String): Boolean =
     ContextCompat.checkSelfPermission(reactContext, permission) == PackageManager.PERMISSION_GRANTED
-
-  private fun permissionGrantScope(granted: Boolean): String =
-    if (granted) "unknown" else "denied"
 
   private fun locationAccuracy(fineGranted: Boolean, coarseGranted: Boolean): String =
     when {
