@@ -2,13 +2,33 @@ package db
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Store struct {
 	Pool *pgxpool.Pool
+}
+
+type settingsReportStatusQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+var settingsReportCanonicalStatuses = []string{
+	"new",
+	"triaged",
+	"resolved",
+	"dismissed",
+	"needs_followup",
+}
+
+var settingsReportStaleStatusMap = map[string]string{
+	"confirmed":          "resolved",
+	"rule_update_needed": "needs_followup",
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -133,7 +153,7 @@ func (s *Store) migrate(ctx context.Context) error {
             updated_at            TIMESTAMPTZ NOT NULL,
             reviewed_at           TIMESTAMPTZ,
             CONSTRAINT settings_report_bundles_status_check CHECK (
-                status IN ('new', 'triaged', 'confirmed', 'dismissed', 'rule_update_needed')
+                status IN ('new', 'triaged', 'resolved', 'dismissed', 'needs_followup')
             )
         )`,
 		// Index for quick entitlement checks
@@ -176,10 +196,88 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.repairSettingsReportStatusConstraint(ctx); err != nil {
+		return err
+	}
 	_, err := s.Pool.Exec(ctx,
 		`INSERT INTO schema_version(version, applied_at) VALUES(2, $1) ON CONFLICT (version) DO NOTHING`,
 		time.Now().UTC())
 	return err
+}
+
+func (s *Store) repairSettingsReportStatusConstraint(ctx context.Context) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `ALTER TABLE settings_report_bundles DROP CONSTRAINT IF EXISTS settings_report_bundles_status_check`); err != nil {
+		return err
+	}
+	for stale, canonical := range settingsReportStaleStatusMap {
+		if _, err := tx.Exec(ctx, `UPDATE settings_report_bundles SET status = $1 WHERE status = $2`, canonical, stale); err != nil {
+			return err
+		}
+	}
+	unexpected, err := unexpectedSettingsReportStatuses(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if len(unexpected) > 0 {
+		return fmt.Errorf("settings_report_bundles has unexpected status values after compatibility repair: %s; manual DB cleanup is required before relay startup can continue", formatUnexpectedSettingsReportStatuses(unexpected))
+	}
+	if _, err := tx.Exec(ctx, `ALTER TABLE settings_report_bundles
+        ADD CONSTRAINT settings_report_bundles_status_check
+        CHECK (status IN ('new', 'triaged', 'resolved', 'dismissed', 'needs_followup'))`); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) unexpectedSettingsReportStatuses(ctx context.Context) (map[string]int64, error) {
+	return unexpectedSettingsReportStatuses(ctx, s.Pool)
+}
+
+func unexpectedSettingsReportStatuses(ctx context.Context, queryer settingsReportStatusQuerier) (map[string]int64, error) {
+	rows, err := queryer.Query(ctx, `SELECT status, COUNT(*)
+        FROM settings_report_bundles
+        WHERE status NOT IN ('new', 'triaged', 'resolved', 'dismissed', 'needs_followup')
+        GROUP BY status
+        ORDER BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	unexpected := map[string]int64{}
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		unexpected[status] = count
+	}
+	return unexpected, rows.Err()
+}
+
+func formatUnexpectedSettingsReportStatuses(statuses map[string]int64) string {
+	if len(statuses) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(statuses))
+	for status, count := range statuses {
+		parts = append(parts, fmt.Sprintf("%s=%d", status, count))
+	}
+	for i := 0; i < len(parts)-1; i++ {
+		for j := i + 1; j < len(parts); j++ {
+			if parts[j] < parts[i] {
+				parts[i], parts[j] = parts[j], parts[i]
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (s *Store) Close() {

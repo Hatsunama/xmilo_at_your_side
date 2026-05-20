@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,6 +30,7 @@ type App struct {
 	sessions     *sessions.Service
 	turns        *turns.Service
 	entitlements *entitlements.Service
+	settingsRepo settingsReportRepository
 	emailer      *email.Sender
 	started      time.Time
 }
@@ -76,6 +79,7 @@ func NewApp(ctx context.Context, cfg config.Config) (*App, error) {
 		sessions:     sessionSvc,
 		turns:        turnSvc,
 		entitlements: entSvc,
+		settingsRepo: &postgresSettingsReportStore{store: store},
 		emailer:      emailer,
 		started:      time.Now().UTC(),
 	}, nil
@@ -117,7 +121,7 @@ func (a *App) Start(ctx context.Context) error {
 	// RevenueCat billing webhook
 	mux.HandleFunc("/billing/revenuecat", a.handleRevenueCat)
 
-	// Hidden admin page — password required via X-Admin-Password header
+	// Admin JSON APIs require X-Admin-Password; /admin does not serve a console in the public relay.
 	mux.HandleFunc("/admin", a.handleAdminPage)
 	mux.HandleFunc("/admin/stats", a.adminRequired(a.handleAdminStats))
 	mux.HandleFunc("/admin/invite/create", a.adminRequired(a.handleAdminCreateInvites))
@@ -126,6 +130,7 @@ func (a *App) Start(ctx context.Context) error {
 	mux.HandleFunc("/admin/ai-reports", a.adminRequired(a.handleAdminAIReports))
 	mux.HandleFunc("/admin/ai-reports/status", a.adminRequired(a.handleAdminAIReportStatus))
 	mux.HandleFunc("/admin/settings-reports", a.adminRequired(a.handleAdminSettingsReports))
+	mux.HandleFunc("/admin/settings-reports/detail", a.adminRequired(a.handleAdminSettingsReportDetail))
 	mux.HandleFunc("/admin/settings-reports/status", a.adminRequired(a.handleAdminSettingsReportStatus))
 
 	server := &http.Server{Addr: a.cfg.HTTPAddr, Handler: mux}
@@ -594,6 +599,12 @@ func (a *App) handleAIContentReport(w http.ResponseWriter, r *http.Request, clai
 }
 
 const maxSettingsReportBodyBytes int64 = 1 << 20
+const maxSettingsReportStatusBodyBytes int64 = 8 << 10
+const maxSettingsReportReviewNoteBytes = 2000
+const maxSettingsReportReviewedByBytes = 120
+const maxAdminInviteCreateBodyBytes int64 = 4 << 10
+const maxAdminInviteCreateCount = 500
+const maxAdminInviteCreateDays = 365
 
 type settingsReportRequest struct {
 	ClientReportID      string          `json:"client_report_id"`
@@ -617,6 +628,66 @@ type settingsReportProof struct {
 	ClientReportID string `json:"client_report_id"`
 	BundleHash     string `json:"bundle_hash"`
 	Duplicate      bool   `json:"duplicate"`
+}
+
+var canonicalSettingsReportStatuses = []string{
+	"new",
+	"triaged",
+	"resolved",
+	"dismissed",
+	"needs_followup",
+}
+
+var errSettingsReportNotFound = errors.New("settings report not found")
+
+type settingsReportRepository interface {
+	StoreSettingsReport(ctx context.Context, deviceUserID string, req settingsReportRequest, bundleJSON []byte) (settingsReportProof, error)
+	ListSettingsReports(ctx context.Context, statusFilter string) (settingsReportListResult, error)
+	GetSettingsReport(ctx context.Context, reportID string) (settingsReportRecord, error)
+	UpdateSettingsReportStatus(ctx context.Context, reportID, status, reviewNote, reviewedBy string, now time.Time) (settingsReportRecord, error)
+}
+
+type postgresSettingsReportStore struct {
+	store *db.Store
+}
+
+type settingsReportListResult struct {
+	Records []settingsReportRecord
+	Counts  map[string]int
+}
+
+type settingsReportRecord struct {
+	ReportID            string
+	DeviceUserID        string
+	ClientReportID      string
+	BundleSchemaVersion int
+	BundleType          string
+	BundleHash          string
+	BundleSizeBytes     int
+	AppVersion          string
+	RuntimeID           string
+	SidecarVersion      string
+	ReportReason        string
+	UserNote            string
+	BundleJSON          json.RawMessage
+	Status              string
+	ReviewNote          string
+	ReviewedBy          string
+	ReceivedAt          time.Time
+	UpdatedAt           time.Time
+	ReviewedAt          *time.Time
+}
+
+type redactionTracker struct {
+	Redacted         bool
+	SuppressedFields int
+}
+
+func (a *App) settingsReportRepository() settingsReportRepository {
+	if a.settingsRepo != nil {
+		return a.settingsRepo
+	}
+	return &postgresSettingsReportStore{store: a.store}
 }
 
 func (a *App) handleSettingsReport(w http.ResponseWriter, r *http.Request, claims map[string]any) {
@@ -692,7 +763,7 @@ func (a *App) handleSettingsReport(w http.ResponseWriter, r *http.Request, claim
 		return
 	}
 
-	proof, err := a.storeSettingsReport(r.Context(), deviceUserID, req, bundleJSON)
+	proof, err := a.settingsReportRepository().StoreSettingsReport(r.Context(), deviceUserID, req, bundleJSON)
 	if err != nil {
 		if err.Error() == "client_report_id_hash_mismatch" {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
@@ -704,12 +775,12 @@ func (a *App) handleSettingsReport(w http.ResponseWriter, r *http.Request, claim
 	writeJSON(w, http.StatusOK, proof)
 }
 
-func (a *App) storeSettingsReport(ctx context.Context, deviceUserID string, req settingsReportRequest, bundleJSON []byte) (settingsReportProof, error) {
+func (s *postgresSettingsReportStore) StoreSettingsReport(ctx context.Context, deviceUserID string, req settingsReportRequest, bundleJSON []byte) (settingsReportProof, error) {
 	now := time.Now().UTC()
 	reportID := "sr_" + uuid.NewString()
 	var proof settingsReportProof
 
-	err := a.store.Pool.QueryRow(ctx, `
+	err := s.store.Pool.QueryRow(ctx, `
 		INSERT INTO settings_report_bundles
 			(report_id, device_user_id, client_report_id, bundle_schema_version, bundle_type, bundle_hash,
 			 bundle_size_bytes, app_version, runtime_id, sidecar_version, report_reason, user_note,
@@ -732,7 +803,7 @@ func (a *App) storeSettingsReport(ctx context.Context, deviceUserID string, req 
 	}
 
 	var existingReceivedAt time.Time
-	err = a.store.Pool.QueryRow(ctx, `
+	err = s.store.Pool.QueryRow(ctx, `
 		SELECT report_id, status, received_at, client_report_id, bundle_hash
 		FROM settings_report_bundles
 		WHERE device_user_id = $1 AND client_report_id = $2
@@ -747,6 +818,135 @@ func (a *App) storeSettingsReport(ctx context.Context, deviceUserID string, req 
 	proof.ReceivedAt = existingReceivedAt.Format(time.RFC3339)
 	proof.Duplicate = true
 	return proof, nil
+}
+
+func (s *postgresSettingsReportStore) ListSettingsReports(ctx context.Context, statusFilter string) (settingsReportListResult, error) {
+	counts, err := s.countSettingsReportsByStatus(ctx)
+	if err != nil {
+		return settingsReportListResult{}, err
+	}
+
+	baseQuery := `
+		SELECT report_id, device_user_id, client_report_id, bundle_schema_version, bundle_type, bundle_hash,
+		       bundle_size_bytes, app_version, runtime_id, sidecar_version, report_reason, user_note,
+		       bundle_json::text, status, review_note, reviewed_by, received_at, updated_at, reviewed_at
+		FROM settings_report_bundles`
+	var rows pgx.Rows
+	if statusFilter == "" || statusFilter == "all" {
+		rows, err = s.store.Pool.Query(ctx, baseQuery+`
+		ORDER BY received_at DESC
+		LIMIT 100`)
+	} else {
+		rows, err = s.store.Pool.Query(ctx, baseQuery+`
+		WHERE status = $1
+		ORDER BY received_at DESC
+		LIMIT 100`, statusFilter)
+	}
+	if err != nil {
+		return settingsReportListResult{}, err
+	}
+	defer rows.Close()
+
+	var records []settingsReportRecord
+	for rows.Next() {
+		record, err := scanSettingsReportRecord(rows)
+		if err != nil {
+			return settingsReportListResult{}, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return settingsReportListResult{}, err
+	}
+	return settingsReportListResult{Records: records, Counts: counts}, nil
+}
+
+func (s *postgresSettingsReportStore) GetSettingsReport(ctx context.Context, reportID string) (settingsReportRecord, error) {
+	row := s.store.Pool.QueryRow(ctx, `
+		SELECT report_id, device_user_id, client_report_id, bundle_schema_version, bundle_type, bundle_hash,
+		       bundle_size_bytes, app_version, runtime_id, sidecar_version, report_reason, user_note,
+		       bundle_json::text, status, review_note, reviewed_by, received_at, updated_at, reviewed_at
+		FROM settings_report_bundles
+		WHERE report_id = $1`, reportID)
+	record, err := scanSettingsReportRecord(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return settingsReportRecord{}, errSettingsReportNotFound
+	}
+	return record, err
+}
+
+func (s *postgresSettingsReportStore) UpdateSettingsReportStatus(ctx context.Context, reportID, status, reviewNote, reviewedBy string, now time.Time) (settingsReportRecord, error) {
+	row := s.store.Pool.QueryRow(ctx, `
+		UPDATE settings_report_bundles
+		SET status = $2, review_note = $3, reviewed_by = $4, reviewed_at = $5, updated_at = $5
+		WHERE report_id = $1
+		RETURNING report_id, device_user_id, client_report_id, bundle_schema_version, bundle_type, bundle_hash,
+		          bundle_size_bytes, app_version, runtime_id, sidecar_version, report_reason, user_note,
+		          bundle_json::text, status, review_note, reviewed_by, received_at, updated_at, reviewed_at
+	`, reportID, status, reviewNote, reviewedBy, now)
+	record, err := scanSettingsReportRecord(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return settingsReportRecord{}, errSettingsReportNotFound
+	}
+	return record, err
+}
+
+func (s *postgresSettingsReportStore) countSettingsReportsByStatus(ctx context.Context) (map[string]int, error) {
+	counts := canonicalSettingsReportStatusCounts()
+	rows, err := s.store.Pool.Query(ctx, `
+		SELECT status, COUNT(*)
+		FROM settings_report_bundles
+		WHERE status IN ('new', 'triaged', 'resolved', 'dismissed', 'needs_followup')
+		GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		counts[status] = count
+	}
+	return counts, rows.Err()
+}
+
+type settingsReportScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSettingsReportRecord(scanner settingsReportScanner) (settingsReportRecord, error) {
+	var record settingsReportRecord
+	var bundleJSON string
+	err := scanner.Scan(
+		&record.ReportID,
+		&record.DeviceUserID,
+		&record.ClientReportID,
+		&record.BundleSchemaVersion,
+		&record.BundleType,
+		&record.BundleHash,
+		&record.BundleSizeBytes,
+		&record.AppVersion,
+		&record.RuntimeID,
+		&record.SidecarVersion,
+		&record.ReportReason,
+		&record.UserNote,
+		&bundleJSON,
+		&record.Status,
+		&record.ReviewNote,
+		&record.ReviewedBy,
+		&record.ReceivedAt,
+		&record.UpdatedAt,
+		&record.ReviewedAt,
+	)
+	if err != nil {
+		return settingsReportRecord{}, err
+	}
+	record.BundleJSON = json.RawMessage(bundleJSON)
+	return record, nil
 }
 
 func hasBlockedSettingsReportField(value any) bool {
@@ -769,12 +969,16 @@ func hasBlockedSettingsReportField(value any) bool {
 
 func isBlockedSettingsReportKey(key string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(key))
-	compact := strings.ReplaceAll(normalized, "_", "")
+	compact := strings.NewReplacer("_", "", "-", "").Replace(normalized)
 	switch normalized {
-	case "authorization", "cookie", "session_jwt", "jwt", "api_key", "secret", "password", "token", "prompt_text", "conversation_text":
+	case "authorization", "cookie", "session_jwt", "jwt", "api_key", "secret", "password", "token", "auth_header", "provider_config", "prompt_text", "hidden_prompt", "conversation_text", "private_tool_payload":
 		return true
 	default:
 		return compact == "apikey" ||
+			compact == "authheader" ||
+			compact == "providerconfig" ||
+			compact == "hiddenprompt" ||
+			compact == "privatetoolpayload" ||
 			strings.HasSuffix(normalized, "_api_key") ||
 			strings.HasSuffix(compact, "apikey") ||
 			strings.HasSuffix(normalized, "_token") ||
@@ -824,26 +1028,22 @@ func (a *App) handleRevenueCat(w http.ResponseWriter, r *http.Request) {
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
 
-// GET /admin — serves the admin HTML page (always accessible; API endpoints require password)
+// GET /admin does not serve a private admin console from the public relay.
 func (a *App) handleAdminPage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(adminHTML))
+	writeAdminDisabled(w)
 }
 
 func (a *App) handleAdminStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := a.entitlements.Stats(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	stats["relay_uptime_sec"] = int64(time.Since(a.started).Seconds())
-	stats["access_mode"] = a.cfg.AccessMode
-	stats["access_code_only"] = a.cfg.AccessCodeOnly()
-	stats["trial_allowed"] = a.cfg.TrialAllowed()
-	stats["subscription_allowed"] = a.cfg.SubscriptionAllowed()
-	stats["access_code_days"] = a.cfg.InviteBetaDays
-	writeJSON(w, http.StatusOK, stats)
+	stats, err := a.entitlements.Stats(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not load admin stats"})
+		return
+	}
+	writeJSON(w, http.StatusOK, projectAdminStats(stats, int64(time.Since(a.started).Seconds())))
 }
 
 func (a *App) handleAdminCreateInvites(w http.ResponseWriter, r *http.Request) {
@@ -855,75 +1055,142 @@ func (a *App) handleAdminCreateInvites(w http.ResponseWriter, r *http.Request) {
 		Count int `json:"count"`
 		Days  int `json:"days"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminInviteCreateBodyBytes)
+	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	defer r.Body.Close()
-	if req.Count <= 0 || req.Count > 500 {
-		req.Count = 10
+	if req.Count <= 0 || req.Count > maxAdminInviteCreateCount {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "count must be between 1 and 500"})
+		return
 	}
-	if req.Days <= 0 {
-		req.Days = a.cfg.InviteBetaDays
+	if req.Days <= 0 || req.Days > maxAdminInviteCreateDays {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "days must be between 1 and 365"})
+		return
 	}
 	codes, err := a.entitlements.CreateInviteCodes(r.Context(), req.Count, req.Days, "admin")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create invite codes"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "codes": codes, "count": len(codes)})
 }
 
 func (a *App) handleAdminListInvites(w http.ResponseWriter, r *http.Request) {
-	list, err := a.entitlements.ListInviteCodes(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "invite_codes": list})
-}
-
-func (a *App) handleAdminErrors(w http.ResponseWriter, r *http.Request) {
-	list, err := a.entitlements.ListErrorReports(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "error_reports": list})
-}
-
-func (a *App) handleAdminAIReports(w http.ResponseWriter, r *http.Request) {
-	list, err := a.entitlements.ListAIContentReports(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ai_content_reports": list})
-}
-
-func (a *App) handleAdminAIReportStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	var req struct {
-		ID         int64  `json:"id"`
-		Status     string `json:"status"`
-		ReviewNote string `json:"review_note"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+	list, err := a.entitlements.ListInviteCodes(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list invite codes"})
 		return
 	}
-	if req.ID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id must be positive"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "invite_codes": projectAdminInviteCodes(list)})
+}
+
+func (a *App) handleAdminErrors(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	if err := a.entitlements.UpdateAIContentReportStatus(r.Context(), req.ID, req.Status, req.ReviewNote); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+	list, err := a.entitlements.ListErrorReports(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list error reports"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "error_reports": projectAdminErrorReports(list)})
+}
+
+func (a *App) handleAdminAIReports(w http.ResponseWriter, r *http.Request) {
+	writeAdminDisabled(w)
+}
+
+func (a *App) handleAdminAIReportStatus(w http.ResponseWriter, r *http.Request) {
+	writeAdminDisabled(w)
+}
+
+func writeAdminDisabled(w http.ResponseWriter) {
+	writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+}
+
+func projectAdminStats(stats map[string]any, uptimeSeconds int64) map[string]any {
+	return map[string]any{
+		"ok":                   true,
+		"total_device_users":   safeNumber(stats["total_device_users"]),
+		"verified_emails":      safeNumber(stats["verified_emails"]),
+		"active_trials":        safeNumber(stats["active_trials"]),
+		"pending_trials":       safeNumber(stats["pending_trials"]),
+		"active_subscriptions": safeNumber(stats["active_subscriptions"]),
+		"active_invites":       safeNumber(stats["active_invites"]),
+		"unused_invite_codes":  safeNumber(stats["unused_invite_codes"]),
+		"total_llm_turns":      safeNumber(stats["total_llm_turns"]),
+		"relay_uptime_sec":     uptimeSeconds,
+	}
+}
+
+func projectAdminInviteCodes(list []map[string]any) []map[string]any {
+	projected := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		projected = append(projected, projectAdminInviteCode(item))
+	}
+	return projected
+}
+
+func projectAdminInviteCode(item map[string]any) map[string]any {
+	projected := map[string]any{
+		"code_masked":  maskInviteCode(safeString(item["code"], "")),
+		"granted_days": safeNumber(item["granted_days"]),
+		"created_at":   redactAdminText(safeString(item["created_at"], ""), nil),
+		"created_by":   redactAdminText(safeString(item["created_by"], ""), nil),
+		"used":         safeBool(item["used"]),
+	}
+	if usedAt := redactAdminText(safeString(item["used_at"], ""), nil); usedAt != "" {
+		projected["used_at"] = usedAt
+	}
+	if safeString(item["used_by"], "") != "" {
+		projected["used_by_ref"] = "[suppressed]"
+	}
+	return projected
+}
+
+func projectAdminErrorReports(list []map[string]any) []map[string]any {
+	projected := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		projected = append(projected, map[string]any{
+			"id":          safeNumber(item["id"]),
+			"error_type":  redactAdminText(safeString(item["error_type"], ""), nil),
+			"message":     redactAdminText(safeString(item["message"], ""), nil),
+			"created_at":  redactAdminText(safeString(item["created_at"], ""), nil),
+			"device_ref":  suppressedRef(item["device_user_id"]),
+			"redacted":    true,
+			"safe_record": true,
+		})
+	}
+	return projected
+}
+
+func maskInviteCode(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return ""
+	}
+	if len(code) <= 4 {
+		return "[masked]"
+	}
+	return code[:2] + "****" + code[len(code)-2:]
+}
+
+func suppressedRef(value any) string {
+	if safeString(value, "") == "" {
+		return ""
+	}
+	return "[suppressed]"
+}
+
+func safeBool(value any) bool {
+	typed, _ := value.(bool)
+	return typed
 }
 
 func (a *App) handleAdminSettingsReports(w http.ResponseWriter, r *http.Request) {
@@ -931,82 +1198,50 @@ func (a *App) handleAdminSettingsReports(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	rows, err := a.store.Pool.Query(r.Context(), `
-		SELECT report_id, device_user_id, client_report_id, bundle_schema_version, bundle_type, bundle_hash,
-		       bundle_size_bytes, app_version, runtime_id, sidecar_version, report_reason, user_note,
-		       status, review_note, reviewed_by, received_at, updated_at, reviewed_at,
-		       COALESCE(bundle_json->'summary', 'null'::jsonb)::text
-		FROM settings_report_bundles
-		ORDER BY received_at DESC
-		LIMIT 100`)
+	statusFilter := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("status")))
+	if statusFilter != "" && statusFilter != "all" && !isAllowedSettingsReportStatus(statusFilter) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid settings report status filter"})
+		return
+	}
+	result, err := a.settingsReportRepository().ListSettingsReports(r.Context(), statusFilter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list settings reports"})
 		return
 	}
-	defer rows.Close()
-
 	var list []map[string]any
-	for rows.Next() {
-		var (
-			reportID            string
-			deviceUserID        string
-			clientReportID      string
-			bundleSchemaVersion int
-			bundleType          string
-			bundleHash          string
-			bundleSizeBytes     int
-			appVersion          string
-			runtimeID           string
-			sidecarVersion      string
-			reportReason        string
-			userNote            string
-			status              string
-			reviewNote          string
-			reviewedBy          string
-			receivedAt          time.Time
-			updatedAt           time.Time
-			reviewedAt          *time.Time
-			summaryJSON         string
-		)
-		if err := rows.Scan(&reportID, &deviceUserID, &clientReportID, &bundleSchemaVersion, &bundleType, &bundleHash,
-			&bundleSizeBytes, &appVersion, &runtimeID, &sidecarVersion, &reportReason, &userNote,
-			&status, &reviewNote, &reviewedBy, &receivedAt, &updatedAt, &reviewedAt, &summaryJSON); err != nil {
-			continue
-		}
-		item := map[string]any{
-			"report_id":             reportID,
-			"device_user_id":        deviceUserID,
-			"client_report_id":      clientReportID,
-			"bundle_schema_version": bundleSchemaVersion,
-			"bundle_type":           bundleType,
-			"bundle_hash":           bundleHash,
-			"bundle_size_bytes":     bundleSizeBytes,
-			"app_version":           appVersion,
-			"runtime_id":            runtimeID,
-			"sidecar_version":       sidecarVersion,
-			"report_reason":         reportReason,
-			"user_note":             userNote,
-			"status":                status,
-			"review_note":           reviewNote,
-			"reviewed_by":           reviewedBy,
-			"received_at":           receivedAt.Format(time.RFC3339),
-			"updated_at":            updatedAt.Format(time.RFC3339),
-		}
-		if reviewedAt != nil {
-			item["reviewed_at"] = reviewedAt.Format(time.RFC3339)
-		} else {
-			item["reviewed_at"] = nil
-		}
-		if summary := decodeSettingsReportSummary(summaryJSON); summary != nil {
-			item["bundle_summary"] = summary
-		}
-		list = append(list, item)
+	for _, record := range result.Records {
+		list = append(list, projectSettingsReportListItem(record))
 	}
-	if err := rows.Err(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list settings reports"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"filter_status":    normalizedSettingsReportStatusFilter(statusFilter),
+		"canonical_status": canonicalSettingsReportStatuses,
+		"counts":           ensureCanonicalSettingsReportCounts(result.Counts),
+		"settings_reports": list,
+		"redaction_notice": settingsReportRedactionNotice,
+	})
+}
+
+func (a *App) handleAdminSettingsReportDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings_reports": list})
+	reportID := strings.TrimSpace(r.URL.Query().Get("report_id"))
+	if !isSafeSettingsReportID(reportID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valid report_id is required"})
+		return
+	}
+	record, err := a.settingsReportRepository().GetSettingsReport(r.Context(), reportID)
+	if errors.Is(err, errSettingsReportNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "settings report not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not load settings report"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings_report": projectSettingsReportDetail(record)})
 }
 
 func (a *App) handleAdminSettingsReportStatus(w http.ResponseWriter, r *http.Request) {
@@ -1014,6 +1249,7 @@ func (a *App) handleAdminSettingsReportStatus(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSettingsReportStatusBodyBytes)
 	var req struct {
 		ReportID   string `json:"report_id"`
 		Status     string `json:"status"`
@@ -1028,7 +1264,7 @@ func (a *App) handleAdminSettingsReportStatus(w http.ResponseWriter, r *http.Req
 	req.Status = strings.TrimSpace(strings.ToLower(req.Status))
 	req.ReviewNote = strings.TrimSpace(req.ReviewNote)
 	req.ReviewedBy = strings.TrimSpace(req.ReviewedBy)
-	if req.ReportID == "" {
+	if !isSafeSettingsReportID(req.ReportID) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "report_id is required"})
 		return
 	}
@@ -1036,43 +1272,396 @@ func (a *App) handleAdminSettingsReportStatus(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid settings report status"})
 		return
 	}
+	if len(req.ReviewNote) > maxSettingsReportReviewNoteBytes {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "review_note is too long"})
+		return
+	}
+	if len(req.ReviewedBy) > maxSettingsReportReviewedByBytes {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "reviewed_by is too long"})
+		return
+	}
+	req.ReviewNote = redactAdminText(req.ReviewNote, nil)
+	req.ReviewedBy = redactAdminText(req.ReviewedBy, nil)
 	now := time.Now().UTC()
-	tag, err := a.store.Pool.Exec(r.Context(), `
-		UPDATE settings_report_bundles
-		SET status = $2, review_note = $3, reviewed_by = $4, reviewed_at = $5, updated_at = $5
-		WHERE report_id = $1
-	`, req.ReportID, req.Status, req.ReviewNote, req.ReviewedBy, now)
+	record, err := a.settingsReportRepository().UpdateSettingsReportStatus(r.Context(), req.ReportID, req.Status, req.ReviewNote, req.ReviewedBy, now)
+	if errors.Is(err, errSettingsReportNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "settings report not found"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not update settings report"})
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "settings report not found"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-func decodeSettingsReportSummary(raw string) any {
-	var summary any
-	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
-		return nil
-	}
-	switch summary.(type) {
-	case map[string]any, []any:
-		return summary
-	default:
-		return nil
-	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "settings_report": projectSettingsReportDetail(record)})
 }
 
 func isAllowedSettingsReportStatus(status string) bool {
-	switch status {
-	case "new", "triaged", "confirmed", "dismissed", "rule_update_needed":
-		return true
-	default:
+	for _, allowed := range canonicalSettingsReportStatuses {
+		if status == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalSettingsReportStatusCounts() map[string]int {
+	counts := make(map[string]int, len(canonicalSettingsReportStatuses))
+	for _, status := range canonicalSettingsReportStatuses {
+		counts[status] = 0
+	}
+	return counts
+}
+
+func ensureCanonicalSettingsReportCounts(input map[string]int) map[string]int {
+	counts := canonicalSettingsReportStatusCounts()
+	for _, status := range canonicalSettingsReportStatuses {
+		counts[status] = input[status]
+	}
+	return counts
+}
+
+func normalizedSettingsReportStatusFilter(status string) string {
+	if status == "" {
+		return "all"
+	}
+	return status
+}
+
+func isSafeSettingsReportID(reportID string) bool {
+	if reportID == "" || len(reportID) > 128 {
 		return false
 	}
+	for _, ch := range reportID {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+const settingsReportUnavailable = "Unavailable in this report."
+const settingsReportRedactionNotice = "Sensitive fields are redacted or suppressed before display. Free-text secrets may not be perfectly detectable; treat report text carefully."
+
+var adminTextRedactionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)authorization\s*[:=]\s*bearer\s+[^\s,"'}]+`),
+	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._-]{12,}`),
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`),
+	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{12,}\b`),
+	regexp.MustCompile(`(?i)\bxai-[A-Za-z0-9_-]{12,}\b`),
+	regexp.MustCompile(`(?i)\bsk-ant-[A-Za-z0-9_-]{12,}\b`),
+	regexp.MustCompile(`(?i)\banthropic[_-]?[A-Za-z0-9_-]{16,}\b`),
+	regexp.MustCompile(`(?i)\b(password|secret|token|api[_-]?key|provider[_-]?key)\s*[:=]\s*["']?[^"'\s,;]{4,}`),
+	regexp.MustCompile(`\b[A-Za-z0-9_-]{64,}\b`),
+}
+
+func projectSettingsReportListItem(record settingsReportRecord) map[string]any {
+	bundle := decodeSettingsReportBundle(record.BundleJSON)
+	tracker := &redactionTracker{}
+	userNote := redactAdminText(record.UserNote, tracker)
+	sourceAvailability := safeMapSection(bundle["source_availability"], tracker)
+	redactionSummary := safeMapSection(bundle["redaction_summary"], tracker)
+	reportSource := safeString(bundle["report_source"], "settings_report")
+
+	item := map[string]any{
+		"report_id":               record.ReportID,
+		"client_report_id":        record.ClientReportID,
+		"bundle_schema_version":   record.BundleSchemaVersion,
+		"bundle_type":             record.BundleType,
+		"bundle_hash":             record.BundleHash,
+		"bundle_size_bytes":       record.BundleSizeBytes,
+		"app_version":             redactAdminText(record.AppVersion, tracker),
+		"runtime_id":              redactAdminText(record.RuntimeID, tracker),
+		"sidecar_version":         redactAdminText(record.SidecarVersion, tracker),
+		"report_reason":           redactAdminText(record.ReportReason, tracker),
+		"report_source":           redactAdminText(reportSource, tracker),
+		"user_note_preview":       limitString(userNote, 180),
+		"status":                  record.Status,
+		"review_note_preview":     limitString(redactAdminText(record.ReviewNote, tracker), 180),
+		"reviewed_by":             redactAdminText(record.ReviewedBy, tracker),
+		"received_at":             record.ReceivedAt.Format(time.RFC3339),
+		"updated_at":              record.UpdatedAt.Format(time.RFC3339),
+		"reviewed_at":             formatOptionalTime(record.ReviewedAt),
+		"source_availability":     sourceAvailability,
+		"redaction_summary":       redactionSummary,
+		"redaction_notice":        settingsReportRedactionNotice,
+		"redaction_applied":       tracker.Redacted || tracker.SuppressedFields > 0,
+		"suppressed_field_count":  tracker.SuppressedFields,
+		"unavailable_field_notes": unavailableSettingsReportFields(),
+	}
+	return item
+}
+
+func projectSettingsReportDetail(record settingsReportRecord) map[string]any {
+	bundle := decodeSettingsReportBundle(record.BundleJSON)
+	tracker := &redactionTracker{}
+	reportSource := safeString(bundle["report_source"], "settings_report")
+
+	detail := map[string]any{
+		"report_summary": map[string]any{
+			"report_id":             record.ReportID,
+			"client_report_id":      record.ClientReportID,
+			"bundle_schema_version": record.BundleSchemaVersion,
+			"bundle_type":           record.BundleType,
+			"report_reason":         redactAdminText(record.ReportReason, tracker),
+			"report_source":         redactAdminText(reportSource, tracker),
+			"status":                record.Status,
+			"received_at":           record.ReceivedAt.Format(time.RFC3339),
+			"updated_at":            record.UpdatedAt.Format(time.RFC3339),
+			"reviewed_at":           formatOptionalTime(record.ReviewedAt),
+		},
+		"user_note":              redactAdminText(record.UserNote, tracker),
+		"conversation_excerpt":   projectConversationExcerpt(bundle["today_conversation"], tracker),
+		"runtime_event_summary":  projectRuntimeEvents(bundle["recent_runtime_events"], tracker),
+		"runtime_state_summary":  safeMapSection(bundle["runtime_state_summary"], tracker),
+		"source_availability":    safeMapSection(bundle["source_availability"], tracker),
+		"redaction_summary":      safeMapSection(bundle["redaction_summary"], tracker),
+		"app_runtime_metadata":   safeMapSection(bundle["app_runtime_metadata"], tracker),
+		"hash_metadata":          map[string]any{"bundle_hash": record.BundleHash, "bundle_size_bytes": record.BundleSizeBytes},
+		"app_version":            redactAdminText(record.AppVersion, tracker),
+		"runtime_id":             redactAdminText(record.RuntimeID, tracker),
+		"sidecar_version":        redactAdminText(record.SidecarVersion, tracker),
+		"review_decision":        projectReviewDecision(record, tracker),
+		"redaction_notice":       settingsReportRedactionNotice,
+		"unavailable_field_note": settingsReportUnavailable,
+		"unavailable_fields":     unavailableSettingsReportFields(),
+		"raw_bundle_returned":    false,
+		"suppressed_field_count": tracker.SuppressedFields,
+	}
+	detail["redaction_applied"] = tracker.Redacted || tracker.SuppressedFields > 0
+	return detail
+}
+
+func projectReviewDecision(record settingsReportRecord, tracker *redactionTracker) map[string]any {
+	return map[string]any{
+		"status":      record.Status,
+		"review_note": redactAdminText(record.ReviewNote, tracker),
+		"reviewed_by": redactAdminText(record.ReviewedBy, tracker),
+		"reviewed_at": formatOptionalTime(record.ReviewedAt),
+		"updated_at":  record.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+func decodeSettingsReportBundle(raw json.RawMessage) map[string]any {
+	var bundle map[string]any
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return map[string]any{}
+	}
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		return map[string]any{}
+	}
+	return bundle
+}
+
+func projectConversationExcerpt(value any, tracker *redactionTracker) map[string]any {
+	section, ok := value.(map[string]any)
+	if !ok {
+		return unavailableSection()
+	}
+	out := map[string]any{
+		"source":        redactAdminText(safeString(section["source"], ""), tracker),
+		"availability":  redactAdminText(safeString(section["availability"], "unknown"), tracker),
+		"chat_date":     redactAdminText(safeString(section["chat_date"], ""), tracker),
+		"message_count": safeNumber(section["message_count"]),
+	}
+	messages, _ := section["messages"].([]any)
+	if len(messages) == 0 {
+		out["messages"] = []any{}
+		return out
+	}
+	start := len(messages) - 20
+	if start < 0 {
+		start = 0
+	}
+	projected := make([]map[string]any, 0, len(messages)-start)
+	for _, item := range messages[start:] {
+		message, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		projected = append(projected, map[string]any{
+			"role":              redactAdminText(safeString(message["role"], "unknown"), tracker),
+			"text":              redactAdminText(safeString(message["text"], ""), tracker),
+			"task_id":           nullableAdminText(message["task_id"], tracker),
+			"attempt_id":        nullableAdminText(message["attempt_id"], tracker),
+			"source_event_type": nullableAdminText(message["source_event_type"], tracker),
+			"created_at":        redactAdminText(safeString(message["created_at"], ""), tracker),
+		})
+	}
+	out["messages"] = projected
+	return out
+}
+
+func projectRuntimeEvents(value any, tracker *redactionTracker) map[string]any {
+	section, ok := value.(map[string]any)
+	if !ok {
+		return unavailableSection()
+	}
+	out := map[string]any{
+		"source":       redactAdminText(safeString(section["source"], ""), tracker),
+		"availability": redactAdminText(safeString(section["availability"], "unknown"), tracker),
+		"event_count":  safeNumber(section["event_count"]),
+	}
+	events, _ := section["events"].([]any)
+	if len(events) == 0 {
+		out["events"] = []any{}
+		return out
+	}
+	start := len(events) - 20
+	if start < 0 {
+		start = 0
+	}
+	projected := make([]map[string]any, 0, len(events)-start)
+	for _, item := range events[start:] {
+		event, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		projected = append(projected, map[string]any{
+			"type":      redactAdminText(safeString(event["type"], "unknown"), tracker),
+			"timestamp": redactAdminText(safeString(event["timestamp"], ""), tracker),
+			"source":    redactAdminText(safeString(event["source"], "unknown"), tracker),
+			"summary":   redactAdminText(safeString(event["summary"], ""), tracker),
+		})
+	}
+	out["events"] = projected
+	return out
+}
+
+func safeMapSection(value any, tracker *redactionTracker) map[string]any {
+	section, ok := value.(map[string]any)
+	if !ok {
+		return unavailableSection()
+	}
+	safe := map[string]any{}
+	for key, child := range section {
+		if isBlockedSettingsReportKey(key) {
+			tracker.SuppressedFields++
+			continue
+		}
+		safe[redactAdminText(key, tracker)] = safeProjectionValue(child, tracker)
+	}
+	if len(safe) == 0 {
+		return unavailableSection()
+	}
+	return safe
+}
+
+func safeProjectionValue(value any, tracker *redactionTracker) any {
+	switch typed := value.(type) {
+	case string:
+		return redactAdminText(typed, tracker)
+	case float64, bool, nil:
+		return typed
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, safeProjectionValue(item, tracker))
+		}
+		return out
+	case map[string]any:
+		out := map[string]any{}
+		for key, child := range typed {
+			if isBlockedSettingsReportKey(key) {
+				tracker.SuppressedFields++
+				continue
+			}
+			out[redactAdminText(key, tracker)] = safeProjectionValue(child, tracker)
+		}
+		return out
+	default:
+		return redactAdminText(safeString(typed, ""), tracker)
+	}
+}
+
+func redactAdminText(text string, tracker *redactionTracker) string {
+	if text == "" {
+		return ""
+	}
+	redacted := text
+	for _, pattern := range adminTextRedactionPatterns {
+		next := pattern.ReplaceAllString(redacted, "[redacted]")
+		if next != redacted && tracker != nil {
+			tracker.Redacted = true
+		}
+		redacted = next
+	}
+	return redacted
+}
+
+func nullableAdminText(value any, tracker *redactionTracker) any {
+	if value == nil {
+		return nil
+	}
+	text := safeString(value, "")
+	if text == "" {
+		return nil
+	}
+	return redactAdminText(text, tracker)
+}
+
+func safeString(value any, fallback string) string {
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return fallback
+		}
+		return strings.TrimSpace(typed)
+	case float64:
+		return strings.TrimSpace(strings.TrimRight(strings.TrimRight(strconvFormatFloat(typed), "0"), "."))
+	case bool:
+		if typed {
+			return "true"
+		}
+		return "false"
+	default:
+		return fallback
+	}
+}
+
+func strconvFormatFloat(value float64) string {
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", value), "0"), ".")
+}
+
+func safeNumber(value any) any {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return typed
+	case int64:
+		return typed
+	default:
+		return 0
+	}
+}
+
+func formatOptionalTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.Format(time.RFC3339)
+}
+
+func unavailableSection() map[string]any {
+	return map[string]any{"availability": "unavailable", "note": settingsReportUnavailable}
+}
+
+func unavailableSettingsReportFields() []string {
+	return []string{
+		"build identifier",
+		"structured settings snapshot",
+		"structured permissions/setup snapshot",
+		"current route/screen beyond report_source",
+		"explicit error class unless present in safe runtime events",
+	}
+}
+
+func limitString(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[:max]
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -1097,11 +1686,11 @@ func (a *App) authRequired(next func(http.ResponseWriter, *http.Request, map[str
 func (a *App) adminRequired(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.cfg.AdminPassword == "" {
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": "admin not configured (set RELAY_ADMIN_PASSWORD)"})
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "admin access denied"})
 			return
 		}
 		if r.Header.Get("X-Admin-Password") != a.cfg.AdminPassword {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid admin password"})
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "admin access denied"})
 			return
 		}
 		next(w, r)
@@ -1144,75 +1733,3 @@ func serveVerifyHTML(w http.ResponseWriter, ok bool, message string) {
 <div class="card"><div class="icon">` + icon + `</div><p class="msg">` + message + `</p>
 <p class="brand">xMilo</p></div></body></html>`))
 }
-
-// adminHTML is the self-contained admin page served at GET /admin.
-// It uses fetch() to call the admin API endpoints with the password in X-Admin-Password.
-const adminHTML = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>xMilo Admin</title>
-<style>
-*{box-sizing:border-box}body{font-family:monospace;background:#0b1020;color:#e2e8f0;padding:20px;max-width:900px;margin:0 auto}
-h1{color:#93c5fd;margin-bottom:4px}h2{color:#7dd3fc;margin:24px 0 8px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
-input,button,select{padding:8px 12px;border-radius:6px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font:inherit}
-button{cursor:pointer;background:#2563eb}button:hover{background:#1d4ed8}
-.danger{background:#dc2626}pre{background:#111827;padding:16px;border-radius:8px;overflow:auto;white-space:pre-wrap;font-size:11px;max-height:400px;border:1px solid #1f2937}
-.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;background:#1e293b;border:1px solid #334155}
-</style></head><body>
-<h1>xMilo Admin</h1>
-<div class="row"><input type="password" id="pw" placeholder="Admin password" style="width:240px"><span class="pill" id="auth-state">not set</span></div>
-<script>
-const pw=()=>document.getElementById('pw').value;
-const h=()=>({'Content-Type':'application/json','X-Admin-Password':pw()});
-document.getElementById('pw').oninput=()=>{document.getElementById('auth-state').textContent='changed — re-load data'};
-
-async function api(path,method='GET',body){
-  const opts={method,headers:h()};
-  if(body)opts.body=JSON.stringify(body);
-  const r=await fetch(path,opts);
-  return r.json();
-}
-async function show(id,fn){
-  document.getElementById(id).textContent='loading…';
-  try{document.getElementById(id).textContent=JSON.stringify(await fn(),null,2)}
-  catch(e){document.getElementById(id).textContent='Error: '+e}
-}
-</script>
-
-<h2>Stats</h2>
-<button onclick="show('out-stats',()=>api('/admin/stats'))">Refresh</button>
-<pre id="out-stats">Press Refresh</pre>
-
-<h2>Access Codes — Create</h2>
-<div class="row">
-  <input type="number" id="cnt" value="10" min="1" max="500" style="width:70px"> codes &nbsp;
-  <input type="number" id="days" value="5" min="1" style="width:60px"> days &nbsp;
-  <button onclick="show('out-inv',()=>api('/admin/invite/create','POST',{count:+cnt.value,days:+days.value}))">Create</button>
-</div>
-<pre id="out-inv">—</pre>
-
-<h2>Access Codes — List</h2>
-<button onclick="show('out-inv-list',()=>api('/admin/invites'))">Load</button>
-<pre id="out-inv-list">—</pre>
-
-<h2>Error Reports</h2>
-<button onclick="show('out-errors',()=>api('/admin/errors'))">Load</button>
-<pre id="out-errors">—</pre>
-
-<h2>AI Content Reports</h2>
-<button onclick="show('out-ai-reports',()=>api('/admin/ai-reports'))">Load</button>
-<div class="row">
-  <input type="number" id="air-id" placeholder="report id" style="width:110px">
-  <select id="air-status">
-    <option value="new">new</option>
-    <option value="triaged">triaged</option>
-    <option value="confirmed">confirmed</option>
-    <option value="dismissed">dismissed</option>
-    <option value="rule_update_needed">rule_update_needed</option>
-  </select>
-  <input type="text" id="air-note" placeholder="review note" style="width:240px">
-  <button onclick="show('out-ai-status',()=>api('/admin/ai-reports/status','POST',{id:+document.getElementById('air-id').value,status:document.getElementById('air-status').value,review_note:document.getElementById('air-note').value}))">Update status</button>
-</div>
-<pre id="out-ai-status">—</pre>
-<pre id="out-ai-reports">—</pre>
-</body></html>`
