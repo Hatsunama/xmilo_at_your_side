@@ -692,6 +692,33 @@ func TestHandleContextSetStoresBoundedMetadata(t *testing.T) {
 	}
 }
 
+func TestHandleContextSetRedactsSecretBearingExternalContext(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	app := &App{store: store}
+
+	req := httptest.NewRequest(http.MethodPost, "/context/set", strings.NewReader(`{"content":"external context has Authorization: Bearer user-provided-token and api_key=sk-user-provided-value","source":"document_picker"}`))
+	rec := httptest.NewRecorder()
+
+	app.handleContextSet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	content, _ := store.GetRuntimeConfig("active_context")
+	for _, forbidden := range []string{"Authorization: Bearer user-provided-token", "api_key=sk-user-provided-value", "user-provided-token", "sk-user-provided-value"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("active context leaked %q: %s", forbidden, content)
+		}
+	}
+	if !strings.Contains(content, "[REDACTED_SECRET]") || !strings.Contains(content, "external context has") {
+		t.Fatalf("expected useful redacted active context, got %q", content)
+	}
+}
+
 func TestHandleContextSetRejectsEmptyAndOversized(t *testing.T) {
 	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
 	if err != nil {
@@ -713,6 +740,28 @@ func TestHandleContextSetRejectsEmptyAndOversized(t *testing.T) {
 	}
 }
 
+func TestPublicTaskSnapshotRedactsImmediateResponsePrompt(t *testing.T) {
+	task := &runtime.TaskSnapshot{
+		TaskID:    "task-public-redaction",
+		AttemptID: "attempt-public-redaction",
+		Status:    "running",
+		Prompt:    "Format config with api_key=sk-user-provided-value",
+	}
+	public := publicTaskSnapshot(task)
+	if public == nil {
+		t.Fatal("expected public task")
+	}
+	if task.Prompt == public.Prompt {
+		t.Fatalf("expected public prompt projection to redact")
+	}
+	if strings.Contains(public.Prompt, "sk-user-provided-value") || strings.Contains(public.Prompt, "api_key=sk-user-provided-value") {
+		t.Fatalf("public prompt leaked secret: %q", public.Prompt)
+	}
+	if task.Prompt != "Format config with api_key=sk-user-provided-value" {
+		t.Fatalf("projection mutated active in-memory task prompt: %q", task.Prompt)
+	}
+}
+
 func TestTaskCurrentAndStateExposeAttemptID(t *testing.T) {
 	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
 	if err != nil {
@@ -723,7 +772,7 @@ func TestTaskCurrentAndStateExposeAttemptID(t *testing.T) {
 		TaskID:    "task-current-attempt",
 		AttemptID: "attempt-current-attempt",
 		Status:    "running",
-		Prompt:    "Check status",
+		Prompt:    "Check status with api_key=sk-user-provided-value",
 	}
 	if err := store.UpsertTask("active", task); err != nil {
 		t.Fatalf("upsert task: %v", err)
@@ -743,6 +792,9 @@ func TestTaskCurrentAndStateExposeAttemptID(t *testing.T) {
 	if current["task"].AttemptID != "attempt-current-attempt" {
 		t.Fatalf("expected /task/current attempt id, got %#v", current)
 	}
+	if strings.Contains(current["task"].Prompt, "sk-user-provided-value") || strings.Contains(current["task"].Prompt, "api_key=sk-user-provided-value") {
+		t.Fatalf("/task/current leaked raw prompt secret: %#v", current["task"].Prompt)
+	}
 
 	stateReq := httptest.NewRequest(http.MethodGet, "/state", http.NoBody)
 	stateRec := httptest.NewRecorder()
@@ -756,6 +808,9 @@ func TestTaskCurrentAndStateExposeAttemptID(t *testing.T) {
 	}
 	if state.ActiveTask == nil || state.ActiveTask.AttemptID != "attempt-current-attempt" {
 		t.Fatalf("expected /state active task attempt id, got %#v", state.ActiveTask)
+	}
+	if strings.Contains(state.ActiveTask.Prompt, "sk-user-provided-value") || strings.Contains(state.ActiveTask.Prompt, "api_key=sk-user-provided-value") {
+		t.Fatalf("/state leaked raw prompt secret: %#v", state.ActiveTask.Prompt)
 	}
 }
 

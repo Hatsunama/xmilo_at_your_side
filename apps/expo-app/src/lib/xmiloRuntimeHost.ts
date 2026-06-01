@@ -74,6 +74,10 @@ export type XMiloclawRuntimeStatus = {
   bridgeProof?: AppBridgeVerifiedProof;
 };
 
+export type BatteryBackgroundSetupStatus =
+  | "verified_unrestricted"
+  | "settings_available_unverified";
+
 export type XMiloclawCapabilityStatus = {
   declared?: boolean;
   requested?: boolean;
@@ -421,6 +425,43 @@ export function isSetupPermissionFinalReady(snapshot: SetupPermissionSnapshot | 
     snapshot.gate.foreground_runtime_complete === true &&
     requiredRowsComplete &&
     foregroundRuntimeComplete;
+}
+
+export function getBatteryBackgroundSetupStatus(status: XMiloclawRuntimeStatus | null | undefined): BatteryBackgroundSetupStatus {
+  if (status?.batteryUnrestricted === true) return "verified_unrestricted";
+  return "settings_available_unverified";
+}
+
+export function isRuntimeReadyForSetup(status: XMiloclawRuntimeStatus | null | undefined) {
+  if (!status) return false;
+  return Boolean(
+    (status.foregroundServiceStarted ?? status.runtimeHostStarted) &&
+      status.runtimeFilesPrepared &&
+      status.sidecarProcessAlive &&
+      status.bridgeConnected &&
+      status.taskRouteSurfaceReady
+  );
+}
+
+export function getRuntimeSetupMissing(status: XMiloclawRuntimeStatus | null | undefined) {
+  const snapshot =
+    status ?? {
+      foregroundServiceStarted: false,
+      runtimeHostStarted: false,
+      runtimeFilesPrepared: false,
+      sidecarProcessAlive: false,
+      bridgeConnected: false,
+      taskRouteSurfaceReady: false,
+      dataSaverUnrestricted: false
+    };
+  const missing: Array<"Data Saver unrestricted" | "Foreground service started" | "Runtime files prepared" | "Sidecar process alive" | "Bridge connected" | "Task route surface ready"> = [];
+  if (!snapshot.dataSaverUnrestricted) missing.push("Data Saver unrestricted");
+  if (!(snapshot.foregroundServiceStarted ?? snapshot.runtimeHostStarted)) missing.push("Foreground service started");
+  if (!snapshot.runtimeFilesPrepared) missing.push("Runtime files prepared");
+  if (!snapshot.sidecarProcessAlive) missing.push("Sidecar process alive");
+  if (!snapshot.bridgeConnected) missing.push("Bridge connected");
+  if (!snapshot.taskRouteSurfaceReady) missing.push("Task route surface ready");
+  return missing;
 }
 
 export async function resolveLocalhostBearerToken() {

@@ -69,9 +69,16 @@ function safeUserFacingError(value: unknown, fallback: string) {
 
 function redactSensitiveText(text: string) {
   return text
+    .replace(/\bapi[_\s-]?key\s+is\s+["']?[^\s,"'};]{4,}/gi, "API key is <redacted>")
+    .replace(/\bx-api-key\s*[:=]\s*["']?[^\s,"'};]{4,}/gi, "X-API-Key: <redacted>")
+    .replace(/sk-[A-Za-z0-9_-]{16,}/g, "<redacted>")
+    .replace(/xai-[A-Za-z0-9_-]{16,}/gi, "<redacted>")
+    .replace(/sk-ant-[A-Za-z0-9_-]{16,}/gi, "<redacted>")
+    .replace(/anthropic[_-]?[A-Za-z0-9_-]{20,}/gi, "<redacted>")
     .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "<redacted>")
     .replace(/authorization\s*[:=]\s*bearer\s+[^\s,"'}]+/gi, "authorization: bearer <redacted>")
     .replace(/bearer\s+[A-Za-z0-9._-]{16,}/gi, "bearer <redacted>")
+    .replace(/\b(password|secret|token|api[_\s-]?key|provider[_\s-]?key)\s*[:=]\s*["']?[^"'\s,;]{4,}/gi, "$1=<redacted>")
     .replace(/[A-Za-z0-9_-]{48,}/g, "<redacted>");
 }
 

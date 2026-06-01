@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"xmilo/sidecar-go/internal/promptsecrecy"
 )
 
 const (
@@ -51,6 +53,10 @@ func Normalize(req SetRequest, now time.Time) (StoredContext, error) {
 	byteLength := len([]byte(content))
 	if byteLength > MaxStagedContextBytes {
 		return StoredContext{}, errors.New("context_too_large")
+	}
+	if promptsecrecy.ContainsSecretValue(content) {
+		content = promptsecrecy.RedactSecretValues(content)
+		byteLength = len([]byte(content))
 	}
 
 	source := strings.TrimSpace(req.Source)

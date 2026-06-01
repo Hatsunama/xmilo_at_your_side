@@ -45,7 +45,10 @@ import {
   getXMiloclawSetupPermissionSnapshot,
   recheckXMiloclawSetupPermissionSnapshot,
   isSetupPermissionFinalReady,
+  getBatteryBackgroundSetupStatus,
+  getRuntimeSetupMissing,
   getXMiloclawLocalByokStatus,
+  isRuntimeReadyForSetup,
   saveXMiloclawLocalByokApiKey,
   startXMiloclawRuntimeHost,
   type SetupPermissionSnapshot,
@@ -100,7 +103,7 @@ type Page3RuntimeStep =
   | "return_to_xmilo"
   | "re_check";
 
-type Page3PermissionStatus = "granted" | "missing" | "unknown";
+type Page3PermissionStatus = "granted" | "missing" | "unknown" | "warning" | "accepted";
 
 type SetupPermissionActionRow = "camera" | "microphone" | "media" | "location" | "physical_activity";
 type SetupPermissionNativeAction = "request" | "open_settings" | "none";
@@ -144,6 +147,23 @@ function getFreshPage3Snapshot(): Page3Snapshot | null {
 
 function foregroundRuntimeComplete(status: XMiloclawRuntimeStatus | null): boolean {
   return status?.runtimeHostStarted === true && status?.foregroundServiceStarted === true;
+}
+
+function batteryBackgroundPermissionStatus(status: XMiloclawRuntimeStatus | null): Page3PermissionStatus {
+  return getBatteryBackgroundSetupStatus(status) === "verified_unrestricted" ? "granted" : "accepted";
+}
+
+function basicPermissionRowSatisfied(id: string, status: Page3PermissionStatus) {
+  if (id === "unrestricted_battery_access") return status === "granted" || status === "accepted";
+  return status === "granted";
+}
+
+function batteryBackgroundActionHint(status: XMiloclawRuntimeStatus | null) {
+  const batteryStatus = getBatteryBackgroundSetupStatus(status);
+  if (batteryStatus === "verified_unrestricted") {
+    return "Battery optimization is ignored for xMilo.";
+  }
+  return "Battery controls vary by device. xMilo accepted this device's available battery configuration. If long background tasks stop after closing the app, you can review Battery settings later.";
 }
 
 type AllowBasicRowId =
@@ -240,12 +260,9 @@ export default function SetupScreen() {
     return (
       status.notificationsGranted &&
       status.appearOnTopGranted &&
-      status.batteryUnrestricted &&
       status.dataSaverUnrestricted &&
       status.accessibilityEnabled &&
-      status.runtimeHostStarted &&
-      status.bridgeConnected &&
-      status.hostReady
+      isRuntimeReadyForSetup(status)
     );
   }, []);
 
@@ -361,37 +378,11 @@ export default function SetupScreen() {
   }, []);
 
   const isProviderSetupRuntimeReady = useCallback((status: XMiloclawRuntimeStatus | null) => {
-    return Boolean(status?.hostReady && status?.taskRouteSurfaceReady);
+    return isRuntimeReadyForSetup(status);
   }, []);
 
   const getFinalRuntimeMissing = useCallback((status: XMiloclawRuntimeStatus | null) => {
-    const snapshot =
-      status ?? {
-        notificationsGranted: false,
-        appearOnTopGranted: false,
-        batteryUnrestricted: false,
-        dataSaverUnrestricted: false,
-        dataSaverStatus: "unknown",
-        accessibilityEnabled: false,
-        runtimeHostStarted: false,
-        foregroundServiceStarted: false,
-        runtimeFilesPrepared: false,
-        sidecarProcessLaunched: false,
-        sidecarProcessAlive: false,
-        bridgeConnected: false,
-        taskRouteSurfaceReady: false,
-        hostReady: false
-      };
-
-    const missing: Array<"Data Saver unrestricted" | "Foreground service started" | "Runtime files prepared" | "Sidecar process alive" | "Bridge connected" | "Task route surface ready" | "Host ready"> = [];
-    if (!snapshot.dataSaverUnrestricted) missing.push("Data Saver unrestricted");
-    if (!(snapshot.foregroundServiceStarted ?? snapshot.runtimeHostStarted)) missing.push("Foreground service started");
-    if (!snapshot.runtimeFilesPrepared) missing.push("Runtime files prepared");
-    if (!snapshot.sidecarProcessAlive) missing.push("Sidecar process alive");
-    if (!snapshot.bridgeConnected) missing.push("Bridge connected");
-    if (!snapshot.taskRouteSurfaceReady) missing.push("Task route surface ready");
-    if (!snapshot.hostReady) missing.push("Host ready");
-    return missing;
+    return getRuntimeSetupMissing(status);
   }, []);
 
   const runtimeNotReadyReason = useCallback((status: XMiloclawRuntimeStatus | null) => {
@@ -480,7 +471,7 @@ export default function SetupScreen() {
       const ready = await getXMiloclawRuntimeStatus();
       setRuntimeStatus(ready);
       const localReady =
-        ready.hostReady === true &&
+        isRuntimeReadyForSetup(ready) &&
         ready.taskRouteSurfaceReady === true &&
         ready.llmMode === "local_byok" &&
         ready.byokProvider === resolved.provider &&
@@ -676,7 +667,7 @@ export default function SetupScreen() {
 
     set("show_notifications", snapshot.notificationsGranted ? "granted" : "missing");
     set("appear_on_top", snapshot.appearOnTopGranted ? "granted" : "missing");
-    set("unrestricted_battery_access", snapshot.batteryUnrestricted ? "granted" : "missing");
+    set("unrestricted_battery_access", batteryBackgroundPermissionStatus(status));
     set("allow_data_usage_data_saver", snapshot.dataSaverUnrestricted ? "granted" : "missing");
     set("accessibility_service_enabled", snapshot.accessibilityEnabled ? "granted" : "missing");
 
@@ -1082,8 +1073,8 @@ export default function SetupScreen() {
       },
       {
         id: "unrestricted_battery_access",
-        label: "Unrestricted battery access",
-        androidMapping: "Android: Unrestricted battery access (app-owned proof surface)"
+        label: "Battery background usage",
+        androidMapping: "Android: battery and background usage controls vary by device"
       },
       {
         id: "allow_data_usage_data_saver",
@@ -1143,11 +1134,11 @@ export default function SetupScreen() {
       {
         id: "unrestricted_battery_access",
         section: "required_now_checked_now",
-        label: "Unrestricted battery access",
+        label: "Battery background usage",
         behavior: "clickable_settings_path",
         requiredForContinue: true,
-        status: runtimeProof.batteryUnrestricted ? "granted" : "missing",
-        actionHint: "Tap to open Battery optimization settings."
+        status: batteryBackgroundPermissionStatus(runtimeStatus),
+        actionHint: batteryBackgroundActionHint(runtimeStatus)
       },
       {
         id: "camera",
@@ -1217,7 +1208,6 @@ export default function SetupScreen() {
     const requiredNowMissing: string[] = [];
     if (!runtimeProof.notificationsGranted) requiredNowMissing.push("Show notifications");
     if (!runtimeProof.appearOnTopGranted) requiredNowMissing.push("Appear on top");
-    if (!runtimeProof.batteryUnrestricted) requiredNowMissing.push("Unrestricted battery access");
     if (!runtimeProof.dataSaverUnrestricted) requiredNowMissing.push("Allow data usage while Data Saver is on");
     if (!runtimeProof.accessibilityEnabled) requiredNowMissing.push("Accessibility Service enabled");
 
@@ -1305,7 +1295,6 @@ export default function SetupScreen() {
         const missing: string[] = [];
         if (!status.notificationsGranted) missing.push("Show notifications");
         if (!status.appearOnTopGranted) missing.push("Appear on top");
-        if (!status.batteryUnrestricted) missing.push("Unrestricted battery access");
         if (!status.dataSaverUnrestricted) missing.push("Allow data usage while Data Saver is on");
         if (!status.accessibilityEnabled) missing.push("Accessibility Service enabled");
         if (missing.length > 0) {
@@ -1330,8 +1319,9 @@ export default function SetupScreen() {
           setRuntimeError(status.lastError || "Runtime host did not start.");
           return;
         }
-        if (!status.hostReady) {
-          setRuntimeError(status.lastError || "Runtime service started, but runtime files/process/readiness are not complete yet.");
+        const missing = getFinalRuntimeMissing(status);
+        if (missing.length > 0) {
+          setRuntimeError(status.lastError || `Runtime service started, but setup still needs: ${missing.join(", ")}.`);
         }
         setRuntimeStep("re_check");
       } catch (error: any) {
@@ -1422,7 +1412,11 @@ export default function SetupScreen() {
                     const key = row.id;
                     const status = permissionChecklist[key] ?? "unknown";
                     const granted = status === "granted";
-                    const actionableMissing = status === "missing";
+                    const warning = status === "warning";
+                    const accepted = status === "accepted";
+                    const acceptedBattery = key === "unrestricted_battery_access" && accepted;
+                    const visuallyAccepted = granted || acceptedBattery;
+                    const actionableMissing = status === "missing" || warning || acceptedBattery;
 
                     const getRowAction = (rowId: string): "notifications" | "overlay" | "battery" | "data_saver" | "accessibility" | null => {
                       if (rowId === "show_notifications") return "notifications" as const;
@@ -1456,9 +1450,9 @@ export default function SetupScreen() {
                       }
                     };
 
-                    const labelStyle = granted ? styles.checkLabelGranted : styles.checkLabelMissing;
-                    const badgeStyle = granted ? styles.checkBadgeGranted : styles.checkBadgeMissing;
-                    const badgeText = granted ? "✓" : "•";
+                    const labelStyle = visuallyAccepted ? styles.checkLabelGranted : warning ? styles.checkLabelWarning : styles.checkLabelMissing;
+                    const badgeStyle = visuallyAccepted ? styles.checkBadgeGranted : warning ? styles.checkBadgeWarning : styles.checkBadgeMissing;
+                    const badgeText = visuallyAccepted ? "✓" : warning ? "!" : "•";
 
                     const RowContainer: any = rowPressable ? Pressable : View;
                     const rowProps = rowPressable
@@ -1488,7 +1482,7 @@ export default function SetupScreen() {
                   const missingLines: string[] = [];
                   for (const row of allowBasicInventory) {
                     const status = permissionChecklist[row.id] ?? "unknown";
-                    if (status === "granted") continue;
+                    if (status === "granted" || (row.id === "unrestricted_battery_access" && status === "accepted")) continue;
                     if (status === "unknown") {
                       missingLines.push(`${row.label} — UNKNOWN (cannot confirm from this build).`);
                       continue;
@@ -1498,7 +1492,7 @@ export default function SetupScreen() {
                     } else if (row.id === "appear_on_top") {
                       missingLines.push(`${row.label} — tap the row to open Appear-on-top settings.`);
                     } else if (row.id === "unrestricted_battery_access") {
-                      missingLines.push(`${row.label} — tap the row to open App info → Battery → Unrestricted.`);
+                      missingLines.push(`${row.label} — tap the row to open Battery settings. Android and OEM battery controls vary by device.`);
                     } else if (row.id === "allow_data_usage_data_saver") {
                       missingLines.push(`${row.label} — tap the row to open Data Saver settings.`);
                     } else if (row.id === "accessibility_service_enabled") {
@@ -1508,13 +1502,13 @@ export default function SetupScreen() {
                     }
                   }
 
-                  const allRowsGranted = allowBasicInventory.every((row) => (permissionChecklist[row.id] ?? "unknown") === "granted");
-                  const finishEnabled = allRowsGranted && !runtimeBusy;
+                  const allRowsSatisfied = allowBasicInventory.every((row) => basicPermissionRowSatisfied(row.id, permissionChecklist[row.id] ?? "unknown"));
+                  const finishEnabled = allRowsSatisfied && !runtimeBusy;
 
                   return (
                     <>
                       <Text style={styles.missingNow}>
-                        Missing now ({missingLines.length ? missingLines.length : "0"}):{" "}
+                        Status now ({missingLines.length ? missingLines.length : "0"}):{" "}
                         {missingLines.length ? "\n- " + missingLines.join("\n- ") : "none"}
                       </Text>
                       <Text style={styles.fine}>Last re-check: {checklistUpdatedAtMillis ? new Date(checklistUpdatedAtMillis).toLocaleTimeString() : "—"}</Text>
@@ -1544,7 +1538,7 @@ export default function SetupScreen() {
                 {(() => {
                   const requiredRowsMissing = additionalAccessRows
                     .filter((row) => row.requiredForContinue)
-                    .filter((row) => row.status !== "granted")
+                    .filter((row) => row.status !== "granted" && row.status !== "accepted")
                     .map((row) => `${row.label} — ${row.actionHint || "tap the row and re-check."}`);
                   const nativeGateReady = setupPermissionSnapshot?.gate.final_ready_without_review === true;
                   const continueEnabled = reviewAcknowledged && isSetupPermissionFinalReady(setupPermissionSnapshot, reviewAtBottom) && !runtimeBusy;
@@ -1561,20 +1555,23 @@ export default function SetupScreen() {
                         .map((row) => {
                           const rowPressable = row.behavior !== "visible_non_clickable_status";
                           const granted = row.status === "granted";
+                          const warning = row.status === "warning";
+                          const accepted = row.status === "accepted";
+                          const visuallyAccepted = granted || accepted;
                           const RowContainer: any = rowPressable ? Pressable : View;
                           const rowProps = rowPressable
                             ? {
                                 onPress: () => handleAdditionalAccessRowPress(row),
                                 accessibilityRole: "button",
                                 disabled: runtimeBusy,
-                                style: ({ pressed }: any) => [styles.checkRow, granted && styles.checkRowGranted, pressed && styles.checkRowPressed]
+                                style: ({ pressed }: any) => [styles.checkRow, visuallyAccepted && styles.checkRowGranted, warning && styles.checkRowWarning, pressed && styles.checkRowPressed]
                               }
-                            : { style: [styles.checkRow, granted && styles.checkRowGranted] };
+                            : { style: [styles.checkRow, visuallyAccepted && styles.checkRowGranted, warning && styles.checkRowWarning] };
 
                           return (
                             <RowContainer key={row.id} {...rowProps}>
                               <View style={{ flex: 1 }}>
-                                <Text style={[styles.checkLabel, granted ? styles.checkLabelGranted : styles.checkLabelMissing]}>
+                                <Text style={[styles.checkLabel, visuallyAccepted ? styles.checkLabelGranted : warning ? styles.checkLabelWarning : styles.checkLabelMissing]}>
                                   {row.label}
                                 </Text>
                                 {row.actionHint ? (
@@ -1582,6 +1579,8 @@ export default function SetupScreen() {
                                     style={
                                       granted
                                         ? styles.checkSubLabel
+                                        : accepted
+                                          ? styles.checkSubLabel
                                         : styles.checkSubLabelWarn
                                     }
                                   >
@@ -1589,8 +1588,8 @@ export default function SetupScreen() {
                                   </Text>
                                 ) : null}
                               </View>
-                              <View style={[styles.checkBadge, granted ? styles.checkBadgeGranted : styles.checkBadgeMissing]}>
-                                <Text style={styles.checkBadgeText}>{granted ? "✓" : "•"}</Text>
+                              <View style={[styles.checkBadge, visuallyAccepted ? styles.checkBadgeGranted : warning ? styles.checkBadgeWarning : styles.checkBadgeMissing]}>
+                                <Text style={styles.checkBadgeText}>{visuallyAccepted ? "✓" : warning ? "!" : "•"}</Text>
                               </View>
                             </RowContainer>
                           );
@@ -1733,8 +1732,8 @@ export default function SetupScreen() {
                 <Text style={styles.fine}>
                   Service: {(runtimeProof.foregroundServiceStarted ?? runtimeProof.runtimeHostStarted) ? "PASS" : "MISSING"} · Files:{" "}
                   {runtimeProof.runtimeFilesPrepared ? "PASS" : "MISSING"} · Process: {runtimeProof.sidecarProcessAlive ? "PASS" : "MISSING"} · Bridge:{" "}
-                  {runtimeProof.bridgeConnected ? "PASS" : "MISSING"} · Ready route: {runtimeProof.taskRouteSurfaceReady ? "PASS" : "MISSING"} · Host ready:{" "}
-                  {runtimeProof.hostReady ? "PASS" : "MISSING"}
+                  {runtimeProof.bridgeConnected ? "PASS" : "MISSING"} · Ready route: {runtimeProof.taskRouteSurfaceReady ? "PASS" : "MISSING"} · Runtime ready for setup:{" "}
+                  {isRuntimeReadyForSetup(runtimeProof) ? "PASS" : "MISSING"}
                 </Text>
                 <Text style={styles.fine}>
                   Process exit: {runtimeProof.lastProcessExitCode ?? "—"} · stderr: {runtimeProof.firstSafeStderrCategory || "none"} · stdout:{" "}
@@ -1849,11 +1848,11 @@ export default function SetupScreen() {
                   </View>
 
                   <View style={styles.checkRow}>
-                    <Text style={[styles.checkLabel, runtimeProof.hostReady ? styles.checkLabelGranted : styles.checkLabelMissing]}>
-                      Host ready
+                    <Text style={[styles.checkLabel, isRuntimeReadyForSetup(runtimeProof) ? styles.checkLabelGranted : styles.checkLabelMissing]}>
+                      Runtime ready for setup
                     </Text>
-                    <View style={[styles.checkBadge, runtimeProof.hostReady ? styles.checkBadgeGranted : styles.checkBadgeMissing]}>
-                      <Text style={styles.checkBadgeText}>{runtimeProof.hostReady ? "✓" : "—"}</Text>
+                    <View style={[styles.checkBadge, isRuntimeReadyForSetup(runtimeProof) ? styles.checkBadgeGranted : styles.checkBadgeMissing]}>
+                      <Text style={styles.checkBadgeText}>{isRuntimeReadyForSetup(runtimeProof) ? "✓" : "—"}</Text>
                     </View>
                   </View>
                 </View>
@@ -2367,6 +2366,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#052E22",
     borderColor: "#10B981"
   },
+  checkRowWarning: {
+    backgroundColor: "#451A03",
+    borderColor: "#F59E0B"
+  },
   checkLabel: {
     flex: 1,
     fontSize: 13,
@@ -2387,6 +2390,9 @@ const styles = StyleSheet.create({
   checkLabelGranted: {
     color: "#BBF7D0"
   },
+  checkLabelWarning: {
+    color: "#FCD34D"
+  },
   checkLabelMissing: {
     color: "#94A3B8"
   },
@@ -2401,6 +2407,10 @@ const styles = StyleSheet.create({
   checkBadgeGranted: {
     backgroundColor: "#052E22",
     borderColor: "#10B981"
+  },
+  checkBadgeWarning: {
+    backgroundColor: "#451A03",
+    borderColor: "#F59E0B"
   },
   checkBadgeMissing: {
     backgroundColor: "#0B1224",

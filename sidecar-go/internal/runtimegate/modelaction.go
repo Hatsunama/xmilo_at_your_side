@@ -12,14 +12,16 @@ const (
 )
 
 type ModelActionInput struct {
-	ActionType         string
-	CompletionStatus   string
-	ContinuationStatus string
-	Summary            string
-	ReportText         string
-	ThoughtText        string
-	NextBlocker        string
-	ExecutionVerified  bool
+	ActionType                  string
+	CompletionStatus            string
+	ContinuationStatus          string
+	Summary                     string
+	ReportText                  string
+	ThoughtText                 string
+	NextBlocker                 string
+	ExecutionVerified           bool
+	CurrentTurnSecrets          []promptsecrecy.CurrentTurnSecret
+	CurrentTurnSecretVisibleUse bool
 }
 
 func EvaluateModelAction(input ModelActionInput, now time.Time) Decision {
@@ -31,18 +33,24 @@ func EvaluateModelAction(input ModelActionInput, now time.Time) Decision {
 		return modelActionDecision(OutcomeBlock, ReasonUnknownMalformedAction, false, "Milo blocked a malformed model action before it could affect runtime state.", now)
 	}
 
-	content := strings.ToLower(strings.Join([]string{
+	rawContent := strings.Join([]string{
 		input.Summary,
 		input.ReportText,
 		input.ThoughtText,
 		input.NextBlocker,
-	}, "\n"))
+	}, "\n")
+	content := strings.ToLower(rawContent)
+
+	if assessment := promptsecrecy.ClassifyModelOutput(rawContent); assessment.Forbidden() {
+		if !assessment.SecretLike() || !modelActionAllowsCurrentTurnSecretOutput(input, rawContent, content) {
+			return modelActionDecision(OutcomeBlock, promptLeakageReason(rawContent), false, "Milo blocked model output that attempted to expose hidden prompts, private instructions, chain-of-thought, secrets, or internal runtime payloads.", now)
+		}
+	}
+	if modelActionContainsCredentialSecretRisk(content) && !modelActionAllowsCurrentTurnSecretOutput(input, rawContent, content) {
+		return modelActionDecision(OutcomeBlock, ReasonCredentialSecretRisk, false, "Milo blocked model output that attempted to reveal secrets or internal configuration.", now)
+	}
 
 	switch {
-	case promptsecrecy.Classify(content).Forbidden():
-		return modelActionDecision(OutcomeBlock, promptLeakageReason(content), false, "Milo blocked model output that attempted to expose hidden prompts, private instructions, chain-of-thought, secrets, or internal runtime payloads.", now)
-	case modelActionContainsCredentialSecretRisk(content):
-		return modelActionDecision(OutcomeBlock, ReasonCredentialSecretRisk, false, "Milo blocked model output that attempted to reveal secrets or internal configuration.", now)
 	case modelActionContainsHiddenAutomation(content):
 		return modelActionDecision(OutcomeBlock, ReasonUnsafeAutomation, false, "Milo blocked model output that attempted hidden or confirmation-bypassing action.", now)
 	case modelActionContainsAuthoritySpoof(content):
@@ -59,10 +67,23 @@ func EvaluateModelAction(input ModelActionInput, now time.Time) Decision {
 }
 
 func promptLeakageReason(content string) ReasonCode {
-	if promptsecrecy.Classify(content).SecretLike() {
+	if promptsecrecy.ClassifyModelOutput(content).SecretLike() {
 		return ReasonCredentialSecretRisk
 	}
 	return ReasonPromptInjectionAuthoritySpoof
+}
+
+func modelActionAllowsCurrentTurnSecretOutput(input ModelActionInput, rawContent string, content string) bool {
+	if !input.CurrentTurnSecretVisibleUse || len(input.CurrentTurnSecrets) == 0 {
+		return false
+	}
+	if modelActionContainsInternalSecretLeakage(content) {
+		return false
+	}
+	if modelActionSecretEffectClaimNeedsEvidence(input, content) {
+		return false
+	}
+	return promptsecrecy.ModelOutputSecretsMatchCurrentTurn(rawContent, input.CurrentTurnSecrets)
 }
 
 func modelActionDecision(outcome Outcome, reason ReasonCode, evidenceRequired bool, safeSummary string, now time.Time) Decision {
@@ -125,19 +146,33 @@ func modelActionContainsExternalCommandBasis(content string) bool {
 }
 
 func modelActionContainsCredentialSecretRisk(content string) bool {
+	if promptsecrecy.ContainsSecretValue(content) {
+		return true
+	}
 	return containsAny(content, []string{
 		"api_key",
-		"api key is",
-		"api keys are",
-		"auth header",
-		"auth headers",
 		"authorization: bearer",
-		"bearer token",
-		"provider config",
 		"hidden prompt",
 		"internal policy",
 		"secret token",
 		"access token",
+	})
+}
+
+func modelActionContainsInternalSecretLeakage(content string) bool {
+	return containsAny(content, []string{
+		"provider config",
+		"provider configuration",
+		"internal auth header",
+		"auth header from config",
+		"stored api key",
+		"saved api key",
+		"hidden prompt",
+		"private payload",
+		"private tool payload",
+		"raw tool payload",
+		"system prompt",
+		"developer prompt",
 	})
 }
 
@@ -197,7 +232,18 @@ func modelActionCompletionNeedsEvidence(input ModelActionInput, content string) 
 		"i sent",
 		"message sent",
 		"sent the message",
+		"sent your api key",
+		"sent the api key",
 		"email sent",
+		"i saved your api key",
+		"saved your api key",
+		"saved the api key",
+		"i used your api key",
+		"used your api key",
+		"used the api key",
+		"i configured byok",
+		"configured byok successfully",
+		"byok configured successfully",
 		"deleted files",
 		"deleted the files",
 		"wiped files",
@@ -207,5 +253,25 @@ func modelActionCompletionNeedsEvidence(input ModelActionInput, content string) 
 		"swiped",
 		"opened camera",
 		"used the camera",
+	})
+}
+
+func modelActionSecretEffectClaimNeedsEvidence(input ModelActionInput, content string) bool {
+	if input.ExecutionVerified {
+		return false
+	}
+	return containsAny(content, []string{
+		"i saved your api key",
+		"saved your api key",
+		"saved the api key",
+		"i used your api key",
+		"used your api key",
+		"used the api key",
+		"i sent your api key",
+		"sent your api key",
+		"sent the api key",
+		"i configured byok",
+		"configured byok successfully",
+		"byok configured successfully",
 	})
 }

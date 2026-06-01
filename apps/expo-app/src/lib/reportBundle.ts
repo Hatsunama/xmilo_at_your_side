@@ -174,6 +174,8 @@ export async function buildSettingsReportBundle(input: {
 export function redactSensitiveText(value: unknown) {
   if (typeof value !== "string") return "";
   return value
+    .replace(/\bapi[_\s-]?key\s+is\s+["']?[^\s,"'};]{4,}/gi, "API key is <redacted>")
+    .replace(/\bx-api-key\s*[:=]\s*["']?[^\s,"'};]{4,}/gi, "X-API-Key: <redacted>")
     .replace(/sk-[A-Za-z0-9_-]{16,}/g, "<redacted>")
     .replace(/xai-[A-Za-z0-9_-]{16,}/gi, "<redacted>")
     .replace(/sk-ant-[A-Za-z0-9_-]{16,}/gi, "<redacted>")
@@ -181,9 +183,13 @@ export function redactSensitiveText(value: unknown) {
     .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "<redacted>")
     .replace(/authorization\s*[:=]\s*bearer\s+[^\s,"'}]+/gi, "authorization: bearer <redacted>")
     .replace(/bearer\s+[A-Za-z0-9._-]{16,}/gi, "bearer <redacted>")
-    .replace(/\b(password|secret|token|api[_-]?key|provider[_-]?key)\s*[:=]\s*["']?[^"'\s,;]{4,}/gi, "$1=<redacted>")
+    .replace(/\b(password|secret|token|api[_\s-]?key|provider[_\s-]?key)\s*[:=]\s*["']?[^"'\s,;]{4,}/gi, "$1=<redacted>")
     .replace(/\b[A-Za-z0-9_-]{64,}\b/g, "<redacted>")
     .trim();
+}
+
+export function redactSettingsReportPayload<T>(value: T): T {
+  return redactReportValue(value) as T;
 }
 
 export function hashSettingsReportBundle(bundle: SettingsReportBundle) {
@@ -198,6 +204,15 @@ export function hashSettingsReportBundle(bundle: SettingsReportBundle) {
     low = Math.imul(low ^ (high >>> 16), 2246822507);
   }
   return `fnv1a64:${unsignedHex(high)}${unsignedHex(low)}`;
+}
+
+function redactReportValue(value: unknown): unknown {
+  if (typeof value === "string") return redactSensitiveText(value);
+  if (Array.isArray(value)) return value.map((item) => redactReportValue(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redactReportValue(item)])
+  );
 }
 
 function createClientReportId(createdAt: string) {

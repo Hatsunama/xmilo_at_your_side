@@ -26,6 +26,7 @@ import (
 	"xmilo/sidecar-go/internal/mind"
 	"xmilo/sidecar-go/internal/movement"
 	"xmilo/sidecar-go/internal/netutil"
+	"xmilo/sidecar-go/internal/promptsecrecy"
 	"xmilo/sidecar-go/internal/providerpolicy"
 	"xmilo/sidecar-go/internal/relay"
 	"xmilo/sidecar-go/internal/runtime"
@@ -693,7 +694,7 @@ func (a *App) handleTaskStart(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": snap.TaskID, "attempt_id": snap.AttemptID, "immediate_state": snap, "intake_gate": assessment})
+	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": snap.TaskID, "attempt_id": snap.AttemptID, "immediate_state": publicTaskSnapshot(snap), "intake_gate": assessment})
 }
 
 func (a *App) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
@@ -750,7 +751,7 @@ func (a *App) handleCommandSubmit(w http.ResponseWriter, r *http.Request) {
 		"kind":            "task",
 		"task_id":         snap.TaskID,
 		"attempt_id":      snap.AttemptID,
-		"immediate_state": snap,
+		"immediate_state": publicTaskSnapshot(snap),
 		"intake_gate":     assessment,
 	})
 }
@@ -769,6 +770,22 @@ func taskStartErrorCode(err error, assessment *runtime.IntakeAssessment) string 
 	return "TASK_START_FAILED"
 }
 
+func publicTaskSnapshot(task *runtime.TaskSnapshot) *runtime.TaskSnapshot {
+	if task == nil {
+		return nil
+	}
+	out := *task
+	out.Prompt = promptsecrecy.Redact(out.Prompt)
+	return &out
+}
+
+func publicRuntimeState(state runtime.RuntimeState) runtime.RuntimeState {
+	out := state
+	out.ActiveTask = publicTaskSnapshot(state.ActiveTask)
+	out.QueuedTask = publicTaskSnapshot(state.QueuedTask)
+	return out
+}
+
 func (a *App) handleTaskCurrent(w http.ResponseWriter, r *http.Request) {
 	task, err := a.store.GetTask("active")
 	if err != nil {
@@ -779,7 +796,7 @@ func (a *App) handleTaskCurrent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"task": nil})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"task": task})
+	writeJSON(w, http.StatusOK, map[string]any{"task": publicTaskSnapshot(task)})
 }
 
 func (a *App) handleTaskInterrupt(w http.ResponseWriter, r *http.Request) {
@@ -1050,7 +1067,7 @@ func (a *App) handleTaskResumeQueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "intake_gate": assessment})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "task": task, "intake_gate": assessment})
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "task": publicTaskSnapshot(task), "intake_gate": assessment})
 }
 
 func (a *App) handleThoughtRequest(w http.ResponseWriter, r *http.Request) {
@@ -1058,7 +1075,7 @@ func (a *App) handleThoughtRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.engine.Snapshot())
+	writeJSON(w, http.StatusOK, publicRuntimeState(a.engine.Snapshot()))
 }
 
 func (a *App) handleCapabilityState(w http.ResponseWriter, r *http.Request) {

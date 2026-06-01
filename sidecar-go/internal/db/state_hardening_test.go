@@ -59,6 +59,27 @@ func TestTaskSlotRejectsUnsupportedSlotAndMissingTaskID(t *testing.T) {
 	}
 }
 
+func TestTaskSlotPromptRedactsCurrentTurnSecret(t *testing.T) {
+	store := openTestStore(t)
+	task := testTask("task_secret_prompt", "attempt_secret_prompt", "running")
+	task.Prompt = "Format this config with api_key=sk-user-provided-value"
+	if err := store.UpsertTask("active", task); err != nil {
+		t.Fatalf("upsert active: %v", err)
+	}
+	var rawPrompt string
+	if err := store.DB.QueryRow(`SELECT prompt FROM task_slots WHERE slot = 'active'`).Scan(&rawPrompt); err != nil {
+		t.Fatalf("read task prompt: %v", err)
+	}
+	for _, forbidden := range []string{"api_key=sk-user-provided-value", "sk-user-provided-value"} {
+		if strings.Contains(rawPrompt, forbidden) {
+			t.Fatalf("task slot prompt leaked %q: %s", forbidden, rawPrompt)
+		}
+	}
+	if !strings.Contains(rawPrompt, "[REDACTED_SECRET]") {
+		t.Fatalf("expected redacted prompt marker, got %s", rawPrompt)
+	}
+}
+
 func TestPendingCompletedEventDoesNotCreateTaskCompletionTruth(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.AppendPendingEvent("task.completed", map[string]any{
@@ -79,6 +100,51 @@ func TestPendingCompletedEventDoesNotCreateTaskCompletionTruth(t *testing.T) {
 	}
 	if active != nil {
 		t.Fatalf("pending event alone created active task: %#v", active)
+	}
+}
+
+func TestHistoryConversationAndPendingEventsRedactCurrentTurnSecret(t *testing.T) {
+	store := openTestStore(t)
+	prompt := "Use api_key=sk-user-provided-value and Authorization: Bearer user-provided-token for a local request example."
+	if err := store.AddTaskHistory("task_secret_history", prompt, "completed", prompt); err != nil {
+		t.Fatalf("add task history: %v", err)
+	}
+	if err := store.AppendConversation("user", prompt); err != nil {
+		t.Fatalf("append conversation: %v", err)
+	}
+	if err := store.AppendPendingEvent("task.progress", map[string]any{
+		"summary": prompt,
+		"safe":    "local request example",
+	}); err != nil {
+		t.Fatalf("append pending event: %v", err)
+	}
+
+	var historyPrompt, historySummary string
+	if err := store.DB.QueryRow(`SELECT prompt, summary FROM task_history WHERE task_id = 'task_secret_history'`).Scan(&historyPrompt, &historySummary); err != nil {
+		t.Fatalf("read task history: %v", err)
+	}
+	var conversationContent string
+	if err := store.DB.QueryRow(`SELECT content FROM conversation_tail ORDER BY id DESC LIMIT 1`).Scan(&conversationContent); err != nil {
+		t.Fatalf("read conversation: %v", err)
+	}
+	var pendingPayload string
+	if err := store.DB.QueryRow(`SELECT payload_json FROM pending_events ORDER BY id DESC LIMIT 1`).Scan(&pendingPayload); err != nil {
+		t.Fatalf("read pending event: %v", err)
+	}
+	for name, content := range map[string]string{
+		"history prompt":       historyPrompt,
+		"history summary":      historySummary,
+		"conversation content": conversationContent,
+		"pending payload":      pendingPayload,
+	} {
+		for _, forbidden := range []string{"api_key=sk-user-provided-value", "sk-user-provided-value", "Authorization: Bearer user-provided-token", "user-provided-token"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s leaked %q: %s", name, forbidden, content)
+			}
+		}
+	}
+	if !strings.Contains(pendingPayload, "local request example") {
+		t.Fatalf("pending event lost non-secret context: %s", pendingPayload)
 	}
 }
 

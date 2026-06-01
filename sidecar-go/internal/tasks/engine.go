@@ -277,7 +277,7 @@ func (e *Engine) runTaskWithPhase(ctx context.Context, task runtime.TaskSnapshot
 		}
 	}
 
-	relayResp = e.enforceModelActionGate(relayResp)
+	relayResp = e.enforceModelActionGate(task, relayResp)
 
 	relayResp = e.enforceIntakeCeiling(task, checkpoint, relayResp, phase)
 
@@ -1084,20 +1084,23 @@ func (e *Engine) blockedIntakeResponse(resp contracts.RelayTurnResponse, assessm
 	return resp
 }
 
-func (e *Engine) enforceModelActionGate(resp contracts.RelayTurnResponse) contracts.RelayTurnResponse {
+func (e *Engine) enforceModelActionGate(task runtime.TaskSnapshot, resp contracts.RelayTurnResponse) contracts.RelayTurnResponse {
 	verified := false
 	if resp.ExecutionResult != nil {
 		verified = resp.ExecutionResult.Verified
 	}
+	currentTurnSecrets := promptsecrecy.CurrentTurnSecretProvenanceForPrompt(task.Prompt)
 	decision := runtimegate.EvaluateModelAction(runtimegate.ModelActionInput{
-		ActionType:         resp.ActionType,
-		CompletionStatus:   resp.CompletionStatus,
-		ContinuationStatus: resp.ContinuationStatus,
-		Summary:            resp.Summary,
-		ReportText:         resp.ReportText,
-		ThoughtText:        resp.ThoughtText,
-		NextBlocker:        resp.NextBlocker,
-		ExecutionVerified:  verified,
+		ActionType:                  resp.ActionType,
+		CompletionStatus:            resp.CompletionStatus,
+		ContinuationStatus:          resp.ContinuationStatus,
+		Summary:                     resp.Summary,
+		ReportText:                  resp.ReportText,
+		ThoughtText:                 resp.ThoughtText,
+		NextBlocker:                 resp.NextBlocker,
+		ExecutionVerified:           verified,
+		CurrentTurnSecrets:          currentTurnSecrets.Secrets,
+		CurrentTurnSecretVisibleUse: currentTurnSecrets.VisibleUseRequested,
 	}, time.Now().UTC())
 	if decision.Outcome == runtimegate.OutcomeAllow {
 		return resp
@@ -2071,6 +2074,9 @@ func (e *Engine) assessPromptIntake(prompt string) *runtime.IntakeAssessment {
 		assessment.PrimaryClass = "MEMORY_READ_REQUEST"
 		assessment.ChosenClosedAction = "DECLINE_MEMORY_READ"
 		e.applyMemoryReadRules(assessment)
+	case looksLikeQuestion(trimmed) && !looksLikePermissionRequest(lower):
+		assessment.PrimaryClass = "QUESTION"
+		assessment.ChosenClosedAction = "ANSWER"
 	case looksLikePermissionRequest(lower):
 		assessment.PrimaryClass = "PERMISSION_REQUEST"
 		assessment.ChosenClosedAction = "REQUEST_PERMISSION"
@@ -2174,7 +2180,33 @@ func looksLikeClarification(prompt string) bool {
 }
 
 func looksLikePermissionRequest(prompt string) bool {
-	return strings.Contains(prompt, "permission") || strings.Contains(prompt, "approve ") || strings.Contains(prompt, "allowed to")
+	hasPermissionTarget := strings.Contains(prompt, "permission") ||
+		strings.Contains(prompt, " access") ||
+		strings.Contains(prompt, "settings") ||
+		strings.Contains(prompt, "notification") ||
+		strings.Contains(prompt, "camera") ||
+		strings.Contains(prompt, "microphone")
+	if !hasPermissionTarget {
+		return false
+	}
+
+	actionPhrases := []string{
+		"enable ",
+		"open settings",
+		"open the settings",
+		"grant ",
+		"turn on ",
+		"request ",
+		"ask for ",
+		"allow ",
+		"approve ",
+	}
+	for _, phrase := range actionPhrases {
+		if strings.Contains(prompt, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksLikeMemoryRead(prompt string) bool {

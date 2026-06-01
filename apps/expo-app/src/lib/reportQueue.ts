@@ -1,6 +1,6 @@
 import * as FileSystem from "expo-file-system/legacy";
 import * as SQLite from "expo-sqlite";
-import type { SettingsReportSubmitPayload } from "./reportBundle";
+import { hashSettingsReportBundle, redactSettingsReportPayload, type SettingsReportSubmitPayload } from "./reportBundle";
 import { submitSettingsReport, type SettingsReportProof } from "./bridge";
 import {
   sanitizeSettingsReportFailureClass,
@@ -71,18 +71,20 @@ export async function enqueueSettingsReport(input: {
 }): Promise<QueuedSettingsReport> {
   await initSettingsReportQueue();
   const directory = await ensureReportDirectory();
-  const bundleUri = `${directory}${input.payload.client_report_id}.json`;
-  const serialized = JSON.stringify(input.payload, null, 2);
+  const payload = redactSettingsReportPayload(input.payload);
+  payload.bundle_hash = hashSettingsReportBundle(payload.bundle);
+  const bundleUri = `${directory}${payload.client_report_id}.json`;
+  const serialized = JSON.stringify(payload, null, 2);
   await FileSystem.writeAsStringAsync(bundleUri, serialized, { encoding: FileSystem.EncodingType.UTF8 });
 
   const queued: QueuedSettingsReport = {
-    client_report_id: input.payload.client_report_id,
-    created_at: input.payload.created_at,
+    client_report_id: payload.client_report_id,
+    created_at: payload.created_at,
     status: "queued_offline",
     source: "settings_button",
     bundle_uri: bundleUri,
-    bundle_hash: input.payload.bundle_hash,
-    comment_present: input.payload.user_note.trim().length > 0,
+    bundle_hash: payload.bundle_hash,
+    comment_present: payload.user_note.trim().length > 0,
     last_error: sanitizeQueueError(input.lastError),
     failure_class: input.failureClass ? sanitizeSettingsReportFailureClass(input.failureClass) : null,
     sent_report_id: null,

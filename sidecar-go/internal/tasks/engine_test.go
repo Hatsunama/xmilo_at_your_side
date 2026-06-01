@@ -61,6 +61,57 @@ func TestStartTaskIntakeDominantInjectionRefuses(t *testing.T) {
 	}
 }
 
+func TestConversationPermissionPromptsRouteToAnswer(t *testing.T) {
+	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
+	tests := []string{
+		"Why do you need notification permission?",
+		"What happens if I deny microphone access?",
+		"Can you explain permission settings?",
+		"Am I allowed to discuss API keys?",
+		"Hypothetically, could Milo run in the background?",
+		"How does setup work?",
+		"Can we talk about the privacy policy?",
+		"What does camera permission mean?",
+		"Can I flirt with Milo?",
+		"Can I roleplay a fantasy scene with Milo?",
+	}
+
+	for _, prompt := range tests {
+		t.Run(prompt, func(t *testing.T) {
+			assessment := engine.assessPromptIntake(prompt)
+			if assessment.ChosenClosedAction == "REQUEST_PERMISSION" {
+				t.Fatalf("conversation prompt routed to REQUEST_PERMISSION: %#v", assessment)
+			}
+			if assessment.ChosenClosedAction != "ANSWER" {
+				t.Fatalf("expected ANSWER, got %#v", assessment)
+			}
+		})
+	}
+}
+
+func TestPermissionActionPromptsRouteToRequestPermission(t *testing.T) {
+	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
+	tests := []string{
+		"Enable notification access now.",
+		"Open settings so I can grant notification access.",
+		"Turn on microphone permission.",
+		"Grant camera access.",
+		"Request notification permission now.",
+	}
+
+	for _, prompt := range tests {
+		t.Run(prompt, func(t *testing.T) {
+			assessment := engine.assessPromptIntake(prompt)
+			if assessment.PrimaryClass != "PERMISSION_REQUEST" {
+				t.Fatalf("expected PERMISSION_REQUEST, got %#v", assessment)
+			}
+			if assessment.ChosenClosedAction != "REQUEST_PERMISSION" {
+				t.Fatalf("expected REQUEST_PERMISSION, got %#v", assessment)
+			}
+		})
+	}
+}
+
 func TestStagedContextForcesUntrustedExternalHandling(t *testing.T) {
 	engine, store := newTestEngine(t, "http://127.0.0.1:1")
 	stored, err := contextpolicy.Normalize(contextpolicy.SetRequest{
@@ -241,6 +292,29 @@ func TestRuntimeEventPayloadRedactsPromptSecrecyFields(t *testing.T) {
 		}
 	}
 	if !strings.Contains(out, "visible") {
+		t.Fatalf("safe event payload text missing: %s", out)
+	}
+}
+
+func TestRuntimeEventPayloadRedactsCurrentTurnSecretValues(t *testing.T) {
+	payload := sanitizeEventPayload(map[string]any{
+		"summary": "format config with api_key=sk-user-provided-value",
+		"headers": map[string]any{
+			"authorization": "Authorization: Bearer user-provided-token",
+		},
+		"safe": "config formatting requested",
+	})
+	rendered, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	out := string(rendered)
+	for _, forbidden := range []string{"api_key=sk-user-provided-value", "sk-user-provided-value", "Authorization: Bearer user-provided-token", "user-provided-token"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("event payload leaked current-turn secret material %q: %s", forbidden, out)
+		}
+	}
+	if !strings.Contains(out, "config formatting requested") {
 		t.Fatalf("safe event payload text missing: %s", out)
 	}
 }
@@ -863,6 +937,96 @@ func TestModelActionGateAllowsBenignModelResponse(t *testing.T) {
 	assertHistoryStatuses(t, store, []string{"completed"})
 	assertPendingEventCount(t, store, "task.completed", 1)
 	assertPendingEventCount(t, store, "task.blocked", 0)
+}
+
+func TestModelActionGateUsesCurrentTurnSecretProvenance(t *testing.T) {
+	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
+	task := runtime.TaskSnapshot{
+		TaskID: "task_current_turn_secret",
+		Prompt: "Format this config with api_key=sk-user-provided-value.",
+		IntakeAssessment: &runtime.IntakeAssessment{
+			PrimaryClass:       "TASK_REQUEST",
+			ChosenClosedAction: "START_TASK",
+		},
+	}
+	resp := completedPlannerResponse("config:\n  api_key=sk-user-provided-value")
+
+	got := engine.enforceModelActionGate(task, resp)
+	if got.CompletionStatus != "completed" || got.NextBlocker != "" {
+		t.Fatalf("expected matched current-turn secret output to pass model action gate, got %#v", got)
+	}
+}
+
+func TestModelActionGateCurrentTurnProvenanceIsAttemptLocal(t *testing.T) {
+	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
+	task := runtime.TaskSnapshot{
+		TaskID: "task_current_turn_secret_locality",
+		Prompt: "Format this config with api_key=sk-user-provided-value.",
+		IntakeAssessment: &runtime.IntakeAssessment{
+			PrimaryClass:       "TASK_REQUEST",
+			ChosenClosedAction: "START_TASK",
+		},
+	}
+	beforeTask, err := json.Marshal(task)
+	if err != nil {
+		t.Fatalf("marshal task before gate: %v", err)
+	}
+	resp := completedPlannerResponse("config:\n  api_key=sk-user-provided-value")
+
+	got := engine.enforceModelActionGate(task, resp)
+
+	afterTask, err := json.Marshal(task)
+	if err != nil {
+		t.Fatalf("marshal task after gate: %v", err)
+	}
+	if string(beforeTask) != string(afterTask) {
+		t.Fatalf("model action gate mutated task snapshot\nbefore: %s\nafter: %s", beforeTask, afterTask)
+	}
+	rendered, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal gated response: %v", err)
+	}
+	for _, forbidden := range []string{"sha256:", "current_turn", "CurrentTurnSecret", "Fingerprint", "Provenance"} {
+		if strings.Contains(string(rendered), forbidden) {
+			t.Fatalf("gated response exposed provenance field %q: %s", forbidden, rendered)
+		}
+	}
+}
+
+func TestModelActionGateBlocksUnmatchedCurrentTurnSecretOutput(t *testing.T) {
+	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
+	task := runtime.TaskSnapshot{
+		TaskID: "task_unmatched_secret",
+		Prompt: "Format this config with api_key=sk-user-provided-value.",
+		IntakeAssessment: &runtime.IntakeAssessment{
+			PrimaryClass:       "TASK_REQUEST",
+			ChosenClosedAction: "START_TASK",
+		},
+	}
+	resp := completedPlannerResponse("config:\n  api_key=sk-live-secret")
+
+	got := engine.enforceModelActionGate(task, resp)
+	if got.CompletionStatus != "blocked" || got.NextBlocker != "model_action_gate:"+string(runtimegate.ReasonCredentialSecretRisk) {
+		t.Fatalf("expected unmatched secret to block at model action gate, got %#v", got)
+	}
+}
+
+func TestModelActionGateBlocksMatchedSecretFakeSendClaim(t *testing.T) {
+	engine, _ := newTestEngine(t, "http://127.0.0.1:1")
+	task := runtime.TaskSnapshot{
+		TaskID: "task_fake_secret_send",
+		Prompt: "Draft a webhook API request using api_key=sk-user-provided-value.",
+		IntakeAssessment: &runtime.IntakeAssessment{
+			PrimaryClass:       "TASK_REQUEST",
+			ChosenClosedAction: "START_TASK",
+		},
+	}
+	resp := completedPlannerResponse("I sent your API key to the webhook. api_key=sk-user-provided-value")
+
+	got := engine.enforceModelActionGate(task, resp)
+	if got.CompletionStatus != "blocked" {
+		t.Fatalf("expected matched secret fake send claim to block, got %#v", got)
+	}
 }
 
 func TestModelActionGateBlocksUnsafeModelOutputs(t *testing.T) {

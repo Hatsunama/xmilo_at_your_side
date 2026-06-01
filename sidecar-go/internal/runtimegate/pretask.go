@@ -18,7 +18,7 @@ func EvaluatePreTask(prompt string, now time.Time) Decision {
 	}
 
 	lower := strings.ToLower(trimmed)
-	if assessment := promptsecrecy.Classify(trimmed); assessment.Forbidden() {
+	if assessment := promptsecrecy.ClassifyUserPrompt(trimmed); assessment.Forbidden() {
 		if assessment.SecretLike() {
 			return preTaskDecision(OutcomeBlock, ReasonCredentialSecretRisk, "Milo blocked a request to reveal secrets, provider configuration, or private runtime payloads.", now)
 		}
@@ -31,6 +31,14 @@ func EvaluatePreTask(prompt string, now time.Time) Decision {
 		return preTaskDecision(OutcomeBlock, ReasonPromptInjectionAuthoritySpoof, "Blocked authority-spoofing instructions before task start.", now)
 	case looksLikeCredentialOrSecretRequest(lower):
 		return preTaskDecision(OutcomeBlock, ReasonCredentialSecretRisk, "Blocked a request to reveal or extract secrets.", now)
+	case looksLikeExternalContentSecretTheft(lower):
+		return preTaskDecision(OutcomeBlock, ReasonCredentialSecretRisk, "Blocked external-content instructions to extract or redirect secrets.", now)
+	case looksLikeCovertSecretLeakage(lower):
+		return preTaskDecision(OutcomeBlock, ReasonCredentialSecretRisk, "Blocked covert or hidden secret movement.", now)
+	case looksLikeExplicitStolenSecretExploit(lower):
+		return preTaskDecision(OutcomeBlock, ReasonCredentialSecretRisk, "Blocked an explicitly unauthorized secret exploitation request.", now)
+	case looksLikeSecretMemoryPersistence(lower):
+		return preTaskDecision(OutcomeBlock, ReasonCredentialSecretRisk, "Blocked durable memory persistence of secret material.", now)
 	case looksLikeDestructiveLocalAction(lower):
 		return preTaskDecision(OutcomeBlock, ReasonDestructiveAction, "Blocked a destructive local action request before task start.", now)
 	case looksLikePrivacyOrSurveillanceAbuse(lower):
@@ -93,13 +101,31 @@ func looksLikeCredentialOrSecretRequest(prompt string) bool {
 		"show api keys",
 		"print api keys",
 		"dump api keys",
+		"show me my saved api key",
+		"show my saved api key",
+		"show saved api key",
+		"print saved api key",
+		"dump saved api key",
+		"show me my stored api key",
+		"show my stored api key",
+		"show stored api key",
+		"print stored api key",
+		"dump stored api key",
+		"extract saved api key",
+		"extract stored api key",
 		"show me tokens",
 		"print tokens",
 		"dump tokens",
 		"dump auth headers",
 		"show auth headers",
+		"print auth header from config",
+		"show auth header from config",
+		"dump auth header from config",
 		"reveal provider config",
 		"show provider config",
+		"print provider config",
+		"dump provider config",
+		"stored provider config",
 		"show hidden secrets",
 		"reveal hidden secrets",
 		"print secrets",
@@ -108,6 +134,125 @@ func looksLikeCredentialOrSecretRequest(prompt string) bool {
 		"steal credentials",
 		"steal passwords",
 		"dump passwords",
+	})
+}
+
+func looksLikeExternalContentSecretTheft(prompt string) bool {
+	if !mentionsSecretMaterial(prompt) {
+		return false
+	}
+	return containsAny(prompt, []string{
+		"external content says",
+		"retrieved document says",
+		"webpage says",
+		"website says",
+		"file says",
+		"imported doc says",
+		"tool output says",
+		"ocr says",
+	}) && containsAny(prompt, []string{
+		"send all",
+		"send every",
+		"redirect",
+		"upload",
+		"post",
+		"exfiltrate",
+		"leak",
+		"harvest",
+	})
+}
+
+func looksLikeCovertSecretLeakage(prompt string) bool {
+	if !mentionsSecretMaterial(prompt) {
+		return false
+	}
+	return containsAny(prompt, []string{
+		"hide",
+		"smuggle",
+		"covert",
+		"covertly",
+		"secretly",
+		"without telling",
+		"conceal",
+		"steganography",
+		"zero-width",
+		"zerowidth",
+		"hidden url",
+		"hidden query",
+		"hidden param",
+		"hidden filename",
+		"invisible",
+	})
+}
+
+func looksLikeExplicitStolenSecretExploit(prompt string) bool {
+	if !mentionsSecretMaterial(prompt) {
+		return false
+	}
+	if !containsAny(prompt, []string{
+		"stolen",
+		"unauthorized",
+		"not mine",
+		"someone else's",
+		"somebody else's",
+	}) {
+		return false
+	}
+	return containsAny(prompt, []string{
+		"use",
+		"exploit",
+		"abuse",
+		"send request",
+		"call the api",
+		"access",
+		"break into",
+		"drain",
+		"spend",
+	})
+}
+
+func looksLikeSecretMemoryPersistence(prompt string) bool {
+	if !mentionsSecretMaterial(prompt) {
+		return false
+	}
+	return containsAny(prompt, []string{
+		"remember",
+		"save to memory",
+		"store in memory",
+		"persist",
+		"durable memory",
+		"permanent memory",
+	}) && !containsAny(prompt, []string{
+		"do not remember",
+		"don't remember",
+		"do not save",
+		"don't save",
+		"what should i do",
+		"how do i rotate",
+		"how do i revoke",
+	})
+}
+
+func mentionsSecretMaterial(prompt string) bool {
+	return containsAny(prompt, []string{
+		"api key",
+		"api keys",
+		"api_key",
+		"auth header",
+		"auth headers",
+		"authorization header",
+		"authorization: bearer",
+		"bearer token",
+		"provider config",
+		"provider configuration",
+		"secret",
+		"secrets",
+		"token",
+		"tokens",
+		"password",
+		"passwords",
+		"private credential",
+		"x-api-key",
 	})
 }
 

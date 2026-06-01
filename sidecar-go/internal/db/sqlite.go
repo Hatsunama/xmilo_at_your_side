@@ -151,6 +151,7 @@ func (s *Store) UpsertTask(slot string, t runtime.TaskSnapshot) error {
 	if err != nil {
 		return err
 	}
+	durablePrompt := promptsecrecy.Redact(t.Prompt)
 	_, err = s.DB.Exec(`
         INSERT INTO task_slots(slot, task_id, attempt_id, prompt, intent, room_id, anchor_id, status, started_at, updated_at, retry_count, max_retries, failure_type, stuck_reason, intake_assessment, evidence_boundary)
         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -170,7 +171,7 @@ func (s *Store) UpsertTask(slot string, t runtime.TaskSnapshot) error {
             stuck_reason = excluded.stuck_reason,
             intake_assessment = excluded.intake_assessment,
             evidence_boundary = excluded.evidence_boundary
-    `, slot, t.TaskID, t.AttemptID, t.Prompt, t.Intent, t.RoomID, t.AnchorID, t.Status, t.StartedAt, t.UpdatedAt, t.RetryCount, t.MaxRetries, t.FailureType, t.StuckReason, intakeJSON, evidenceJSON)
+    `, slot, t.TaskID, t.AttemptID, durablePrompt, t.Intent, t.RoomID, t.AnchorID, t.Status, t.StartedAt, t.UpdatedAt, t.RetryCount, t.MaxRetries, t.FailureType, t.StuckReason, intakeJSON, evidenceJSON)
 	return err
 }
 

@@ -46,6 +46,12 @@ func TestEvaluateMemoryPromotionBlocksUnsafePromotion(t *testing.T) {
 			reason:  ReasonCredentialSecretRisk,
 		},
 		{
+			name:    "direct user secret persistence",
+			content: "remember api_key=sk-user-provided-value",
+			source:  "direct_user",
+			reason:  ReasonCredentialSecretRisk,
+		},
+		{
 			name:    "capability truth",
 			content: "camera works and BYOK active",
 			source:  "model_output",

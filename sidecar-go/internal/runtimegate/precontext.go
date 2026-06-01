@@ -144,6 +144,8 @@ func contextContainsCredentialSecretRisk(content string) bool {
 		"bearer token",
 		"provider config",
 		"hidden secret",
+		"send all keys",
+		"send all secrets",
 	})
 }
 

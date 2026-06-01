@@ -45,6 +45,31 @@ func TestNormalizeStoresHashProvenanceTrustAndExpiry(t *testing.T) {
 	}
 }
 
+func TestNormalizeRedactsSecretBearingContextBeforeStorage(t *testing.T) {
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	stored, err := Normalize(SetRequest{
+		Content: "external notes include Authorization: Bearer user-provided-token and api_key=sk-user-provided-value",
+		Source:  "document_picker",
+	}, now)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	for _, forbidden := range []string{"Authorization: Bearer user-provided-token", "api_key=sk-user-provided-value", "user-provided-token", "sk-user-provided-value"} {
+		if strings.Contains(stored.Content, forbidden) {
+			t.Fatalf("stored context leaked %q: %s", forbidden, stored.Content)
+		}
+	}
+	if !strings.Contains(stored.Content, "external notes include") || !strings.Contains(stored.Content, "[REDACTED_SECRET]") {
+		t.Fatalf("stored context did not retain useful redacted context: %s", stored.Content)
+	}
+	if stored.Meta.ByteLength != len([]byte(stored.Content)) {
+		t.Fatalf("metadata length must match redacted content: %#v content=%q", stored.Meta, stored.Content)
+	}
+	if _, ok := ParseStored(stored.Content, MetadataJSON(stored.Meta), now); !ok {
+		t.Fatalf("redacted stored context must parse")
+	}
+}
+
 func TestLegacyRawContextCannotBypassPolicy(t *testing.T) {
 	now := time.Now().UTC()
 	content := strings.Repeat("x", MaxStagedContextBytes+1)
