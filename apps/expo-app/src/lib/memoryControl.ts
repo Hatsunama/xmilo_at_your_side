@@ -169,6 +169,10 @@ export function visibleListActions(memory: VisibleMemoryProjection) {
   return actions;
 }
 
+export function memoryMutationConfirmed(response: MemoryActionResponse) {
+  return response.ok === true && typeof response.audit_id === "string" && response.audit_id.trim().length > 0;
+}
+
 function hasMemoryWarning(memory: VisibleMemoryProjection, fragment: string) {
   return memory.warnings?.some((warning) => warning.toLowerCase().includes(fragment)) === true;
 }

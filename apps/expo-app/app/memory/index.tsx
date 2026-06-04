@@ -7,6 +7,7 @@ import {
   createMemoryControlClient,
   hasMemoryAction,
   isProtectedMemoryProjection,
+  memoryMutationConfirmed,
   memoryMatchesFilter,
   memoryMatchesSearch,
   type MemoryCandidateProjection,
@@ -80,11 +81,13 @@ export default function MemoryScreen() {
         onPress: () => {
           void (async () => {
             try {
+              let result;
               if (action === "suppress") {
-                await memoryControl.suppressMemory(memory.memory_id, { reason: "user action from memory list" });
+                result = await memoryControl.suppressMemory(memory.memory_id, { reason: "user action from memory list" });
               } else {
-                await memoryControl.restoreMemory(memory.memory_id, { reason: "user action from memory list" });
+                result = await memoryControl.restoreMemory(memory.memory_id, { reason: "user action from memory list" });
               }
+              if (!memoryMutationConfirmed(result)) throw new Error(result.message || "Memory action was not confirmed by the local sidecar.");
               await loadMemory();
             } catch (actionError: any) {
               Alert.alert("Memory action failed", actionError?.message ?? "Could not update this memory.");
@@ -104,7 +107,8 @@ export default function MemoryScreen() {
         onPress: () => {
           void (async () => {
             try {
-              await memoryControl.rejectMemoryCandidate(candidate.candidate_id, { reason: "user rejected candidate from review" });
+              const result = await memoryControl.rejectMemoryCandidate(candidate.candidate_id, { reason: "user rejected candidate from review" });
+              if (!memoryMutationConfirmed(result)) throw new Error(result.message || "Candidate action was not confirmed by the local sidecar.");
               await loadMemory();
             } catch (actionError: any) {
               Alert.alert("Candidate action failed", actionError?.message ?? "Could not reject this candidate.");

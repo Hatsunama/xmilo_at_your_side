@@ -6,6 +6,7 @@ import {
   createMemoryControlClient,
   hasMemoryAction,
   isProtectedMemoryProjection,
+  memoryMutationConfirmed,
   type MemoryEvidenceProjection,
   type VisibleMemoryProjection
 } from "../../src/lib/memoryControl";
@@ -106,7 +107,7 @@ export default function MemoryDetailScreen() {
         summary: clean,
         content_excerpt: clean
       });
-      if (!result.ok || !result.audit_id) throw new Error(result.message || "Correction was not confirmed by the local sidecar.");
+      if (!memoryMutationConfirmed(result)) throw new Error(result.message || "Correction was not confirmed by the local sidecar.");
       setActionStatus("Correction saved.");
       setCorrectionOpen(false);
       setCorrectionSummary("");
@@ -222,7 +223,7 @@ export default function MemoryDetailScreen() {
             onPress={() =>
               confirmAction("Suppress", "Suppress this memory so it no longer drives retrieval?", async () => {
                 const result = await memoryControl.suppressMemory(memory.memory_id, { reason: "user suppressed from memory detail" });
-                if (!result.ok || !result.audit_id) throw new Error(result.message || "Suppress was not confirmed by the local sidecar.");
+                if (!memoryMutationConfirmed(result)) throw new Error(result.message || "Suppress was not confirmed by the local sidecar.");
                 setActionStatus("Memory suppressed.");
               })
             }
@@ -237,7 +238,7 @@ export default function MemoryDetailScreen() {
             onPress={() =>
               confirmAction("Restore", "Restore this memory to active use if the sidecar allows it?", async () => {
                 const result = await memoryControl.restoreMemory(memory.memory_id, { reason: "user restored from memory detail" });
-                if (!result.ok || !result.audit_id) throw new Error(result.message || "Restore was not confirmed by the local sidecar.");
+                if (!memoryMutationConfirmed(result)) throw new Error(result.message || "Restore was not confirmed by the local sidecar.");
                 setActionStatus("Memory restored.");
               })
             }
@@ -252,7 +253,7 @@ export default function MemoryDetailScreen() {
             onPress={() =>
               confirmAction("Mark stale", "Mark this memory stale so it no longer acts as current truth?", async () => {
                 const result = await memoryControl.markMemoryStale(memory.memory_id, { reason: "user marked stale from memory detail" });
-                if (!result.ok || !result.audit_id) throw new Error(result.message || "Mark stale was not confirmed by the local sidecar.");
+                if (!memoryMutationConfirmed(result)) throw new Error(result.message || "Mark stale was not confirmed by the local sidecar.");
                 setActionStatus("Memory marked stale.");
               })
             }
@@ -293,7 +294,7 @@ export default function MemoryDetailScreen() {
                   reason: "user removed from memory detail",
                   confirmation: true
                 });
-                if (!result.ok || !result.audit_id) throw new Error(result.message || "Remove was not confirmed by the local sidecar.");
+                if (!memoryMutationConfirmed(result)) throw new Error(result.message || "Remove was not confirmed by the local sidecar.");
                 setActionStatus("Memory removed from active memory.");
               }, true)
             }
