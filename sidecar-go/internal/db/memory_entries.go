@@ -408,6 +408,38 @@ func (s *Store) AppendMemoryEvidenceRef(ref MemoryEvidenceRef) error {
 	return err
 }
 
+func (s *Store) UpsertMemoryEvidenceRef(ref MemoryEvidenceRef) error {
+	normalized, err := normalizeMemoryEvidenceRef(ref)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`
+        INSERT INTO memory_evidence_refs(
+            evidence_id, memory_id, candidate_id, source_type, source_id, source_ref, evidence_kind, trust_tier,
+            authority_rank, timestamp, content_hash, redaction_status, display_allowed, promotion_allowed, created_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(evidence_id) DO UPDATE SET
+            memory_id = excluded.memory_id,
+            candidate_id = excluded.candidate_id,
+            source_type = excluded.source_type,
+            source_id = excluded.source_id,
+            source_ref = excluded.source_ref,
+            evidence_kind = excluded.evidence_kind,
+            trust_tier = excluded.trust_tier,
+            authority_rank = excluded.authority_rank,
+            timestamp = excluded.timestamp,
+            content_hash = excluded.content_hash,
+            redaction_status = excluded.redaction_status,
+            display_allowed = excluded.display_allowed,
+            promotion_allowed = excluded.promotion_allowed
+    `, normalized.EvidenceID, normalized.MemoryID, normalized.CandidateID, normalized.SourceType, normalized.SourceID,
+		normalized.SourceRef, normalized.EvidenceKind, normalized.TrustTier, normalized.AuthorityRank, normalized.Timestamp,
+		normalized.ContentHash, normalized.RedactionStatus, boolToInt(normalized.DisplayAllowed), boolToInt(normalized.PromotionAllowed),
+		normalized.CreatedAt)
+	return err
+}
+
 func (s *Store) AppendMemoryActionAudit(audit MemoryActionAudit) error {
 	normalized, err := normalizeMemoryActionAudit(audit)
 	if err != nil {
@@ -1023,7 +1055,7 @@ func isAllowedCandidateType(value string) bool {
 
 func isAllowedCandidateStatus(value string) bool {
 	switch value {
-	case "generated", "needs_review", "approved", "rejected", "quarantined", "suppressed", "promoted", "expired":
+	case "generated", "needs_review", "rejected", "quarantined", "suppressed":
 		return true
 	default:
 		return false

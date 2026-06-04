@@ -128,6 +128,30 @@ func TestMemoryCandidateStoresModelOutputInertly(t *testing.T) {
 	}
 }
 
+func TestMemoryCandidatePhase18FRejectsApprovalPromotionStatuses(t *testing.T) {
+	store := openMemoryEntryStore(t)
+	for _, status := range []string{"approved", "promoted", "expired"} {
+		candidate := testMemoryCandidate("candidate." + status)
+		candidate.Status = status
+		if err := store.UpsertMemoryCandidate(candidate); err == nil || err.Error() != "memory_candidate_invalid_status" {
+			t.Fatalf("expected %s candidate status to be rejected in Phase 18F, got %v", status, err)
+		}
+	}
+	for _, status := range []string{"generated", "needs_review", "quarantined", "suppressed", "rejected"} {
+		candidate := testMemoryCandidate("candidate." + status)
+		candidate.Status = status
+		if status == "quarantined" {
+			candidate.QuarantineStatus = "quarantined"
+		}
+		if status == "suppressed" {
+			candidate.SuppressionStatus = "suppressed"
+		}
+		if err := store.UpsertMemoryCandidate(candidate); err != nil {
+			t.Fatalf("expected %s candidate status to persist: %v", status, err)
+		}
+	}
+}
+
 func TestUserCorrectionSupersedeBoundaries(t *testing.T) {
 	store := openMemoryEntryStore(t)
 	preference := testMemoryEntry("pref.original", "durable_user_preference")
@@ -331,6 +355,42 @@ func TestMemoryEvidenceDisplayAndPromotionFlagsEnforced(t *testing.T) {
 	}
 	if strings.Contains(ref, "sk-user-provided-value") || strings.Contains(ref, "api_key=") {
 		t.Fatalf("stored evidence leaked raw secret: %s", ref)
+	}
+}
+
+func TestUpsertMemoryEvidenceRefIsIdempotentForCandidateGeneration(t *testing.T) {
+	store := openMemoryEntryStore(t)
+	ref := MemoryEvidenceRef{
+		EvidenceID:       "evidence.candidate.idempotent",
+		CandidateID:      "candidate.idempotent",
+		SourceType:       "archive",
+		SourceID:         "task.idempotent",
+		SourceRef:        "safe source",
+		EvidenceKind:     "archive_ref",
+		TrustTier:        5,
+		AuthorityRank:    "rank_600_archive",
+		ContentHash:      "hash.one",
+		RedactionStatus:  "safe",
+		DisplayAllowed:   true,
+		PromotionAllowed: false,
+	}
+	if err := store.UpsertMemoryEvidenceRef(ref); err != nil {
+		t.Fatalf("upsert evidence ref: %v", err)
+	}
+	ref.SourceRef = "updated safe source"
+	ref.ContentHash = "hash.two"
+	if err := store.UpsertMemoryEvidenceRef(ref); err != nil {
+		t.Fatalf("upsert evidence ref second time: %v", err)
+	}
+	if got := memoryQueryCount(t, store, `SELECT COUNT(*) FROM memory_evidence_refs WHERE evidence_id = 'evidence.candidate.idempotent'`); got != 1 {
+		t.Fatalf("expected idempotent evidence row, got %d", got)
+	}
+	var sourceRef, contentHash string
+	if err := store.DB.QueryRow(`SELECT source_ref, content_hash FROM memory_evidence_refs WHERE evidence_id = 'evidence.candidate.idempotent'`).Scan(&sourceRef, &contentHash); err != nil {
+		t.Fatalf("read evidence row: %v", err)
+	}
+	if sourceRef != "updated safe source" || contentHash != "hash.two" {
+		t.Fatalf("evidence ref was not updated idempotently: source=%q hash=%q", sourceRef, contentHash)
 	}
 }
 

@@ -3,11 +3,13 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"xmilo/sidecar-go/internal/db"
+	"xmilo/sidecar-go/internal/memorycandidate"
 	"xmilo/sidecar-go/internal/runtime"
 	"xmilo/sidecar-go/internal/ws"
 )
@@ -38,6 +40,9 @@ func TestSchedulerDefersNightlyWhenActiveTaskExists(t *testing.T) {
 	assertMaintenanceEventCount(t, store, "maintenance.nightly_deferred", 1)
 	assertMaintenanceEventCount(t, store, "archive.record_created", 0)
 	assertMaintenanceEventCount(t, store, "maintenance.nightly_completed", 0)
+	if got := maintenanceQueryCount(t, store, `SELECT COUNT(*) FROM memory_candidates`); got != 0 {
+		t.Fatalf("active-task deferral generated candidates: %d", got)
+	}
 	loaded, err := store.GetTask("active")
 	if err != nil {
 		t.Fatalf("get active task: %v", err)
@@ -67,6 +72,32 @@ func TestSchedulerNightlyCreatesSummaryOnlyLedger(t *testing.T) {
 	assertMaintenanceEventCount(t, store, "maintenance.nightly_started", 1)
 	assertMaintenanceEventCount(t, store, "archive.record_created", 1)
 	assertMaintenanceEventCount(t, store, "maintenance.nightly_completed", 1)
+}
+
+func TestSchedulerNightlyGeneratesInertCandidatesAfterActiveTaskDeferralPasses(t *testing.T) {
+	store := openMaintenanceStore(t)
+	archiveDate := "2026-06-03"
+	if _, err := store.DB.Exec(`INSERT INTO task_history(task_id, prompt, status, summary, created_at) VALUES(?, ?, 'completed', ?, ?)`,
+		"task.preference", "remember quiet summaries", "User prefers quiet summaries.", "2026-06-03T15:00:00Z"); err != nil {
+		t.Fatalf("seed task history: %v", err)
+	}
+	scheduler := testScheduler(store)
+
+	scheduler.runNightly(context.Background(), archiveDate, time.Date(2026, 6, 4, 3, 0, 0, 0, time.Local), "scheduled")
+
+	run := requireConsolidationRun(t, store, consolidationRunID(archiveDate))
+	if run.Status != db.ConsolidationRunCompletedSummary || run.CandidateCount != 1 || run.QuarantinedCount != 0 || run.SuppressedCount != 0 {
+		t.Fatalf("expected completed run with one inert candidate, got %#v", run)
+	}
+	if got := maintenanceQueryCount(t, store, `SELECT COUNT(*) FROM memory_candidates WHERE consolidation_run_id = 'nightly_consolidation_2026-06-03'`); got != 1 {
+		t.Fatalf("expected one memory candidate, got %d", got)
+	}
+	if got := maintenanceQueryCount(t, store, `SELECT COUNT(*) FROM memory_entries WHERE memory_id LIKE 'candidate.%'`); got != 0 {
+		t.Fatalf("candidate generation wrote active memory: %d", got)
+	}
+	if got := maintenanceQueryCount(t, store, `SELECT COUNT(*) FROM retrieval_records WHERE source_id LIKE 'candidate.%'`); got != 0 {
+		t.Fatalf("candidate generation wrote retrieval rows: %d", got)
+	}
 }
 
 func TestSchedulerDoesNotDeleteOrMutateActiveTaskOrRuntimeTruth(t *testing.T) {
@@ -130,6 +161,27 @@ func TestSchedulerFailureRecordsFailedSafeWithoutFakeCompletion(t *testing.T) {
 	assertMaintenanceEventCount(t, store, "runtime.error", 1)
 }
 
+func TestSchedulerCandidateGenerationFailureRecordsFailedSafeWithoutFakeCompletion(t *testing.T) {
+	store := openMaintenanceStore(t)
+	scheduler := testScheduler(store)
+	scheduler.candidateFn = func(context.Context, *db.Store, memorycandidate.Options) (memorycandidate.Result, error) {
+		return memorycandidate.Result{}, errors.New("candidate generator unavailable")
+	}
+	archiveDate := "2026-06-03"
+
+	scheduler.runNightly(context.Background(), archiveDate, time.Date(2026, 6, 4, 3, 0, 0, 0, time.Local), "scheduled")
+
+	run := requireConsolidationRun(t, store, consolidationRunID(archiveDate))
+	if run.Status != db.ConsolidationRunFailedSafe || run.ErrorCode != "candidate_generation_failed" {
+		t.Fatalf("expected failed_safe candidate generation failure, got %#v", run)
+	}
+	if run.CandidateCount != 0 || run.QuarantinedCount != 0 || run.SuppressedCount != 0 {
+		t.Fatalf("failed candidate generation recorded candidate counts: %#v", run)
+	}
+	assertMaintenanceEventCount(t, store, "maintenance.nightly_completed", 0)
+	assertMaintenanceEventCount(t, store, "runtime.error", 1)
+}
+
 func testScheduler(store *db.Store) *Scheduler {
 	return &Scheduler{
 		store: store,
@@ -138,6 +190,15 @@ func testScheduler(store *db.Store) *Scheduler {
 			return releaseCheck{Status: "ok", TagName: "v-test", URL: "https://example.test/release"}
 		},
 	}
+}
+
+func maintenanceQueryCount(t *testing.T, store *db.Store, query string) int {
+	t.Helper()
+	var count int
+	if err := store.DB.QueryRow(query).Scan(&count); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	return count
 }
 
 func openMaintenanceStore(t *testing.T) *db.Store {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xmilo/sidecar-go/internal/db"
+	"xmilo/sidecar-go/internal/memorycandidate"
 	"xmilo/sidecar-go/internal/netutil"
 	"xmilo/sidecar-go/internal/ws"
 )
@@ -23,6 +24,7 @@ type Scheduler struct {
 	store          *db.Store
 	hub            *ws.Hub
 	releaseCheckFn func(context.Context) releaseCheck
+	candidateFn    func(context.Context, *db.Store, memorycandidate.Options) (memorycandidate.Result, error)
 	mu             sync.Mutex
 }
 
@@ -146,6 +148,12 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		"ritual":       "nightly_maintenance",
 	})
 
+	candidateResult, err := s.generateCandidates(ctx, runID, archiveDate, startedAt)
+	if err != nil {
+		s.recordFailed(runID, archiveDate, trigger, startedAt, taskCount, "candidate_generation_failed", err)
+		return
+	}
+
 	if err := s.store.SetRuntimeConfig("nightly_maintenance_last_completed_for", archiveDate); err != nil {
 		s.recordFailed(runID, archiveDate, trigger, startedAt, taskCount, "completion_config_failed", err)
 		return
@@ -174,9 +182,9 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		InputTaskHistoryCount: taskCount,
 		ArchiveRecordID:       recordID,
 		SummaryRecordCount:    1,
-		CandidateCount:        0,
-		QuarantinedCount:      0,
-		SuppressedCount:       0,
+		CandidateCount:        candidateResult.CandidateCount,
+		QuarantinedCount:      candidateResult.QuarantinedCount,
+		SuppressedCount:       candidateResult.SuppressedCount,
 		UpdatedAt:             completedAt.Format(time.RFC3339),
 	}); err != nil {
 		s.emit("runtime.error", map[string]any{
@@ -190,6 +198,9 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		"trigger":             trigger,
 		"completed_at":        completedAt.Format(time.RFC3339),
 		"task_count":          taskCount,
+		"candidate_count":     candidateResult.CandidateCount,
+		"quarantined_count":   candidateResult.QuarantinedCount,
+		"suppressed_count":    candidateResult.SuppressedCount,
 		"latest_release_tag":  update.TagName,
 		"latest_release_url":  update.URL,
 		"update_check_status": update.Status,
@@ -199,6 +210,18 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		"message":             "Nightly upkeep is complete. Archive sealed and update check finished.",
 	})
 	s.signalCue("Milo has finished his nightly upkeep.")
+}
+
+func (s *Scheduler) generateCandidates(ctx context.Context, runID, archiveDate string, now time.Time) (memorycandidate.Result, error) {
+	fn := s.candidateFn
+	if fn == nil {
+		fn = memorycandidate.Generate
+	}
+	return fn(ctx, s.store, memorycandidate.Options{
+		RunID:       runID,
+		ArchiveDate: archiveDate,
+		Now:         now,
+	})
 }
 
 func (s *Scheduler) latestRelease(ctx context.Context) releaseCheck {

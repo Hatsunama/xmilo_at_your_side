@@ -372,7 +372,8 @@ func TestRuntimeContractManifestContainsPhase18HandoffSections(t *testing.T) {
 	)
 	requireStringSet(t, "deferred_non_goals", manifest.DeferredNonGoals,
 		"no app UI implementation in Mind lane",
-		"no candidate extraction in this step",
+		"no candidate approval or promotion in this step",
+		"no LLM candidate reflection in this step",
 		"no LLM reflection in this step",
 		"no direct memory promotion in this step",
 		"no rollback UI in this step",
@@ -432,9 +433,13 @@ func TestBoundedConsolidationContractPresent(t *testing.T) {
 	)
 	requireStringSet(t, "bounded_consolidation_contract.output_classes", manifest.BoundedConsolidationContract.OutputClasses,
 		"archive_summary",
+		"inert_memory_candidate",
+		"inert_memory_finding",
 	)
 	requireStringSet(t, "bounded_consolidation_contract.current_summary_only_rules", manifest.BoundedConsolidationContract.CurrentSummaryOnlyRules,
-		"candidate_count must remain 0 in the current approved path",
+		"candidate_count may be nonzero only for inert Phase 18F-V1 candidates",
+		"quarantined_count may be nonzero only for inert Phase 18F-V1 quarantine candidates",
+		"suppressed_count may be nonzero only for inert Phase 18F-V1 suppressed candidates",
 		"archive-derived claims must not become current runtime truth",
 	)
 	requireStringSet(t, "bounded_consolidation_contract.non_mutation_rules", manifest.BoundedConsolidationContract.NonMutationRules,
@@ -451,7 +456,6 @@ func TestBoundedConsolidationContractPresent(t *testing.T) {
 		"App Build must not invent candidate, promotion, quarantine, suppression, or rollback semantics",
 	)
 	requireStringSet(t, "bounded_consolidation_contract.explicit_deferrals", manifest.BoundedConsolidationContract.ExplicitDeferrals,
-		"candidate extraction",
 		"LLM reflection",
 		"memory promotion",
 		"rollback UI",
@@ -685,6 +689,81 @@ func TestPhase18CV1CandidatePipelineContractPresent(t *testing.T) {
 		"phase18c_v1_candidate_pipeline_contract",
 		"phase18c_v1_implementation_sequence",
 	)
+}
+
+func TestPhase18FV1CandidateOnlyNightlyLearningContractPresent(t *testing.T) {
+	manifestPath := filepath.Join("..", "..", "..", "shared", "contracts", "runtime_contracts.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read runtime contract manifest: %v", err)
+	}
+	var manifest struct {
+		BoundedConsolidation struct {
+			CurrentSummaryOnlyRules []string `json:"current_summary_only_rules"`
+			ExplicitDeferrals       []string `json:"explicit_deferrals"`
+		} `json:"bounded_consolidation_contract"`
+		Phase18F struct {
+			Scope                         string   `json:"scope"`
+			GenerationMode                string   `json:"generation_mode"`
+			CandidateTypes                []string `json:"candidate_types"`
+			AllowedStatusesThisPhase      []string `json:"allowed_statuses_this_phase"`
+			ForbiddenStatusesThisPhase    []string `json:"forbidden_statuses_this_phase"`
+			ForbiddenActionsThisPhase     []string `json:"forbidden_actions_this_phase"`
+			AllowedSources                []string `json:"allowed_sources"`
+			ForbiddenSources              []string `json:"forbidden_sources"`
+			EvidenceProvenanceRequirement []string `json:"evidence_provenance_requirements"`
+			IdempotencyRequirements       []string `json:"idempotency_requirements"`
+			SchedulerRequirements         []string `json:"scheduler_requirements"`
+			StableSafetyGuarantees        []string `json:"stable_safety_guarantees"`
+			AppBoundary                   string   `json:"app_boundary"`
+		} `json:"phase18f_v1_candidate_only_nightly_learning_contract"`
+		ContractRequiredSections []string `json:"contract_required_sections"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode runtime contract manifest: %v", err)
+	}
+	requireNonEmpty(t, "phase18f_v1_candidate_only_nightly_learning_contract.scope", manifest.Phase18F.Scope)
+	if manifest.Phase18F.GenerationMode != "deterministic_local_only" {
+		t.Fatalf("phase18f generation mode = %q, want deterministic_local_only", manifest.Phase18F.GenerationMode)
+	}
+	requireStringSet(t, "phase18f.candidate_types", manifest.Phase18F.CandidateTypes,
+		"memory_candidate", "procedure_candidate", "retrieval_anchor_candidate", "contradiction_staleness_finding", "improvement_proposal")
+	requireExactStringOrder(t, "phase18f.allowed_statuses_this_phase", manifest.Phase18F.AllowedStatusesThisPhase,
+		"generated", "needs_review", "quarantined", "suppressed", "rejected")
+	requireStringSet(t, "phase18f.forbidden_statuses_this_phase", manifest.Phase18F.ForbiddenStatusesThisPhase,
+		"approved", "promoted")
+	requireStringSet(t, "phase18f.forbidden_actions_this_phase", manifest.Phase18F.ForbiddenActionsThisPhase,
+		"approve_candidate", "promote_candidate", "write_active_memory", "write_retrieval_record", "mutate_runtime_truth",
+		"mutate_task_truth", "mutate_canon", "mutate_policy", "mutate_safety", "mutate_provider_config", "activate_skill", "change_app_state")
+	requireStringSet(t, "phase18f.allowed_sources", manifest.Phase18F.AllowedSources,
+		"redacted completed task archive records", "safe approved summaries", "safe user-visible memory projections", "typed retrieval pack warnings", "safe evidence refs")
+	requireStringSet(t, "phase18f.forbidden_sources", manifest.Phase18F.ForbiddenSources,
+		"raw secrets", "unredacted private payloads", "external content as instruction", "raw model output as authority", "provider config secrets")
+	requireStringSet(t, "phase18f.evidence_provenance_requirements", manifest.Phase18F.EvidenceProvenanceRequirement,
+		"candidate_id is deterministic from safe source and evidence identity", "candidate links to consolidation_runs.run_id when available",
+		"promotion_gate_result must state approval and promotion are deferred")
+	requireStringSet(t, "phase18f.idempotency_requirements", manifest.Phase18F.IdempotencyRequirements,
+		"rerunning the same nightly input must not duplicate candidate rows", "rejected candidates must not be resurrected by rerun")
+	requireStringSet(t, "phase18f.scheduler_requirements", manifest.Phase18F.SchedulerRequirements,
+		"active task deferral runs before candidate generation", "candidate generation must not run while an active task exists",
+		"successful runs ledger candidate_count, quarantined_count, and suppressed_count truthfully")
+	requireStringSet(t, "phase18f.stable_safety_guarantees", manifest.Phase18F.StableSafetyGuarantees,
+		"no LLM reflection in Phase 18F-V1", "no candidate approval or promotion in Phase 18F-V1", "no active memory writes",
+		"no retrieval record writes", "no vector retrieval or embeddings", "model output is never authority")
+	if !strings.Contains(manifest.Phase18F.AppBoundary, "No App UI changes") || !strings.Contains(manifest.Phase18F.AppBoundary, "list/reject generic candidates only") {
+		t.Fatalf("phase18f app boundary drifted: %q", manifest.Phase18F.AppBoundary)
+	}
+	requireStringSet(t, "bounded_consolidation.current_summary_only_rules", manifest.BoundedConsolidation.CurrentSummaryOnlyRules,
+		"candidate_count may be nonzero only for inert Phase 18F-V1 candidates",
+		"quarantined_count may be nonzero only for inert Phase 18F-V1 quarantine candidates",
+		"suppressed_count may be nonzero only for inert Phase 18F-V1 suppressed candidates")
+	for _, deferred := range manifest.BoundedConsolidation.ExplicitDeferrals {
+		if deferred == "candidate extraction" {
+			t.Fatalf("bounded consolidation still freezes candidate extraction after Phase 18F approval: %#v", manifest.BoundedConsolidation.ExplicitDeferrals)
+		}
+	}
+	requireStringSet(t, "contract_required_sections", manifest.ContractRequiredSections,
+		"phase18f_v1_candidate_only_nightly_learning_contract")
 }
 
 func TestPhase18E2AVisibleMemoryAPIContractPresent(t *testing.T) {

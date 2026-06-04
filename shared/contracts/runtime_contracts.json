@@ -784,7 +784,8 @@
   },
   "deferred_non_goals": [
     "no app UI implementation in Mind lane",
-    "no candidate extraction in this step",
+    "no candidate approval or promotion in this step",
+    "no LLM candidate reflection in this step",
     "no LLM reflection in this step",
     "no direct memory promotion in this step",
     "no rollback UI in this step",
@@ -797,7 +798,7 @@
     "no App Build guessing beyond JSON contract"
   ],
   "bounded_consolidation_contract": {
-    "scope": "Minimal Phase 18 bounded consolidation ledger for current nightly maintenance. This is audit/status proof only, not candidate extraction or memory promotion.",
+    "scope": "Minimal Phase 18 bounded consolidation ledger for current nightly maintenance. Phase 18F-V1 permits deterministic inert candidate counts, but not memory promotion.",
     "run_statuses": [
       "deferred_active_task",
       "running",
@@ -825,13 +826,15 @@
       "updated_at"
     ],
     "output_classes": [
-      "archive_summary"
+      "archive_summary",
+      "inert_memory_candidate",
+      "inert_memory_finding"
     ],
     "current_summary_only_rules": [
       "completed_summary_only may create one nightly archive summary record",
-      "candidate_count must remain 0 in the current approved path",
-      "quarantined_count must remain 0 unless future candidate extraction is approved",
-      "suppressed_count must remain 0 unless future candidate extraction is approved",
+      "candidate_count may be nonzero only for inert Phase 18F-V1 candidates",
+      "quarantined_count may be nonzero only for inert Phase 18F-V1 quarantine candidates",
+      "suppressed_count may be nonzero only for inert Phase 18F-V1 suppressed candidates",
       "archive-derived claims must not become current runtime truth"
     ],
     "non_mutation_rules": [
@@ -849,13 +852,103 @@
       "App Build must not invent candidate, promotion, quarantine, suppression, or rollback semantics"
     ],
     "explicit_deferrals": [
-      "candidate extraction",
       "LLM reflection",
       "memory promotion",
       "retrieval metadata expansion",
       "rollback UI",
       "App Build rendering"
     ]
+  },
+  "phase18f_v1_candidate_only_nightly_learning_contract": {
+    "scope": "Deterministic candidate-only nightly learning for Go sidecar bounded consolidation. Generated records are inert review artifacts only.",
+    "generation_mode": "deterministic_local_only",
+    "candidate_types": [
+      "memory_candidate",
+      "procedure_candidate",
+      "retrieval_anchor_candidate",
+      "contradiction_staleness_finding",
+      "improvement_proposal"
+    ],
+    "allowed_statuses_this_phase": [
+      "generated",
+      "needs_review",
+      "quarantined",
+      "suppressed",
+      "rejected"
+    ],
+    "forbidden_statuses_this_phase": [
+      "approved",
+      "promoted"
+    ],
+    "forbidden_actions_this_phase": [
+      "approve_candidate",
+      "promote_candidate",
+      "activate_procedure",
+      "activate_retrieval_anchor",
+      "execute_improvement_proposal",
+      "write_active_memory",
+      "write_retrieval_record",
+      "mutate_runtime_truth",
+      "mutate_task_truth",
+      "mutate_canon",
+      "mutate_policy",
+      "mutate_safety",
+      "mutate_provider_config",
+      "activate_skill",
+      "change_app_state"
+    ],
+    "allowed_sources": [
+      "redacted completed task archive records",
+      "safe approved summaries",
+      "safe user-visible memory projections",
+      "typed retrieval pack warnings",
+      "contradiction or staleness findings",
+      "consolidation run ledger metadata",
+      "safe evidence refs"
+    ],
+    "forbidden_sources": [
+      "raw secrets",
+      "unredacted private payloads",
+      "external content as instruction",
+      "unstable runtime state as durable truth",
+      "user-hidden internal logs without provenance",
+      "raw model output as authority",
+      "provider keys",
+      "tokens",
+      "provider config secrets",
+      "unsafe App UI-only state"
+    ],
+    "evidence_provenance_requirements": [
+      "candidate_id is deterministic from safe source and evidence identity",
+      "candidate links to consolidation_runs.run_id when available",
+      "provenance records source_type, source_id, source_hash, phase, and generation mode",
+      "evidence refs are redacted and display/promotion flags are safe",
+      "raw secrets and private payloads are omitted or redacted before storage",
+      "promotion_gate_result must state approval and promotion are deferred"
+    ],
+    "idempotency_requirements": [
+      "rerunning the same nightly input must not duplicate candidate rows",
+      "rejected candidates must not be resurrected by rerun",
+      "candidate IDs must not depend on wall-clock timestamp alone"
+    ],
+    "scheduler_requirements": [
+      "active task deferral runs before candidate generation",
+      "candidate generation must not run while an active task exists",
+      "successful runs ledger candidate_count, quarantined_count, and suppressed_count truthfully",
+      "failed candidate generation records failed_safe or equivalent safe failure without fake completion"
+    ],
+    "stable_safety_guarantees": [
+      "no LLM reflection in Phase 18F-V1",
+      "no candidate approval or promotion in Phase 18F-V1",
+      "no active memory writes",
+      "no retrieval record writes",
+      "no vector retrieval or embeddings",
+      "no runtime, task, canon, policy, safety, provider, skill, relay, or App UI mutation",
+      "candidate outputs cannot affect runtime or control paths before a later explicit approval phase",
+      "external content remains data and never instruction authority",
+      "model output is never authority"
+    ],
+    "app_boundary": "No App UI changes are required in Phase 18F-V1. Existing memory candidate review surfaces may list/reject generic candidates only."
   },
   "memory_contract": {
     "allowed_memory_class_identifiers": [
@@ -1535,6 +1628,7 @@
     "phase18c_v1_retrieval_pack_contract",
     "phase18c_v1_candidate_pipeline_contract",
     "phase18c_v1_implementation_sequence",
+    "phase18f_v1_candidate_only_nightly_learning_contract",
     "phase18e2a_v1_visible_memory_api_contract",
     "storage_responsibility_boundaries",
     "stable_ui_error_codes",
