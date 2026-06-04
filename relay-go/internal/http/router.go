@@ -88,7 +88,6 @@ func NewApp(ctx context.Context, cfg config.Config) (*App, error) {
 func (a *App) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// Core
 	mux.HandleFunc("/health", a.handleHealth)
 
 	// Session bootstrap (no auth — first call from fresh install)
@@ -142,8 +141,6 @@ func (a *App) Start(ctx context.Context) error {
 	return server.ListenAndServe()
 }
 
-// ─── Health ───────────────────────────────────────────────────────────────────
-
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
@@ -151,8 +148,6 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"uptime_sec": int64(time.Since(a.started).Seconds()),
 	})
 }
-
-// ─── Session bootstrap ────────────────────────────────────────────────────────
 
 func (a *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -175,8 +170,6 @@ func (a *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// ─── Auth: register / verify / invite ─────────────────────────────────────────
-
 // POST /auth/register  {"email":"...", "device_user_id":"du_..."}
 // Sends a verification email. No-op if the same email+device already has a pending token.
 func (a *App) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +189,6 @@ func (a *App) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email and device_user_id required"})
 		return
 	}
-	// Normalise
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	token := uuid.NewString()
@@ -314,8 +306,6 @@ func (a *App) handleAuthInvite(w http.ResponseWriter, r *http.Request) {
 		"subscription_allowed":   a.cfg.SubscriptionAllowed(),
 	})
 }
-
-// ─── Auth refresh ─────────────────────────────────────────────────────────────
 
 func (a *App) handleAuthRefresh(w http.ResponseWriter, r *http.Request, claims map[string]any) {
 	deviceUserID, _ := claims["sub"].(string)
@@ -497,8 +487,6 @@ func (a *App) handleAccountDelete(w http.ResponseWriter, r *http.Request, claims
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// ─── LLM turn ─────────────────────────────────────────────────────────────────
-
 func (a *App) handleTurn(w http.ResponseWriter, r *http.Request, claims map[string]any) {
 	entitled, _ := claims["entitled"].(bool)
 	if !entitled {
@@ -523,8 +511,6 @@ func (a *App) handleTurn(w http.ResponseWriter, r *http.Request, claims map[stri
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
-
-// ─── Error report ─────────────────────────────────────────────────────────────
 
 // POST /error/report  {"device_user_id":"...", "error_type":"...", "message":"...", "context":{}}
 // Best-effort: auth not required so errors can be reported even before/after session.
@@ -987,8 +973,6 @@ func isBlockedSettingsReportKey(key string) bool {
 	}
 }
 
-// ─── RevenueCat webhook ───────────────────────────────────────────────────────
-
 // POST /billing/revenuecat
 // RevenueCat sends events here. Auth via Authorization header matching REVENUECAT_WEBHOOK_AUTH.
 func (a *App) handleRevenueCat(w http.ResponseWriter, r *http.Request) {
@@ -1025,8 +1009,6 @@ func (a *App) handleRevenueCat(w http.ResponseWriter, r *http.Request) {
 	_ = a.entitlements.ProcessRevenueCatEvent(r.Context(), eventType, appUserID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
-
-// ─── Admin ────────────────────────────────────────────────────────────────────
 
 // GET /admin does not serve a private admin console from the public relay.
 func (a *App) handleAdminPage(w http.ResponseWriter, r *http.Request) {
@@ -1664,8 +1646,6 @@ func limitString(value string, max int) string {
 	return value[:max]
 }
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
-
 func (a *App) authRequired(next func(http.ResponseWriter, *http.Request, map[string]any)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
@@ -1696,8 +1676,6 @@ func (a *App) adminRequired(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func decodeJSON(r *http.Request, out interface{}) error {
 	defer r.Body.Close()

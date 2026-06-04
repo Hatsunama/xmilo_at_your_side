@@ -91,3 +91,6 @@ apps/expo-app/android/app/src/main/jniLibs/**/*.so
 docs/authority/xMilo_v1/
 
 artifacts/
+
+# Local-only public site upload mirror
+/apps/public-site/

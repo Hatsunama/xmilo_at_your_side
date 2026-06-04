@@ -227,3 +227,34 @@ CREATE TABLE IF NOT EXISTS durable_poisoning_records (
 
 CREATE INDEX IF NOT EXISTS idx_durable_poisoning_records_kind ON durable_poisoning_records(record_kind, source_type, quarantine_status);
 `
+
+const migration009 = `
+CREATE TABLE IF NOT EXISTS consolidation_runs (
+    run_id TEXT PRIMARY KEY,
+    archive_date TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    input_task_history_count INTEGER NOT NULL DEFAULT 0,
+    archive_record_id TEXT NOT NULL DEFAULT '',
+    summary_record_count INTEGER NOT NULL DEFAULT 0,
+    candidate_count INTEGER NOT NULL DEFAULT 0,
+    quarantined_count INTEGER NOT NULL DEFAULT 0,
+    suppressed_count INTEGER NOT NULL DEFAULT 0,
+    active_task_id TEXT NOT NULL DEFAULT '',
+    deferred_reason TEXT NOT NULL DEFAULT '',
+    error_code TEXT NOT NULL DEFAULT '',
+    error_summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (status IN ('deferred_active_task', 'running', 'completed_summary_only', 'failed_safe')),
+    CHECK (input_task_history_count >= 0),
+    CHECK (summary_record_count >= 0),
+    CHECK (candidate_count >= 0),
+    CHECK (quarantined_count >= 0),
+    CHECK (suppressed_count >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_consolidation_runs_archive_date ON consolidation_runs(archive_date, status);
+`

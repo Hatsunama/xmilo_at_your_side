@@ -4,6 +4,861 @@
     "task_id",
     "attempt_id"
   ],
+  "phase18_contract_handoff": {
+    "contract_artifact": "shared/contracts/runtime_contracts.json",
+    "human_packet_artifact": "none; production repo uses this JSON contract only",
+    "app_build_rule": "App Build may render approved runtime state from this contract, but must not invent route semantics, status meanings, memory classes, storage ownership, proof display meanings, or fallback error meanings.",
+    "do_not_guess": [
+      "http_route_methods",
+      "auth_boundaries",
+      "event_payload_fields",
+      "task_status_semantics",
+      "resume_checkpoint_semantics",
+      "completion_proof_semantics",
+      "memory_class_identifiers",
+      "storage_responsibility_boundaries",
+      "ui_error_codes"
+    ]
+  },
+  "http_route_matrix": [
+    {
+      "component": "sidecar",
+      "route": "/health",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "HealthResponse: ok, service, version, uptime_sec",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Health proves the local sidecar HTTP surface answered; it does not prove bridge, provider, task, or permission readiness."
+    },
+    {
+      "component": "sidecar",
+      "route": "/ready",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "ReadyResponse: ok, runtime_host, runtime_id, db_ready, relay_configured, llm_mode, entitlement/BYOK readiness booleans",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "runtime_not_ready",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Ready is runtime state only; app bridge proof and downstream capability proof remain separate."
+    },
+    {
+      "component": "sidecar",
+      "route": "/bootstrap",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "bootstrap/runtime configuration projection safe for app initialization",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "bootstrap_unavailable",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Bootstrap data initializes app-side rendering; it is not a permission or setup completion proof."
+    },
+    {
+      "component": "sidecar",
+      "route": "/task/start",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "JSON object with prompt and optional room/context fields",
+      "response_schema_summary": "TaskSnapshot and immediate task/runtime state",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "task_already_active",
+        "task_prompt_empty",
+        "task_intake_blocked",
+        "task_start_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Accepted/started means a task attempt exists; it does not mean the requested real-world action completed."
+    },
+    {
+      "component": "sidecar",
+      "route": "/command/submit",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "JSON command prompt from app chat/control surface",
+      "response_schema_summary": "task_id, attempt_id, immediate_state",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "command_empty",
+        "task_already_active",
+        "command_submit_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Submit response is queue/intake truth only unless paired with later task/evidence events."
+    },
+    {
+      "component": "sidecar",
+      "route": "/task/current",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "current TaskSnapshot or null",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "task_current_unavailable",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Current task prompt fields are app-safe projections; do not treat absent current task as proof a prior action succeeded."
+    },
+    {
+      "component": "sidecar",
+      "route": "/task/interrupt",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "optional task_id/attempt_id and reason",
+      "response_schema_summary": "interruption result with task identity and state",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "task_not_active",
+        "task_interrupt_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Interrupt/cancel changes task control state; it is not a completed user request."
+    },
+    {
+      "component": "sidecar",
+      "route": "/task/cancel",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "optional task_id/attempt_id and reason",
+      "response_schema_summary": "cancel result with task identity and state",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "task_not_active",
+        "task_cancel_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Cancel is task-control truth only."
+    },
+    {
+      "component": "sidecar",
+      "route": "/task/choice",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "task_id, attempt_id, choice/decision",
+      "response_schema_summary": "choice_recorded result and resume eligibility",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "task_choice_missing",
+        "task_choice_invalid",
+        "task_choice_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "User choice can unblock a flow; runtime still must verify later action success."
+    },
+    {
+      "component": "sidecar",
+      "route": "/task/resume_queue",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "task_id/attempt_id or empty request for resumable queue processing",
+      "response_schema_summary": "resume result, checkpoint, task identity, and status",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "resume_not_available",
+        "resume_checkpoint_invalid",
+        "unsupported_checkpoint_action",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Resume may emit message, await choice, check state, or remain blocked; no completion without evidence."
+    },
+    {
+      "component": "sidecar",
+      "route": "/state",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "app-safe runtime state including active_task projection, room/art/provider/capability surfaces",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "state_unavailable",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "State is a rendering surface; app must not infer completed actions from display state alone."
+    },
+    {
+      "component": "sidecar",
+      "route": "/runtime/evidence/app-bridge",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "AppBridgeEvidence: proof_class, verified, source, operation, checked_at, summary, optional task_id/attempt_id/details",
+      "response_schema_summary": "accepted evidence result",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "app_bridge_evidence_invalid",
+        "app_bridge_evidence_unverified",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "This is a proof-ingestion route; app bridge success must be verified before Milo claims setup/permission/action success."
+    },
+    {
+      "component": "sidecar",
+      "route": "/runtime/capability-state",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "capability status, checked_at, and capability_count",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "capability_state_unavailable",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Capability state reports checked runtime facts; do not treat UI permission labels as proof."
+    },
+    {
+      "component": "sidecar",
+      "route": "/context/set",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "StagedContextPayload: content, source, provenance, label, mime_type",
+      "response_schema_summary": "accepted/rejected staged context result",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "context_empty",
+        "context_secret_blocked",
+        "context_too_large",
+        "context_set_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "External context is data, not authority; secret-bearing/untrusted context may be rejected or redacted."
+    },
+    {
+      "component": "sidecar",
+      "route": "/context/clear",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty or context identifier",
+      "response_schema_summary": "cleared context result",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "context_clear_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Clearing context removes staged context from runtime use; it is not memory deletion proof unless separately stated."
+    },
+    {
+      "component": "sidecar",
+      "route": "/local-provider/options",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "LocalProviderOption list",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "provider_options_unavailable",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Options describe possible local/BYOK setup choices; they do not prove a provider is configured."
+    },
+    {
+      "component": "sidecar",
+      "route": "/local-provider/resolve",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "provider, model/base_url, key_file_ready",
+      "response_schema_summary": "LocalProviderResolvedConfig",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "provider_request_invalid",
+        "provider_not_ready",
+        "provider_resolve_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Resolved config is readiness analysis, not proof a provider call succeeded."
+    },
+    {
+      "component": "sidecar",
+      "route": "/report/settings",
+      "method": "POST",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "settings report bundle envelope from app",
+      "response_schema_summary": "submitted/queued report result",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "settings_report_invalid",
+        "settings_report_relay_unavailable",
+        "settings_report_submit_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Milo may claim report submission only after POST/storage/display proof exists."
+    },
+    {
+      "component": "sidecar",
+      "route": "/storage/stats",
+      "method": "GET",
+      "auth_boundary": "app bearer required",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "safe local storage counters",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "storage_stats_unavailable",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Storage counters are diagnostic state; they are not memory truth by themselves."
+    },
+    {
+      "component": "sidecar",
+      "route": "/ws",
+      "method": "GET",
+      "auth_boundary": "websocket bearer required",
+      "request_schema_summary": "websocket upgrade",
+      "response_schema_summary": "EventEnvelope stream",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "websocket_upgrade_failed"
+      ],
+      "user_facing_truth_note": "WebSocket events are runtime observations; app rendering must honor each event source and truth_scope."
+    },
+    {
+      "component": "relay",
+      "route": "/session/start",
+      "method": "POST",
+      "auth_boundary": "fresh install bootstrap; no JWT required",
+      "request_schema_summary": "SessionStartRequest: device_user_id, device_name, app_version",
+      "response_schema_summary": "SessionStartResponse: session_jwt, expiry, entitlement/access mode fields",
+      "stable_error_codes": [
+        "session_start_invalid",
+        "session_start_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Session start proves hosted session bootstrap only; entitlement and provider turn access remain checked separately."
+    },
+    {
+      "component": "relay",
+      "route": "/auth/refresh",
+      "method": "POST",
+      "auth_boundary": "relay JWT required",
+      "request_schema_summary": "refresh request with current session identity",
+      "response_schema_summary": "refreshed entitlement/session projection",
+      "stable_error_codes": [
+        "relay_auth_missing_or_invalid",
+        "auth_refresh_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Refresh recomputes hosted entitlement; it is not a local BYOK requirement."
+    },
+    {
+      "component": "relay",
+      "route": "/llm/turn",
+      "method": "POST",
+      "auth_boundary": "relay JWT with entitlement required",
+      "request_schema_summary": "RelayTurnRequest",
+      "response_schema_summary": "RelayTurnResponse validated by planner policy/runtime gates",
+      "stable_error_codes": [
+        "relay_auth_missing_or_invalid",
+        "relay_not_entitled",
+        "llm_turn_provider_unavailable",
+        "llm_turn_invalid_response",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Hosted model turn can produce a response; real-world completion still requires sidecar evidence."
+    },
+    {
+      "component": "relay",
+      "route": "/report/settings",
+      "method": "POST",
+      "auth_boundary": "relay JWT required",
+      "request_schema_summary": "settings report envelope with validated client_report_id and bundle schema",
+      "response_schema_summary": "stored/duplicate/conflict report result",
+      "stable_error_codes": [
+        "relay_auth_missing_or_invalid",
+        "settings_report_invalid",
+        "settings_report_duplicate",
+        "settings_report_conflict",
+        "settings_report_store_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Report success requires relay-side accepted/stored result; raw bundles are not App Build render surfaces."
+    }
+  ],
+  "websocket_event_contract": {
+    "transport": "sidecar /ws EventEnvelope stream",
+    "envelope_required_fields": [
+      "type",
+      "timestamp",
+      "source",
+      "truth_scope",
+      "payload"
+    ],
+    "event_types": [
+      "runtime.ready",
+      "runtime.error",
+      "runtime.capability_degraded",
+      "runtime.capability_state",
+      "task.accepted",
+      "task.intake_evaluated",
+      "task.progress",
+      "task.message_emitted",
+      "task.awaiting_user_choice",
+      "task.choice_recorded",
+      "task.resumable",
+      "task.resume_blocked",
+      "task.result_unverified",
+      "task.stuck",
+      "task.blocked",
+      "task.cancelled",
+      "task.completed",
+      "task.entitlement_lost",
+      "task.stale_active_recovered",
+      "report.ready",
+      "milo.thought",
+      "milo.state_changed",
+      "milo.room_changed",
+      "milo.movement_started",
+      "maintenance.nightly_started",
+      "maintenance.nightly_deferred",
+      "maintenance.nightly_completed",
+      "archive.record_created",
+      "local_provider.diagnostic"
+    ],
+    "optional_payload_fields": [
+      "safe_summary",
+      "recovery_options",
+      "completion_evidence",
+      "app_bridge_evidence",
+      "expected_check",
+      "next_blocker",
+      "choices",
+      "room_id",
+      "anchor_id"
+    ],
+    "source_truth_scopes": {
+      "sidecar_runtime": "runtime-owned state and task/control observations",
+      "android_bridge_observation": "app/native bridge proof submitted to sidecar",
+      "ui_local": "app-local observation; display only until sidecar verifies if runtime truth is needed"
+    },
+    "rendering_rule": "App Build may render event text/status only according to event type, source, truth_scope, and payload fields. It must not infer execution success from progress, accepted, message, or thought events."
+  },
+  "task_runtime_status_enums": {
+    "task_status": [
+      "queued",
+      "running",
+      "awaiting_user_choice",
+      "interrupted",
+      "stuck",
+      "blocked",
+      "cancelled",
+      "completed"
+    ],
+    "completion_status": [
+      "completed",
+      "blocked",
+      "needs_user_choice",
+      "attempted_unverified"
+    ],
+    "continuation_status": [
+      "completed",
+      "blocked",
+      "awaiting_user_choice",
+      "needs_check",
+      "resumable",
+      "not_resumable"
+    ],
+    "action_type": [
+      "none",
+      "await_user_choice",
+      "emit_message",
+      "resume_checkpoint",
+      "check_state"
+    ],
+    "resume_checkpoint_state": [
+      "resumable",
+      "blocked",
+      "awaiting_user_choice",
+      "completed",
+      "expired",
+      "invalid"
+    ],
+    "semantics": {
+      "completed": "Informational answer or proven operation is complete; real-world actions require evidence.",
+      "blocked": "Requested operation cannot continue due to safety, missing capability, missing proof, invalid state, or unavailable runtime.",
+      "needs_user_choice": "A user-facing choice/confirmation is required before execution can continue.",
+      "attempted_unverified": "The model/runtime attempted or proposed a real operation but required proof is missing.",
+      "stuck": "Runtime cannot safely proceed automatically; show recovery or wait state.",
+      "interrupted": "User/runtime interrupted the task; do not mark requested work complete.",
+      "resumable": "A bounded checkpoint exists; resume may continue only through the closed-set next step.",
+      "awaiting_user_choice": "App may render choices, but runtime must record and verify follow-up state before success claims."
+    }
+  },
+  "resume_checkpoint_rendering_contract": {
+    "displayable_fields": [
+      "task_id",
+      "attempt_id",
+      "source_status",
+      "phase",
+      "blocker",
+      "continuation_status",
+      "next_step_type",
+      "choices",
+      "status",
+      "created_at",
+      "updated_at",
+      "expires_at",
+      "evidence_boundary"
+    ],
+    "internal_fields": [
+      "context_hash",
+      "next_step_payload.raw",
+      "internal_detail",
+      "raw_prompt",
+      "raw_context",
+      "private_tool_payload",
+      "provider_config",
+      "auth_headers",
+      "api_key",
+      "token"
+    ],
+    "allowed_next_step_type": [
+      "check_state",
+      "emit_message",
+      "await_user_choice",
+      "none"
+    ],
+    "render_check_state": "Show a verification-in-progress or state-check-needed surface. Do not claim success until the sidecar returns verified completion evidence.",
+    "render_emit_message": "Render the runtime-approved message as explanatory/status text only. Do not treat the message as action completion.",
+    "render_await_user_choice": "Render guided user choices exactly as supplied by the runtime. After selection, submit through /task/choice and let /task/resume_queue drive continuation.",
+    "render_unsupported_or_expired": "Render blocked/not-resumable recovery copy using stable resume/checkpoint error codes. Do not execute or invent replacement actions.",
+    "app_must_not_invent_resume_actions": true,
+    "explicit_resume_action_route": "/task/resume_queue"
+  },
+  "evidence_boundary_rendering_contract": {
+    "verified_facts": {
+      "field": "evidence_boundary.verified_facts",
+      "rendering_rule": "May be shown as runtime-verified facts when present."
+    },
+    "executed_steps": {
+      "field": "evidence_boundary.executed_steps",
+      "rendering_rule": "May be shown as completed steps only when tied to runtime evidence."
+    },
+    "unverified_claims": {
+      "field": "evidence_boundary.unverified_claims",
+      "rendering_rule": "Must render as unverified or omitted. App Build must not convert these into completed-state UI."
+    },
+    "blocked_reasons": {
+      "field": "evidence_boundary.blocked_reasons",
+      "rendering_rule": "Render as truthful blocked/recovery reasons, not as generic app failure."
+    },
+    "next_verification_step": {
+      "field": "evidence_boundary.next_verification_step",
+      "rendering_rule": "May render as the next needed check/action only when supplied by the runtime."
+    },
+    "app_bridge_proof_display": {
+      "fields": [
+        "proof_class",
+        "verified",
+        "source",
+        "operation",
+        "checked_at",
+        "summary",
+        "blocking_reason",
+        "evidence_id",
+        "attempt_id",
+        "task_id"
+      ],
+      "rendering_rule": "Display verified bridge proof as app/native proof only. Unverified bridge evidence is not setup, permission, or capability success."
+    },
+    "evidence_missing_behavior": "Render missing proof as attempted_unverified, blocked, or needs_check according to runtime status. Do not show a success state.",
+    "evidence_present_behavior": "Render success only when the runtime marks the relevant proof verified and the completion/status contract allows completion.",
+    "no_unverified_to_completed": true
+  },
+  "completion_proof_contract": {
+    "completed_may_render_done_when": [
+      "completion_status is completed",
+      "continuation_status is completed",
+      "action_type is none for informational/draft/plan-only answers",
+      "or required real-action evidence is verified by the runtime"
+    ],
+    "attempted_unverified_rendering": "Render as attempted but not verified. Do not use completed visual treatment.",
+    "real_action_proof_required": [
+      "device/app/file/provider/permission/report/tool action must have verified runtime evidence",
+      "expected_check must pass when present",
+      "app bridge evidence must be verified for app/native bridge claims",
+      "report submission must have POST/storage/display proof before success copy"
+    ],
+    "provider_model_response_proof_required": [
+      "provider/model response proves text generation only",
+      "provider/model response does not prove external action execution",
+      "model claims about real-world completion require runtime evidence"
+    ],
+    "capability_tool_claim_proof_required": [
+      "capability state must come from runtime/capability-state or approved app bridge evidence",
+      "tool/capability action success must be checked before user-facing success",
+      "permission/setup success must not be inferred from button taps or labels"
+    ],
+    "proof_missing_behavior": "Use attempted_unverified, blocked, needs_check, or not_resumable according to runtime status and stable error codes.",
+    "stable_error_relation": "completed_requires_evidence means App Build must not render completed-state UI until required evidence appears."
+  },
+  "deferred_non_goals": [
+    "no app UI implementation in Mind lane",
+    "no candidate extraction in this step",
+    "no LLM reflection in this step",
+    "no direct memory promotion in this step",
+    "no rollback UI in this step",
+    "no App Build rendering implementation in this step",
+    "no human markdown handoff packet",
+    "no live phone validation",
+    "no website/hosting/DNS/provider work",
+    "no private admin UI",
+    "no invented TypeScript semantics",
+    "no App Build guessing beyond JSON contract"
+  ],
+  "bounded_consolidation_contract": {
+    "scope": "Minimal Phase 18 bounded consolidation ledger for current nightly maintenance. This is audit/status proof only, not candidate extraction or memory promotion.",
+    "run_statuses": [
+      "deferred_active_task",
+      "running",
+      "completed_summary_only",
+      "failed_safe"
+    ],
+    "run_ledger_fields": [
+      "run_id",
+      "archive_date",
+      "trigger",
+      "status",
+      "started_at",
+      "completed_at",
+      "input_task_history_count",
+      "archive_record_id",
+      "summary_record_count",
+      "candidate_count",
+      "quarantined_count",
+      "suppressed_count",
+      "active_task_id",
+      "deferred_reason",
+      "error_code",
+      "error_summary",
+      "created_at",
+      "updated_at"
+    ],
+    "output_classes": [
+      "archive_summary"
+    ],
+    "current_summary_only_rules": [
+      "completed_summary_only may create one nightly archive summary record",
+      "candidate_count must remain 0 in the current approved path",
+      "quarantined_count must remain 0 unless future candidate extraction is approved",
+      "suppressed_count must remain 0 unless future candidate extraction is approved",
+      "archive-derived claims must not become current runtime truth"
+    ],
+    "non_mutation_rules": [
+      "must not delete active tasks",
+      "must not mutate active task slots",
+      "must not delete active memory",
+      "must not mutate canon or policy records",
+      "must not directly promote LLM reflection output",
+      "must not mark failed runs completed"
+    ],
+    "app_rendering_rules": [
+      "future-safe only until App Build is assigned a rendering surface",
+      "App Build may later render status and counts from the ledger if assigned",
+      "App Build must not treat archive-derived claims as current truth",
+      "App Build must not invent candidate, promotion, quarantine, suppression, or rollback semantics"
+    ],
+    "explicit_deferrals": [
+      "candidate extraction",
+      "LLM reflection",
+      "memory promotion",
+      "retrieval metadata expansion",
+      "rollback UI",
+      "App Build rendering"
+    ]
+  },
+  "memory_contract": {
+    "allowed_memory_class_identifiers": [
+      "canon_memory",
+      "durable_user_preference",
+      "user_profile_context_fact",
+      "task_continuity",
+      "approved_summary",
+      "runtime_observation",
+      "episodic_history",
+      "scratch_transient",
+      "quarantined_suppressed"
+    ],
+    "memory_intent_statuses": [
+      "allowed",
+      "needs_confirmation",
+      "blocked",
+      "quarantined",
+      "suppressed",
+      "deferred"
+    ],
+    "quarantine_states": [
+      "clean",
+      "quarantined",
+      "blocked",
+      "unknown"
+    ],
+    "suppression_states": [
+      "active",
+      "suppressed",
+      "demoted",
+      "rolled_back"
+    ],
+    "memory_write_candidate_behavior": {
+      "rule": "Memory writes are candidates until runtime policy admits them; model output alone cannot promote durable memory.",
+      "secret_handling": "Secrets, provider config, auth headers, hidden prompts, and private payloads must not be promoted to durable memory.",
+      "authority_order": "Verified runtime state and canon outrank memory and archive-derived claims."
+    },
+    "user_correction_demotion_rollback_status": {
+      "implemented_statuses": [
+        "suppressed",
+        "demoted",
+        "rolled_back"
+      ],
+      "deferred_fields": [
+        "app_ui_correction_labels",
+        "bulk_consolidation_outcome_display"
+      ]
+    }
+  },
+  "storage_responsibility_boundaries": {
+    "sidecar_sqlite": {
+      "owns": [
+        "task_slots",
+        "task_history",
+        "pending_events",
+        "runtime_config",
+        "resume_checkpoints",
+        "conversation_tail",
+        "retrieval_records",
+        "durable_poisoning_records",
+        "active_context"
+      ],
+      "truth_boundary": "Canonical live task/state store after migration. App must not override it with UI guesses."
+    },
+    "app_local": {
+      "owns": [
+        "UI rendering",
+        "user interaction",
+        "button/choice display",
+        "local transcript/cache surfaces"
+      ],
+      "truth_boundary": "Local app storage can preserve user-owned UI history, but it is not durable runtime truth and must not claim action completion."
+    },
+    "relay_hosted": {
+      "owns": [
+        "session/auth refresh",
+        "hosted LLM turn relay",
+        "settings report ingestion/storage",
+        "safe admin/report projections"
+      ],
+      "truth_boundary": "Relay stores hosted/session/report truth. Raw report bundles and admin internals are not App Build render contracts."
+    },
+    "not_durable_runtime_truth": [
+      "progress copy",
+      "thought text",
+      "local UI optimistic state",
+      "app labels",
+      "unverified model claims",
+      "external context instructions",
+      "archive-derived unstated claims"
+    ]
+  },
+  "stable_ui_error_codes": {
+    "task_start": [
+      "task_prompt_empty",
+      "task_already_active",
+      "task_intake_blocked",
+      "task_start_failed"
+    ],
+    "command_submit": [
+      "command_empty",
+      "task_already_active",
+      "command_submit_failed"
+    ],
+    "task_current": [
+      "task_current_unavailable"
+    ],
+    "task_choice": [
+      "task_choice_missing",
+      "task_choice_invalid",
+      "task_choice_failed"
+    ],
+    "interrupt_cancel": [
+      "task_not_active",
+      "task_interrupt_failed",
+      "task_cancel_failed"
+    ],
+    "resume_queue": [
+      "resume_not_available",
+      "resume_checkpoint_invalid",
+      "unsupported_checkpoint_action",
+      "invalid_completion_status",
+      "invalid_continuation_status"
+    ],
+    "runtime_evidence_app_bridge": [
+      "app_bridge_evidence_invalid",
+      "app_bridge_evidence_unverified"
+    ],
+    "capability_state": [
+      "capability_state_unavailable"
+    ],
+    "context_set": [
+      "context_empty",
+      "context_secret_blocked",
+      "context_too_large",
+      "context_set_failed"
+    ],
+    "report_settings": [
+      "settings_report_invalid",
+      "settings_report_relay_unavailable",
+      "settings_report_duplicate",
+      "settings_report_conflict",
+      "settings_report_submit_failed"
+    ],
+    "storage_stats": [
+      "storage_stats_unavailable"
+    ],
+    "auth_session_refresh": [
+      "session_start_invalid",
+      "session_start_failed",
+      "relay_auth_missing_or_invalid",
+      "auth_refresh_failed",
+      "relay_not_entitled"
+    ],
+    "checkpoint_action": [
+      "unsupported_checkpoint_action",
+      "invalid_action_type",
+      "completed_requires_no_pending_action",
+      "completed_cannot_require_user_choice",
+      "completed_requires_evidence"
+    ],
+    "generic": [
+      "sidecar_auth_missing_or_invalid",
+      "relay_auth_missing_or_invalid",
+      "method_not_allowed",
+      "malformed_json",
+      "internal_error"
+    ]
+  },
+  "contract_required_sections": [
+    "phase18_contract_handoff",
+    "http_route_matrix",
+    "websocket_event_contract",
+    "runtime_events",
+    "task_runtime_status_enums",
+    "resume_checkpoint_rendering_contract",
+    "evidence_boundary_rendering_contract",
+    "completion_proof_contract",
+    "bounded_consolidation_contract",
+    "memory_contract",
+    "storage_responsibility_boundaries",
+    "stable_ui_error_codes",
+    "deferred_non_goals",
+    "safety_decision_contract",
+    "app_bridge_evidence_fields",
+    "provider_context_dtos"
+  ],
   "safety_decision_contract": {
     "outcomes": [
       "allow",

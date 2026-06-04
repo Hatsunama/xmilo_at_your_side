@@ -51,6 +51,7 @@ func (s *Store) migrate() error {
 		{6, migration006},
 		{7, migration007},
 		{8, migration008},
+		{9, migration009},
 	}
 
 	current := 0

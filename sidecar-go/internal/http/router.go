@@ -248,8 +248,6 @@ func classifySidecarHTTPStartupError(err error) string {
 	}
 }
 
-// ─── Proactive JWT refresh ────────────────────────────────────────────────────
-
 func (a *App) runJWTRefresher(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -273,7 +271,7 @@ func (a *App) maybeRefreshJWT(ctx context.Context) {
 		return
 	}
 	if time.Until(expiresAt) > 10*time.Minute {
-		return // still fresh
+		return
 	}
 	newJWT, newExpiry, err := a.relayClient.Refresh(ctx)
 	if err != nil {
@@ -354,8 +352,6 @@ func (a *App) ensureRelaySession(ctx context.Context) error {
 	defer cancel()
 	return bootstrapRelaySession(bootstrapCtx, a.cfg, a.store)
 }
-
-// ─── Auth passthrough handlers ────────────────────────────────────────────────
 
 func (a *App) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -586,8 +582,6 @@ func (a *App) handleWebsiteHandoffCreate(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
-
-// ─── Existing handlers (unchanged from v7) ────────────────────────────────────
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runtime.HealthResponse{
@@ -1236,8 +1230,6 @@ func (a *App) markWakeLockUnsupported() {
 	a.wakeLockActive = false
 	a.wakeLockStatus = "unsupported_by_sidecar_runtime_host"
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func (a *App) localBYOKKeyConfigured() bool {
 	return llm.LocalProviderReady(a.cfg)

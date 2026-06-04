@@ -565,8 +565,6 @@ func (e *Engine) transitionTo(next string) {
 	e.emit("milo.state_changed", map[string]any{"from_state": prev, "to_state": next})
 }
 
-// ─── Resume / new-process flow ────────────────────────────────────────────────
-
 // GetInterruptedTask returns the task that was saved when entitlement was lost.
 // Returns nil if no interrupted task exists.
 func (e *Engine) GetInterruptedTask() (*runtime.TaskSnapshot, error) {

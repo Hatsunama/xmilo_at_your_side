@@ -20,9 +20,10 @@ const (
 )
 
 type Scheduler struct {
-	store *db.Store
-	hub   *ws.Hub
-	mu    sync.Mutex
+	store          *db.Store
+	hub            *ws.Hub
+	releaseCheckFn func(context.Context) releaseCheck
+	mu             sync.Mutex
 }
 
 type releaseCheck struct {
@@ -65,6 +66,7 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 
 	if pendingFor != "" && completedFor != pendingFor {
 		if activeTask != nil {
+			s.recordDeferred(pendingFor, "deferred", now, activeTask.TaskID)
 			return
 		}
 		s.runNightly(ctx, pendingFor, localNow, "deferred")
@@ -79,6 +81,7 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 		if pendingFor != archiveDate {
 			_ = s.store.SetRuntimeConfig("nightly_maintenance_pending_for", archiveDate)
 			_ = s.store.SetRuntimeConfig("nightly_maintenance_pending_since", now.UTC().Format(time.RFC3339))
+			s.recordDeferred(archiveDate, "scheduled", now, activeTask.TaskID)
 			s.emit("maintenance.nightly_deferred", map[string]any{
 				"archive_date": archiveDate,
 				"reason":       "active_task",
@@ -95,7 +98,22 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow time.Time, trigger string) {
 	startedAt := time.Now().UTC()
 	taskCount := s.countTaskHistoryForLocalDay(archiveDate)
-	update := s.checkLatestRelease(ctx)
+	runID := consolidationRunID(archiveDate)
+	update := s.latestRelease(ctx)
+	if err := s.store.UpsertConsolidationRun(db.ConsolidationRun{
+		RunID:                 runID,
+		ArchiveDate:           archiveDate,
+		Trigger:               trigger,
+		Status:                db.ConsolidationRunRunning,
+		StartedAt:             startedAt.Format(time.RFC3339),
+		InputTaskHistoryCount: taskCount,
+		UpdatedAt:             startedAt.Format(time.RFC3339),
+	}); err != nil {
+		s.emit("runtime.error", map[string]any{
+			"message": "Nightly upkeep could not create an audit ledger entry.",
+		})
+		return
+	}
 
 	s.emit("maintenance.nightly_started", map[string]any{
 		"archive_date":        archiveDate,
@@ -115,7 +133,10 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 	description := buildArchiveDescription(humanArchiveDate, taskCount, trigger, update)
 	recordID := "nightly_archive_" + archiveDate
 
-	_ = s.store.AddTaskHistory(recordID, "Nightly archive", "completed", description)
+	if err := s.store.AddTaskHistory(recordID, "Nightly archive", "completed", description); err != nil {
+		s.recordFailed(runID, archiveDate, trigger, startedAt, taskCount, "archive_record_failed", err)
+		return
+	}
 	s.emit("archive.record_created", map[string]any{
 		"task_id":      recordID,
 		"title":        "Nightly archive — " + humanArchiveDate,
@@ -125,15 +146,49 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		"ritual":       "nightly_maintenance",
 	})
 
-	_ = s.store.SetRuntimeConfig("nightly_maintenance_last_completed_for", archiveDate)
-	_ = s.store.SetRuntimeConfig("nightly_maintenance_last_completed_at", startedAt.Format(time.RFC3339))
-	_ = s.store.SetRuntimeConfig("nightly_maintenance_pending_for", "")
-	_ = s.store.SetRuntimeConfig("nightly_maintenance_pending_since", "")
+	if err := s.store.SetRuntimeConfig("nightly_maintenance_last_completed_for", archiveDate); err != nil {
+		s.recordFailed(runID, archiveDate, trigger, startedAt, taskCount, "completion_config_failed", err)
+		return
+	}
+	if err := s.store.SetRuntimeConfig("nightly_maintenance_last_completed_at", startedAt.Format(time.RFC3339)); err != nil {
+		s.recordFailed(runID, archiveDate, trigger, startedAt, taskCount, "completion_config_failed", err)
+		return
+	}
+	if err := s.store.SetRuntimeConfig("nightly_maintenance_pending_for", ""); err != nil {
+		s.recordFailed(runID, archiveDate, trigger, startedAt, taskCount, "completion_config_failed", err)
+		return
+	}
+	if err := s.store.SetRuntimeConfig("nightly_maintenance_pending_since", ""); err != nil {
+		s.recordFailed(runID, archiveDate, trigger, startedAt, taskCount, "completion_config_failed", err)
+		return
+	}
+
+	completedAt := time.Now().UTC()
+	if err := s.store.UpsertConsolidationRun(db.ConsolidationRun{
+		RunID:                 runID,
+		ArchiveDate:           archiveDate,
+		Trigger:               trigger,
+		Status:                db.ConsolidationRunCompletedSummary,
+		StartedAt:             startedAt.Format(time.RFC3339),
+		CompletedAt:           completedAt.Format(time.RFC3339),
+		InputTaskHistoryCount: taskCount,
+		ArchiveRecordID:       recordID,
+		SummaryRecordCount:    1,
+		CandidateCount:        0,
+		QuarantinedCount:      0,
+		SuppressedCount:       0,
+		UpdatedAt:             completedAt.Format(time.RFC3339),
+	}); err != nil {
+		s.emit("runtime.error", map[string]any{
+			"message": "Nightly upkeep could not complete its audit ledger entry.",
+		})
+		return
+	}
 
 	s.emit("maintenance.nightly_completed", map[string]any{
 		"archive_date":        archiveDate,
 		"trigger":             trigger,
-		"completed_at":        time.Now().UTC().Format(time.RFC3339),
+		"completed_at":        completedAt.Format(time.RFC3339),
 		"task_count":          taskCount,
 		"latest_release_tag":  update.TagName,
 		"latest_release_url":  update.URL,
@@ -144,6 +199,55 @@ func (s *Scheduler) runNightly(ctx context.Context, archiveDate string, localNow
 		"message":             "Nightly upkeep is complete. Archive sealed and update check finished.",
 	})
 	s.signalCue("Milo has finished his nightly upkeep.")
+}
+
+func (s *Scheduler) latestRelease(ctx context.Context) releaseCheck {
+	if s.releaseCheckFn != nil {
+		return s.releaseCheckFn(ctx)
+	}
+	return s.checkLatestRelease(ctx)
+}
+
+func (s *Scheduler) recordDeferred(archiveDate, trigger string, now time.Time, activeTaskID string) {
+	_ = s.store.UpsertConsolidationRun(db.ConsolidationRun{
+		RunID:          consolidationRunID(archiveDate),
+		ArchiveDate:    archiveDate,
+		Trigger:        trigger,
+		Status:         db.ConsolidationRunDeferredActiveTask,
+		ActiveTaskID:   activeTaskID,
+		DeferredReason: "active_task",
+		UpdatedAt:      now.UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *Scheduler) recordFailed(runID, archiveDate, trigger string, startedAt time.Time, taskCount int, code string, err error) {
+	completedAt := time.Now().UTC()
+	summary := "Nightly upkeep failed safely."
+	if err != nil {
+		summary = err.Error()
+	}
+	_ = s.store.UpsertConsolidationRun(db.ConsolidationRun{
+		RunID:                 runID,
+		ArchiveDate:           archiveDate,
+		Trigger:               trigger,
+		Status:                db.ConsolidationRunFailedSafe,
+		StartedAt:             startedAt.Format(time.RFC3339),
+		CompletedAt:           completedAt.Format(time.RFC3339),
+		InputTaskHistoryCount: taskCount,
+		CandidateCount:        0,
+		QuarantinedCount:      0,
+		SuppressedCount:       0,
+		ErrorCode:             code,
+		ErrorSummary:          summary,
+		UpdatedAt:             completedAt.Format(time.RFC3339),
+	})
+	s.emit("runtime.error", map[string]any{
+		"message": "Nightly upkeep failed safely before it could mark consolidation complete.",
+	})
+}
+
+func consolidationRunID(archiveDate string) string {
+	return "nightly_consolidation_" + archiveDate
 }
 
 func (s *Scheduler) countTaskHistoryForLocalDay(archiveDate string) int {
