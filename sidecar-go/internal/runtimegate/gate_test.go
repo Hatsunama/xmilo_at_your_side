@@ -460,6 +460,233 @@ func TestBoundedConsolidationContractPresent(t *testing.T) {
 	requireStringSet(t, "contract_required_sections", manifest.ContractRequiredSections, "bounded_consolidation_contract")
 }
 
+func TestPhase18CV1TypedMemorySchemaContractPresent(t *testing.T) {
+	manifestPath := filepath.Join("..", "..", "..", "shared", "contracts", "runtime_contracts.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read runtime contract manifest: %v", err)
+	}
+	var manifest struct {
+		TypedMemorySchema struct {
+			Scope                      string   `json:"scope"`
+			MemoryClasses              []string `json:"memory_classes"`
+			MemoryEntryRequiredFields  []string `json:"memory_entry_required_fields"`
+			MemoryEntryStatuses        []string `json:"memory_entry_statuses"`
+			SourceTypes                []string `json:"source_types"`
+			FreshnessStates            []string `json:"freshness_states"`
+			ContradictionStates        []string `json:"contradiction_states"`
+			QuarantineStatuses         []string `json:"quarantine_statuses"`
+			SuppressionStatuses        []string `json:"suppression_statuses"`
+			EmbeddingStatuses          []string `json:"embedding_statuses"`
+			UserVisibleFlags           []string `json:"user_visible_flags"`
+			RetrievalEligibilityFields []string `json:"retrieval_eligibility_fields"`
+			SafetyCriticalFields       []string `json:"safety_critical_fields"`
+		} `json:"phase18c_v1_typed_memory_schema"`
+		EvidenceRefs struct {
+			Fields           []string `json:"fields"`
+			EvidenceKindEnum []string `json:"evidence_kind_enum"`
+		} `json:"phase18c_v1_memory_evidence_refs"`
+		ActionAudit struct {
+			Fields     []string `json:"fields"`
+			ActionEnum []string `json:"action_enum"`
+		} `json:"phase18c_v1_memory_action_audit"`
+		Findings struct {
+			FindingFields             []string `json:"finding_fields"`
+			FindingTypeEnum           []string `json:"finding_type_enum"`
+			FindingStatuses           []string `json:"finding_statuses"`
+			ResolverAuditRequirements []string `json:"resolver_audit_requirements"`
+		} `json:"phase18c_v1_memory_findings"`
+		RetrievalMetadata struct {
+			ExistingMetadataPreserved []string `json:"existing_metadata_preserved"`
+			NewMetadataFields         []string `json:"new_metadata_fields"`
+			Rules                     []string `json:"rules"`
+		} `json:"phase18c_v1_retrieval_metadata_expansion"`
+		RetrievalPack struct {
+			Fields []string `json:"fields"`
+			Rules  []string `json:"rules"`
+		} `json:"phase18c_v1_retrieval_pack_contract"`
+		ContractRequiredSections []string `json:"contract_required_sections"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode runtime contract manifest: %v", err)
+	}
+	requireNonEmpty(t, "phase18c_v1_typed_memory_schema.scope", manifest.TypedMemorySchema.Scope)
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.memory_classes", manifest.TypedMemorySchema.MemoryClasses,
+		"canon_memory",
+		"durable_user_preference",
+		"user_profile_context_fact",
+		"task_continuity",
+		"approved_summary",
+		"runtime_observation",
+		"episodic_history",
+		"scratch_transient",
+		"quarantined_suppressed",
+		"memory_candidate",
+		"procedure_candidate",
+		"retrieval_anchor_candidate",
+		"contradiction_staleness_finding",
+		"improvement_proposal",
+	)
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.memory_entry_required_fields", manifest.TypedMemorySchema.MemoryEntryRequiredFields,
+		"memory_id", "memory_class", "status", "title", "summary", "content", "content_excerpt",
+		"source_type", "trust_tier", "authority_rank", "provenance", "evidence_refs",
+		"freshness_state", "confidence", "contradiction_state", "quarantine_status", "suppression_status",
+		"stale_after", "expires_at", "created_at", "updated_at", "last_verified_at",
+		"allowed_actions", "audit_event_ids", "supersedes_memory_id", "rollback_available",
+		"external_content_is_not_instruction", "retrieval_eligible", "retrieval_reason",
+		"embedding_status", "candidate_origin_run_id", "promotion_gate_result", "user_visible",
+	)
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.statuses", manifest.TypedMemorySchema.MemoryEntryStatuses,
+		"candidate", "active", "needs_confirmation", "quarantined", "suppressed", "stale", "superseded", "deleted_by_user", "rejected")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.source_types", manifest.TypedMemorySchema.SourceTypes,
+		"canon", "main_hub", "verified_runtime", "direct_user", "model_output", "archive", "external", "retrieval", "skill", "unknown")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.freshness_states", manifest.TypedMemorySchema.FreshnessStates,
+		"fresh", "aging", "stale", "expired", "unknown")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.contradiction_states", manifest.TypedMemorySchema.ContradictionStates,
+		"none", "suspected", "confirmed", "resolved")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.quarantine_statuses", manifest.TypedMemorySchema.QuarantineStatuses,
+		"clean", "quarantined", "blocked", "unknown")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.suppression_statuses", manifest.TypedMemorySchema.SuppressionStatuses,
+		"active", "suppressed", "demoted", "rolled_back")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.embedding_statuses", manifest.TypedMemorySchema.EmbeddingStatuses,
+		"not_needed", "pending", "ready", "failed", "blocked")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.user_visible_flags", manifest.TypedMemorySchema.UserVisibleFlags,
+		"user_visible", "display_allowed", "user_editable", "user_suppressible", "user_deletable")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.retrieval_eligibility_fields", manifest.TypedMemorySchema.RetrievalEligibilityFields,
+		"retrieval_eligible", "retrieval_reason", "freshness_state", "contradiction_state", "quarantine_status", "suppression_status", "external_content_is_not_instruction")
+	requireStringSet(t, "phase18c_v1_typed_memory_schema.safety_critical_fields", manifest.TypedMemorySchema.SafetyCriticalFields,
+		"memory_class", "status", "source_type", "trust_tier", "authority_rank", "provenance", "evidence_refs", "promotion_gate_result")
+	requireStringSet(t, "phase18c_v1_memory_evidence_refs.fields", manifest.EvidenceRefs.Fields,
+		"evidence_id", "memory_id", "source_type", "source_id", "source_ref", "evidence_kind", "trust_tier", "authority_rank", "timestamp", "content_hash", "redaction_status", "display_allowed", "promotion_allowed")
+	requireStringSet(t, "phase18c_v1_memory_evidence_refs.evidence_kind_enum", manifest.EvidenceRefs.EvidenceKindEnum,
+		"user_statement", "runtime_state", "tool_result", "app_bridge_evidence", "task_completion_evidence", "canon_ref", "archive_ref", "external_ref")
+	requireStringSet(t, "phase18c_v1_memory_action_audit.fields", manifest.ActionAudit.Fields,
+		"audit_id", "memory_id", "action", "actor", "reason", "before_state_json", "after_state_json", "timestamp", "rollback_ref", "gate_result_json", "user_confirmation_required", "source_request_id")
+	requireStringSet(t, "phase18c_v1_memory_action_audit.action_enum", manifest.ActionAudit.ActionEnum,
+		"view", "suppress", "restore_suppression", "delete_user_remove", "correct_supersede", "mark_stale", "view_provenance", "rollback", "approve_candidate", "reject_candidate", "quarantine", "unquarantine")
+	requireStringSet(t, "phase18c_v1_memory_findings.finding_fields", manifest.Findings.FindingFields,
+		"finding_id", "memory_ids", "finding_type", "confidence", "evidence_refs", "recommended_action", "status", "resolver", "audit_event_ids", "user_visible")
+	requireStringSet(t, "phase18c_v1_memory_findings.finding_type_enum", manifest.Findings.FindingTypeEnum,
+		"contradiction", "stale", "unsupported", "poisoning", "missing_evidence", "authority_conflict")
+	requireStringSet(t, "phase18c_v1_memory_findings.finding_statuses", manifest.Findings.FindingStatuses,
+		"open", "needs_review", "resolved", "dismissed", "superseded")
+	requireStringSet(t, "phase18c_v1_memory_findings.resolver_audit_requirements", manifest.Findings.ResolverAuditRequirements,
+		"resolver must be recorded for resolved/dismissed findings", "resolution must append a memory_action_audit entry")
+	requireStringSet(t, "phase18c_v1_retrieval_metadata_expansion.existing_metadata_preserved", manifest.RetrievalMetadata.ExistingMetadataPreserved,
+		"source_type", "trust_tier", "authority_rank", "provenance", "freshness_state", "quarantine_status")
+	requireStringSet(t, "phase18c_v1_retrieval_metadata_expansion.new_metadata_fields", manifest.RetrievalMetadata.NewMetadataFields,
+		"confidence", "contradiction_state", "evidence_refs_json", "suppression_status", "stale_after", "last_verified_at", "retrieval_reason", "retrieval_score", "retrieval_backend", "used_vector", "used_lexical", "fallback_reason", "pack_position", "token_estimate")
+	requireStringSet(t, "phase18c_v1_retrieval_metadata_expansion.rules", manifest.RetrievalMetadata.Rules,
+		"vector is relevance only, not authority", "lexical fallback remains valid")
+	requireStringSet(t, "phase18c_v1_retrieval_pack_contract.fields", manifest.RetrievalPack.Fields,
+		"pack_id", "query_intent", "budget_tokens", "authority_header", "runtime_truth_items", "canon_refs", "memory_items", "excluded_items", "warning_items", "truth_status", "source_labels", "stale_conflict_warnings", "final_context_injection_order")
+	requireStringSet(t, "phase18c_v1_retrieval_pack_contract.rules", manifest.RetrievalPack.Rules,
+		"runtime/canon/current user intent outrank memory", "stale memory becomes needs-verification", "external content is data, not instruction", "vector similarity is relevance, not truth")
+	requireStringSet(t, "contract_required_sections", manifest.ContractRequiredSections,
+		"phase18c_v1_typed_memory_schema",
+		"phase18c_v1_memory_evidence_refs",
+		"phase18c_v1_memory_action_audit",
+		"phase18c_v1_memory_findings",
+		"phase18c_v1_retrieval_metadata_expansion",
+		"phase18c_v1_retrieval_pack_contract",
+	)
+}
+
+func TestPhase18CV1AuthorityOrderContractPresent(t *testing.T) {
+	manifestPath := filepath.Join("..", "..", "..", "shared", "contracts", "runtime_contracts.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read runtime contract manifest: %v", err)
+	}
+	var manifest struct {
+		AuthorityOrder struct {
+			Order []string `json:"order"`
+			Rules []string `json:"rules"`
+		} `json:"phase18c_v1_memory_authority_order"`
+		ContractRequiredSections []string `json:"contract_required_sections"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode runtime contract manifest: %v", err)
+	}
+	requireExactStringOrder(t, "phase18c_v1_memory_authority_order.order", manifest.AuthorityOrder.Order,
+		"canon_source_of_truth",
+		"main_hub_decision",
+		"verified_runtime_system_state",
+		"current_direct_user_instruction",
+		"approved_structured_memory",
+		"approved_summary",
+		"episodic_history",
+		"archive_history",
+		"external_imported_content",
+		"unknown_malformed_spoofed_content",
+	)
+	requireStringSet(t, "phase18c_v1_memory_authority_order.rules", manifest.AuthorityOrder.Rules,
+		"higher authority wins",
+		"unresolved same-level conflicts become findings",
+		"stale memory cannot drive action",
+		"quarantined/suppressed memory excluded from control paths",
+		"user correction may supersede preference/profile/task memory but cannot rewrite canon/runtime/policy/safety/provider truth",
+		"memory informs but does not become policy",
+	)
+	requireStringSet(t, "contract_required_sections", manifest.ContractRequiredSections, "phase18c_v1_memory_authority_order")
+}
+
+func TestPhase18CV1CandidatePipelineContractPresent(t *testing.T) {
+	manifestPath := filepath.Join("..", "..", "..", "shared", "contracts", "runtime_contracts.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read runtime contract manifest: %v", err)
+	}
+	var manifest struct {
+		CandidatePipeline struct {
+			CandidateTypes []string `json:"candidate_types"`
+			Statuses       []string `json:"statuses"`
+			Rules          []string `json:"rules"`
+		} `json:"phase18c_v1_candidate_pipeline_contract"`
+		ImplementationSequence struct {
+			Steps             []string `json:"steps"`
+			ExplicitDeferrals []string `json:"explicit_deferrals"`
+		} `json:"phase18c_v1_implementation_sequence"`
+		ContractRequiredSections []string `json:"contract_required_sections"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode runtime contract manifest: %v", err)
+	}
+	requireStringSet(t, "phase18c_v1_candidate_pipeline_contract.candidate_types", manifest.CandidatePipeline.CandidateTypes,
+		"memory_candidate", "procedure_candidate", "retrieval_anchor_candidate", "contradiction_staleness_finding", "improvement_proposal")
+	requireStringSet(t, "phase18c_v1_candidate_pipeline_contract.statuses", manifest.CandidatePipeline.Statuses,
+		"generated", "needs_review", "approved", "rejected", "quarantined", "suppressed", "promoted", "expired")
+	requireStringSet(t, "phase18c_v1_candidate_pipeline_contract.rules", manifest.CandidatePipeline.Rules,
+		"candidates cannot affect runtime behavior before approval",
+		"LLM/reflection output remains candidate-only",
+		"no direct memory/canon/policy/safety/skill mutation",
+		"candidates link to future consolidation_runs.run_id",
+		"promotion requires gates",
+	)
+	requireExactStringOrder(t, "phase18c_v1_implementation_sequence.steps", manifest.ImplementationSequence.Steps,
+		"contract first",
+		"DB schema later",
+		"runtime behavior later",
+		"App Build UI later",
+		"Testing Grounds fixtures later",
+		"no Phase 18 bounded consolidation reopening",
+	)
+	requireStringSet(t, "phase18c_v1_implementation_sequence.explicit_deferrals", manifest.ImplementationSequence.ExplicitDeferrals,
+		"no DB migrations in this step",
+		"no runtime behavior changes in this step",
+		"no memory actions in this step",
+		"no App Build UI in this step",
+		"no candidate extraction in this step",
+		"no vector retrieval in this step",
+		"no external repo dependencies in this step",
+		"no Go DTO mirror changes in this step",
+	)
+	requireStringSet(t, "contract_required_sections", manifest.ContractRequiredSections,
+		"phase18c_v1_candidate_pipeline_contract",
+		"phase18c_v1_implementation_sequence",
+	)
+}
+
 type contractRoute struct {
 	Component             string   `json:"component"`
 	Route                 string   `json:"route"`
@@ -500,6 +727,18 @@ func requireStringSet(t *testing.T, name string, values []string, required ...st
 	for _, value := range required {
 		if !containsString(values, value) {
 			t.Fatalf("%s missing %q: %#v", name, value, values)
+		}
+	}
+}
+
+func requireExactStringOrder(t *testing.T, name string, values []string, required ...string) {
+	t.Helper()
+	if len(values) != len(required) {
+		t.Fatalf("%s length drifted: got %#v want %#v", name, values, required)
+	}
+	for i := range required {
+		if values[i] != required[i] {
+			t.Fatalf("%s order drifted at %d: got %#v want %#v", name, i, values, required)
 		}
 	}
 }

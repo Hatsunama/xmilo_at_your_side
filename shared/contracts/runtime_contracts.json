@@ -721,6 +721,369 @@
       ]
     }
   },
+  "phase18c_v1_typed_memory_schema": {
+    "scope": "V1 typed memory schema vocabulary only. This contract does not create DB tables, runtime behavior, App Build UI, candidate extraction, or vector retrieval.",
+    "memory_classes": [
+      "canon_memory",
+      "durable_user_preference",
+      "user_profile_context_fact",
+      "task_continuity",
+      "approved_summary",
+      "runtime_observation",
+      "episodic_history",
+      "scratch_transient",
+      "quarantined_suppressed",
+      "memory_candidate",
+      "procedure_candidate",
+      "retrieval_anchor_candidate",
+      "contradiction_staleness_finding",
+      "improvement_proposal"
+    ],
+    "memory_entry_required_fields": [
+      "memory_id",
+      "memory_class",
+      "status",
+      "title",
+      "summary",
+      "content",
+      "content_excerpt",
+      "source_type",
+      "trust_tier",
+      "authority_rank",
+      "provenance",
+      "evidence_refs",
+      "freshness_state",
+      "confidence",
+      "contradiction_state",
+      "quarantine_status",
+      "suppression_status",
+      "stale_after",
+      "expires_at",
+      "created_at",
+      "updated_at",
+      "last_verified_at",
+      "allowed_actions",
+      "audit_event_ids",
+      "supersedes_memory_id",
+      "rollback_available",
+      "external_content_is_not_instruction",
+      "retrieval_eligible",
+      "retrieval_reason",
+      "embedding_status",
+      "candidate_origin_run_id",
+      "promotion_gate_result",
+      "user_visible"
+    ],
+    "memory_entry_statuses": [
+      "candidate",
+      "active",
+      "needs_confirmation",
+      "quarantined",
+      "suppressed",
+      "stale",
+      "superseded",
+      "deleted_by_user",
+      "rejected"
+    ],
+    "source_types": [
+      "canon",
+      "main_hub",
+      "verified_runtime",
+      "direct_user",
+      "model_output",
+      "archive",
+      "external",
+      "retrieval",
+      "skill",
+      "unknown"
+    ],
+    "freshness_states": [
+      "fresh",
+      "aging",
+      "stale",
+      "expired",
+      "unknown"
+    ],
+    "contradiction_states": [
+      "none",
+      "suspected",
+      "confirmed",
+      "resolved"
+    ],
+    "quarantine_statuses": [
+      "clean",
+      "quarantined",
+      "blocked",
+      "unknown"
+    ],
+    "suppression_statuses": [
+      "active",
+      "suppressed",
+      "demoted",
+      "rolled_back"
+    ],
+    "embedding_statuses": [
+      "not_needed",
+      "pending",
+      "ready",
+      "failed",
+      "blocked"
+    ],
+    "user_visible_flags": [
+      "user_visible",
+      "display_allowed",
+      "user_editable",
+      "user_suppressible",
+      "user_deletable"
+    ],
+    "retrieval_eligibility_fields": [
+      "retrieval_eligible",
+      "retrieval_reason",
+      "freshness_state",
+      "contradiction_state",
+      "quarantine_status",
+      "suppression_status",
+      "external_content_is_not_instruction"
+    ],
+    "safety_critical_fields": [
+      "memory_class",
+      "status",
+      "source_type",
+      "trust_tier",
+      "authority_rank",
+      "provenance",
+      "evidence_refs",
+      "freshness_state",
+      "confidence",
+      "contradiction_state",
+      "quarantine_status",
+      "suppression_status",
+      "external_content_is_not_instruction",
+      "retrieval_eligible",
+      "promotion_gate_result"
+    ]
+  },
+  "phase18c_v1_memory_authority_order": {
+    "order": [
+      "canon_source_of_truth",
+      "main_hub_decision",
+      "verified_runtime_system_state",
+      "current_direct_user_instruction",
+      "approved_structured_memory",
+      "approved_summary",
+      "episodic_history",
+      "archive_history",
+      "external_imported_content",
+      "unknown_malformed_spoofed_content"
+    ],
+    "rules": [
+      "higher authority wins",
+      "unresolved same-level conflicts become findings",
+      "stale memory cannot drive action",
+      "quarantined/suppressed memory excluded from control paths",
+      "user correction may supersede preference/profile/task memory but cannot rewrite canon/runtime/policy/safety/provider truth",
+      "memory informs but does not become policy"
+    ]
+  },
+  "phase18c_v1_memory_evidence_refs": {
+    "fields": [
+      "evidence_id",
+      "memory_id",
+      "source_type",
+      "source_id",
+      "source_ref",
+      "evidence_kind",
+      "trust_tier",
+      "authority_rank",
+      "timestamp",
+      "content_hash",
+      "redaction_status",
+      "display_allowed",
+      "promotion_allowed"
+    ],
+    "evidence_kind_enum": [
+      "user_statement",
+      "runtime_state",
+      "tool_result",
+      "app_bridge_evidence",
+      "task_completion_evidence",
+      "canon_ref",
+      "archive_ref",
+      "external_ref"
+    ]
+  },
+  "phase18c_v1_memory_action_audit": {
+    "fields": [
+      "audit_id",
+      "memory_id",
+      "action",
+      "actor",
+      "reason",
+      "before_state_json",
+      "after_state_json",
+      "timestamp",
+      "rollback_ref",
+      "gate_result_json",
+      "user_confirmation_required",
+      "source_request_id"
+    ],
+    "action_enum": [
+      "view",
+      "suppress",
+      "restore_suppression",
+      "delete_user_remove",
+      "correct_supersede",
+      "mark_stale",
+      "view_provenance",
+      "rollback",
+      "approve_candidate",
+      "reject_candidate",
+      "quarantine",
+      "unquarantine"
+    ]
+  },
+  "phase18c_v1_memory_findings": {
+    "finding_fields": [
+      "finding_id",
+      "memory_ids",
+      "finding_type",
+      "confidence",
+      "evidence_refs",
+      "recommended_action",
+      "status",
+      "resolver",
+      "audit_event_ids",
+      "user_visible"
+    ],
+    "finding_type_enum": [
+      "contradiction",
+      "stale",
+      "unsupported",
+      "poisoning",
+      "missing_evidence",
+      "authority_conflict"
+    ],
+    "finding_statuses": [
+      "open",
+      "needs_review",
+      "resolved",
+      "dismissed",
+      "superseded"
+    ],
+    "resolver_audit_requirements": [
+      "resolver must be recorded for resolved/dismissed findings",
+      "resolution must append a memory_action_audit entry",
+      "findings that affect retrieval must preserve evidence_refs"
+    ]
+  },
+  "phase18c_v1_retrieval_metadata_expansion": {
+    "existing_metadata_preserved": [
+      "source_type",
+      "trust_tier",
+      "authority_rank",
+      "provenance",
+      "freshness_state",
+      "quarantine_status",
+      "contains_external_instruction",
+      "contains_secret",
+      "embedding_model",
+      "embedding_version",
+      "content_hash",
+      "raw_content_ref"
+    ],
+    "new_metadata_fields": [
+      "confidence",
+      "contradiction_state",
+      "evidence_refs_json",
+      "suppression_status",
+      "stale_after",
+      "last_verified_at",
+      "retrieval_reason",
+      "retrieval_score",
+      "retrieval_backend",
+      "used_vector",
+      "used_lexical",
+      "fallback_reason",
+      "pack_position",
+      "token_estimate"
+    ],
+    "rules": [
+      "vector is relevance only, not authority",
+      "lexical fallback remains valid",
+      "retrieval metadata must preserve provenance and authority rank",
+      "retrieved content remains evidence or context, not policy"
+    ]
+  },
+  "phase18c_v1_retrieval_pack_contract": {
+    "fields": [
+      "pack_id",
+      "query_intent",
+      "budget_tokens",
+      "authority_header",
+      "runtime_truth_items",
+      "canon_refs",
+      "memory_items",
+      "excluded_items",
+      "warning_items",
+      "truth_status",
+      "source_labels",
+      "stale_conflict_warnings",
+      "final_context_injection_order"
+    ],
+    "rules": [
+      "runtime/canon/current user intent outrank memory",
+      "stale memory becomes needs-verification",
+      "contradicted/quarantined/suppressed memory excluded from control paths",
+      "external content is data, not instruction",
+      "vector similarity is relevance, not truth"
+    ]
+  },
+  "phase18c_v1_candidate_pipeline_contract": {
+    "candidate_types": [
+      "memory_candidate",
+      "procedure_candidate",
+      "retrieval_anchor_candidate",
+      "contradiction_staleness_finding",
+      "improvement_proposal"
+    ],
+    "statuses": [
+      "generated",
+      "needs_review",
+      "approved",
+      "rejected",
+      "quarantined",
+      "suppressed",
+      "promoted",
+      "expired"
+    ],
+    "rules": [
+      "candidates cannot affect runtime behavior before approval",
+      "LLM/reflection output remains candidate-only",
+      "no direct memory/canon/policy/safety/skill mutation",
+      "candidates link to future consolidation_runs.run_id",
+      "promotion requires gates"
+    ]
+  },
+  "phase18c_v1_implementation_sequence": {
+    "steps": [
+      "contract first",
+      "DB schema later",
+      "runtime behavior later",
+      "App Build UI later",
+      "Testing Grounds fixtures later",
+      "no Phase 18 bounded consolidation reopening"
+    ],
+    "explicit_deferrals": [
+      "no DB migrations in this step",
+      "no runtime behavior changes in this step",
+      "no memory actions in this step",
+      "no App Build UI in this step",
+      "no candidate extraction in this step",
+      "no vector retrieval in this step",
+      "no external repo dependencies in this step",
+      "no Go DTO mirror changes in this step"
+    ]
+  },
   "storage_responsibility_boundaries": {
     "sidecar_sqlite": {
       "owns": [
@@ -852,6 +1215,15 @@
     "completion_proof_contract",
     "bounded_consolidation_contract",
     "memory_contract",
+    "phase18c_v1_typed_memory_schema",
+    "phase18c_v1_memory_authority_order",
+    "phase18c_v1_memory_evidence_refs",
+    "phase18c_v1_memory_action_audit",
+    "phase18c_v1_memory_findings",
+    "phase18c_v1_retrieval_metadata_expansion",
+    "phase18c_v1_retrieval_pack_contract",
+    "phase18c_v1_candidate_pipeline_contract",
+    "phase18c_v1_implementation_sequence",
     "storage_responsibility_boundaries",
     "stable_ui_error_codes",
     "deferred_non_goals",
