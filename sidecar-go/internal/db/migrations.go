@@ -258,3 +258,159 @@ CREATE TABLE IF NOT EXISTS consolidation_runs (
 
 CREATE INDEX IF NOT EXISTS idx_consolidation_runs_archive_date ON consolidation_runs(archive_date, status);
 `
+
+const migration010 = `
+CREATE TABLE IF NOT EXISTS memory_entries (
+    memory_id TEXT PRIMARY KEY,
+    memory_class TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    content_excerpt TEXT NOT NULL DEFAULT '',
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
+    trust_tier INTEGER NOT NULL,
+    authority_rank TEXT NOT NULL,
+    provenance_json TEXT NOT NULL DEFAULT '{}',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    freshness_state TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    contradiction_state TEXT NOT NULL,
+    quarantine_status TEXT NOT NULL,
+    suppression_status TEXT NOT NULL,
+    stale_after TEXT,
+    expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_verified_at TEXT,
+    allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+    audit_event_ids_json TEXT NOT NULL DEFAULT '[]',
+    supersedes_memory_id TEXT NOT NULL DEFAULT '',
+    rollback_available INTEGER NOT NULL DEFAULT 0,
+    external_content_is_not_instruction INTEGER NOT NULL DEFAULT 1,
+    retrieval_eligible INTEGER NOT NULL DEFAULT 0,
+    retrieval_reason TEXT NOT NULL DEFAULT '',
+    embedding_status TEXT NOT NULL,
+    candidate_origin_run_id TEXT NOT NULL DEFAULT '',
+    promotion_gate_result_json TEXT NOT NULL DEFAULT '{}',
+    user_visible INTEGER NOT NULL DEFAULT 0,
+    CHECK (memory_class IN ('canon_memory', 'durable_user_preference', 'user_profile_context_fact', 'task_continuity', 'approved_summary', 'runtime_observation', 'episodic_history', 'scratch_transient', 'quarantined_suppressed', 'memory_candidate', 'procedure_candidate', 'retrieval_anchor_candidate', 'contradiction_staleness_finding', 'improvement_proposal')),
+    CHECK (status IN ('candidate', 'active', 'needs_confirmation', 'quarantined', 'suppressed', 'stale', 'superseded', 'deleted_by_user', 'rejected')),
+    CHECK (source_type IN ('canon', 'main_hub', 'verified_runtime', 'direct_user', 'model_output', 'archive', 'external', 'retrieval', 'skill', 'unknown')),
+    CHECK (trust_tier >= 0),
+    CHECK (freshness_state IN ('fresh', 'aging', 'stale', 'expired', 'unknown')),
+    CHECK (confidence >= 0 AND confidence <= 1),
+    CHECK (contradiction_state IN ('none', 'suspected', 'confirmed', 'resolved')),
+    CHECK (quarantine_status IN ('clean', 'quarantined', 'blocked', 'unknown')),
+    CHECK (suppression_status IN ('active', 'suppressed', 'demoted', 'rolled_back')),
+    CHECK (embedding_status IN ('not_needed', 'pending', 'ready', 'failed', 'blocked')),
+    CHECK (rollback_available IN (0, 1)),
+    CHECK (external_content_is_not_instruction IN (0, 1)),
+    CHECK (retrieval_eligible IN (0, 1)),
+    CHECK (user_visible IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS memory_evidence_refs (
+    evidence_id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL DEFAULT '',
+    candidate_id TEXT NOT NULL DEFAULT '',
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
+    source_ref TEXT NOT NULL DEFAULT '',
+    evidence_kind TEXT NOT NULL,
+    trust_tier INTEGER NOT NULL,
+    authority_rank TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
+    redaction_status TEXT NOT NULL DEFAULT '',
+    display_allowed INTEGER NOT NULL DEFAULT 0,
+    promotion_allowed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    CHECK (source_type IN ('canon', 'main_hub', 'verified_runtime', 'direct_user', 'model_output', 'archive', 'external', 'retrieval', 'skill', 'unknown')),
+    CHECK (evidence_kind IN ('user_statement', 'runtime_state', 'tool_result', 'app_bridge_evidence', 'task_completion_evidence', 'canon_ref', 'archive_ref', 'external_ref')),
+    CHECK (trust_tier >= 0),
+    CHECK (display_allowed IN (0, 1)),
+    CHECK (promotion_allowed IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS memory_action_audit (
+    audit_id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL DEFAULT '',
+    candidate_id TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    before_state_json TEXT NOT NULL DEFAULT '{}',
+    after_state_json TEXT NOT NULL DEFAULT '{}',
+    timestamp TEXT NOT NULL,
+    rollback_ref TEXT NOT NULL DEFAULT '',
+    gate_result_json TEXT NOT NULL DEFAULT '{}',
+    user_confirmation_required INTEGER NOT NULL DEFAULT 0,
+    source_request_id TEXT NOT NULL DEFAULT '',
+    CHECK (action IN ('view', 'suppress', 'restore_suppression', 'delete_user_remove', 'correct_supersede', 'mark_stale', 'view_provenance', 'rollback', 'approve_candidate', 'reject_candidate', 'quarantine', 'unquarantine')),
+    CHECK (user_confirmation_required IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS memory_findings (
+    finding_id TEXT PRIMARY KEY,
+    memory_ids_json TEXT NOT NULL DEFAULT '[]',
+    candidate_ids_json TEXT NOT NULL DEFAULT '[]',
+    finding_type TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    recommended_action TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    resolver TEXT NOT NULL DEFAULT '',
+    audit_event_ids_json TEXT NOT NULL DEFAULT '[]',
+    user_visible INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    resolved_at TEXT,
+    CHECK (finding_type IN ('contradiction', 'stale', 'unsupported', 'poisoning', 'missing_evidence', 'authority_conflict')),
+    CHECK (confidence >= 0 AND confidence <= 1),
+    CHECK (status IN ('open', 'needs_review', 'resolved', 'dismissed', 'superseded')),
+    CHECK (user_visible IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS memory_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    candidate_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
+    trust_tier INTEGER NOT NULL,
+    authority_rank TEXT NOT NULL,
+    provenance_json TEXT NOT NULL DEFAULT '{}',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    freshness_state TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    contradiction_state TEXT NOT NULL,
+    quarantine_status TEXT NOT NULL,
+    suppression_status TEXT NOT NULL,
+    consolidation_run_id TEXT NOT NULL DEFAULT '',
+    promotion_gate_result_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT,
+    CHECK (candidate_type IN ('memory_candidate', 'procedure_candidate', 'retrieval_anchor_candidate', 'contradiction_staleness_finding', 'improvement_proposal')),
+    CHECK (status IN ('generated', 'needs_review', 'approved', 'rejected', 'quarantined', 'suppressed', 'promoted', 'expired')),
+    CHECK (source_type IN ('canon', 'main_hub', 'verified_runtime', 'direct_user', 'model_output', 'archive', 'external', 'retrieval', 'skill', 'unknown')),
+    CHECK (trust_tier >= 0),
+    CHECK (freshness_state IN ('fresh', 'aging', 'stale', 'expired', 'unknown')),
+    CHECK (confidence >= 0 AND confidence <= 1),
+    CHECK (contradiction_state IN ('none', 'suspected', 'confirmed', 'resolved')),
+    CHECK (quarantine_status IN ('clean', 'quarantined', 'blocked', 'unknown')),
+    CHECK (suppression_status IN ('active', 'suppressed', 'demoted', 'rolled_back'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_entries_class_status ON memory_entries(memory_class, status);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_retrieval ON memory_entries(retrieval_eligible, freshness_state, contradiction_state, quarantine_status, suppression_status);
+CREATE INDEX IF NOT EXISTS idx_memory_evidence_refs_memory ON memory_evidence_refs(memory_id, candidate_id, evidence_kind);
+CREATE INDEX IF NOT EXISTS idx_memory_action_audit_memory ON memory_action_audit(memory_id, candidate_id, action);
+CREATE INDEX IF NOT EXISTS idx_memory_findings_status ON memory_findings(status, finding_type);
+CREATE INDEX IF NOT EXISTS idx_memory_candidates_status ON memory_candidates(candidate_type, status);
+`

@@ -55,6 +55,20 @@ type RetrievalRecord struct {
 	ContentSummary              string
 	RawContentRef               string
 	Embedding                   []float64
+	Confidence                  float64
+	ContradictionState          string
+	EvidenceRefs                []string
+	SuppressionStatus           string
+	StaleAfter                  string
+	LastVerifiedAt              string
+	RetrievalReason             string
+	RetrievalScore              float64
+	RetrievalBackend            string
+	UsedVector                  bool
+	UsedLexical                 bool
+	FallbackReason              string
+	PackPosition                int
+	TokenEstimate               int
 }
 
 func (s *Store) UpsertRetrievalRecord(record RetrievalRecord) error {
@@ -75,9 +89,12 @@ func (s *Store) UpsertRetrievalRecord(record RetrievalRecord) error {
             chunk_id, source_id, source_type, trust_tier, authority_rank, provenance_json,
             created_at, updated_at, expires_at, freshness, content_hash, quarantine_status,
             contains_external_instruction, contains_secret, embedding_model, embedding_version,
-            content_summary, raw_content_ref, embedding_json
+            content_summary, raw_content_ref, embedding_json, confidence, contradiction_state,
+            evidence_refs_json, suppression_status, stale_after, last_verified_at, retrieval_reason,
+            retrieval_score, retrieval_backend, used_vector, used_lexical, fallback_reason, pack_position,
+            token_estimate
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chunk_id) DO UPDATE SET
             source_id = excluded.source_id,
             source_type = excluded.source_type,
@@ -95,11 +112,29 @@ func (s *Store) UpsertRetrievalRecord(record RetrievalRecord) error {
             embedding_version = excluded.embedding_version,
             content_summary = excluded.content_summary,
             raw_content_ref = excluded.raw_content_ref,
-            embedding_json = excluded.embedding_json
+            embedding_json = excluded.embedding_json,
+            confidence = excluded.confidence,
+            contradiction_state = excluded.contradiction_state,
+            evidence_refs_json = excluded.evidence_refs_json,
+            suppression_status = excluded.suppression_status,
+            stale_after = excluded.stale_after,
+            last_verified_at = excluded.last_verified_at,
+            retrieval_reason = excluded.retrieval_reason,
+            retrieval_score = excluded.retrieval_score,
+            retrieval_backend = excluded.retrieval_backend,
+            used_vector = excluded.used_vector,
+            used_lexical = excluded.used_lexical,
+            fallback_reason = excluded.fallback_reason,
+            pack_position = excluded.pack_position,
+            token_estimate = excluded.token_estimate
     `, normalized.ChunkID, normalized.SourceID, normalized.SourceType, normalized.TrustTier, normalized.AuthorityRank, provenance,
 		normalized.CreatedAt, normalized.UpdatedAt, nullableString(normalized.ExpiresAt), normalized.Freshness, normalized.Hash,
 		normalized.QuarantineStatus, boolToInt(normalized.ContainsExternalInstruction), boolToInt(normalized.ContainsSecret),
-		normalized.EmbeddingModel, normalized.EmbeddingVersion, normalized.ContentSummary, normalized.RawContentRef, string(embedding))
+		normalized.EmbeddingModel, normalized.EmbeddingVersion, normalized.ContentSummary, normalized.RawContentRef, string(embedding),
+		normalized.Confidence, normalized.ContradictionState, mustEncodeStringList(normalized.EvidenceRefs), normalized.SuppressionStatus,
+		nullableString(normalized.StaleAfter), nullableString(normalized.LastVerifiedAt), normalized.RetrievalReason, normalized.RetrievalScore,
+		normalized.RetrievalBackend, boolToInt(normalized.UsedVector), boolToInt(normalized.UsedLexical), normalized.FallbackReason,
+		normalized.PackPosition, normalized.TokenEstimate)
 	return err
 }
 
@@ -112,7 +147,10 @@ func (s *Store) GetRetrievalRecord(chunkID string) (*RetrievalRecord, error) {
         SELECT chunk_id, source_id, source_type, trust_tier, authority_rank, provenance_json,
             created_at, updated_at, COALESCE(expires_at, ''), freshness, content_hash, quarantine_status,
             contains_external_instruction, contains_secret, embedding_model, embedding_version,
-            content_summary, raw_content_ref, embedding_json
+            content_summary, raw_content_ref, embedding_json, confidence, contradiction_state,
+            evidence_refs_json, suppression_status, COALESCE(stale_after, ''), COALESCE(last_verified_at, ''),
+            retrieval_reason, retrieval_score, retrieval_backend, used_vector, used_lexical, fallback_reason,
+            pack_position, token_estimate
         FROM retrieval_records WHERE chunk_id = ?
     `, chunkID)
 	record, err := scanRetrievalRecord(row)
@@ -127,7 +165,10 @@ func (s *Store) ListRetrievalRecords() ([]RetrievalRecord, error) {
         SELECT chunk_id, source_id, source_type, trust_tier, authority_rank, provenance_json,
             created_at, updated_at, COALESCE(expires_at, ''), freshness, content_hash, quarantine_status,
             contains_external_instruction, contains_secret, embedding_model, embedding_version,
-            content_summary, raw_content_ref, embedding_json
+            content_summary, raw_content_ref, embedding_json, confidence, contradiction_state,
+            evidence_refs_json, suppression_status, COALESCE(stale_after, ''), COALESCE(last_verified_at, ''),
+            retrieval_reason, retrieval_score, retrieval_backend, used_vector, used_lexical, fallback_reason,
+            pack_position, token_estimate
         FROM retrieval_records ORDER BY authority_rank ASC, trust_tier ASC, chunk_id ASC
     `)
 	if err != nil {
@@ -195,12 +236,15 @@ type retrievalScanner interface {
 
 func scanRetrievalRecord(scanner retrievalScanner) (*RetrievalRecord, error) {
 	var record RetrievalRecord
-	var provenance, embedding string
-	var containsExternalInstruction, containsSecret int
+	var provenance, embedding, evidenceRefs string
+	var containsExternalInstruction, containsSecret, usedVector, usedLexical int
 	if err := scanner.Scan(&record.ChunkID, &record.SourceID, &record.SourceType, &record.TrustTier, &record.AuthorityRank, &provenance,
 		&record.CreatedAt, &record.UpdatedAt, &record.ExpiresAt, &record.Freshness, &record.Hash, &record.QuarantineStatus,
 		&containsExternalInstruction, &containsSecret, &record.EmbeddingModel, &record.EmbeddingVersion,
-		&record.ContentSummary, &record.RawContentRef, &embedding); err != nil {
+		&record.ContentSummary, &record.RawContentRef, &embedding, &record.Confidence, &record.ContradictionState,
+		&evidenceRefs, &record.SuppressionStatus, &record.StaleAfter, &record.LastVerifiedAt, &record.RetrievalReason,
+		&record.RetrievalScore, &record.RetrievalBackend, &usedVector, &usedLexical, &record.FallbackReason,
+		&record.PackPosition, &record.TokenEstimate); err != nil {
 		return nil, err
 	}
 	var err error
@@ -212,8 +256,13 @@ func scanRetrievalRecord(scanner retrievalScanner) (*RetrievalRecord, error) {
 			return nil, err
 		}
 	}
+	if record.EvidenceRefs, err = decodeStringList(evidenceRefs); err != nil {
+		return nil, err
+	}
 	record.ContainsExternalInstruction = containsExternalInstruction == 1
 	record.ContainsSecret = containsSecret == 1
+	record.UsedVector = usedVector == 1
+	record.UsedLexical = usedLexical == 1
 	return &record, nil
 }
 
@@ -253,6 +302,30 @@ func normalizeRetrievalRecord(record RetrievalRecord) (RetrievalRecord, error) {
 	if record.Freshness == "" {
 		record.Freshness = "unknown"
 	}
+	if record.ContradictionState == "" {
+		record.ContradictionState = "none"
+	}
+	if !isAllowedContradictionState(record.ContradictionState) {
+		return record, errors.New("retrieval_record_invalid_contradiction_state")
+	}
+	if record.SuppressionStatus == "" {
+		record.SuppressionStatus = "active"
+	}
+	if !isAllowedSuppressionStatus(record.SuppressionStatus) {
+		return record, errors.New("retrieval_record_invalid_suppression_status")
+	}
+	if record.Confidence < 0 || record.Confidence > 1 {
+		return record, errors.New("retrieval_record_invalid_confidence")
+	}
+	if record.RetrievalBackend == "" {
+		record.RetrievalBackend = "lexical"
+	}
+	if !record.UsedVector && !record.UsedLexical {
+		record.UsedLexical = true
+	}
+	if record.PackPosition < 0 || record.TokenEstimate < 0 {
+		return record, errors.New("retrieval_record_invalid_metadata_count")
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if record.CreatedAt == "" {
 		record.CreatedAt = now
@@ -261,6 +334,14 @@ func normalizeRetrievalRecord(record RetrievalRecord) (RetrievalRecord, error) {
 		record.UpdatedAt = record.CreatedAt
 	}
 	return record, nil
+}
+
+func mustEncodeStringList(values []string) string {
+	raw, err := encodeStringList(values)
+	if err != nil {
+		return "[]"
+	}
+	return raw
 }
 
 func isAllowedRetrievalSourceType(sourceType RetrievalSourceType) bool {

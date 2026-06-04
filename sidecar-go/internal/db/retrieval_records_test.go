@@ -115,6 +115,42 @@ func TestRetrievalRecordInvalidationBySource(t *testing.T) {
 	}
 }
 
+func TestRetrievalRecordMetadataExpansionPreservesExistingFields(t *testing.T) {
+	store := openRetrievalStore(t)
+	record := testRetrievalRecord("metadata.expanded", RetrievalSourceMemory, "memory-source", 2, "rank_200_memory")
+	record.Confidence = 0.72
+	record.ContradictionState = "suspected"
+	record.EvidenceRefs = []string{"evidence.memory"}
+	record.SuppressionStatus = "demoted"
+	record.StaleAfter = "2026-07-01T00:00:00Z"
+	record.LastVerifiedAt = "2026-06-04T12:00:00Z"
+	record.RetrievalReason = "memory recall"
+	record.RetrievalScore = 0.44
+	record.RetrievalBackend = "lexical"
+	record.UsedVector = false
+	record.UsedLexical = true
+	record.FallbackReason = "vector_unavailable"
+	record.PackPosition = 3
+	record.TokenEstimate = 42
+	if err := store.UpsertRetrievalRecord(record); err != nil {
+		t.Fatalf("upsert retrieval record: %v", err)
+	}
+	loaded, err := store.GetRetrievalRecord(record.ChunkID)
+	if err != nil {
+		t.Fatalf("get retrieval record: %v", err)
+	}
+	if loaded.SourceType != RetrievalSourceMemory || loaded.TrustTier != 2 || loaded.AuthorityRank != "rank_200_memory" || loaded.Hash != record.Hash {
+		t.Fatalf("existing retrieval fields drifted: %#v", loaded)
+	}
+	if loaded.Confidence != 0.72 || loaded.ContradictionState != "suspected" || loaded.SuppressionStatus != "demoted" ||
+		loaded.RetrievalBackend != "lexical" || !loaded.UsedLexical || loaded.UsedVector || loaded.PackPosition != 3 || loaded.TokenEstimate != 42 {
+		t.Fatalf("metadata fields did not round-trip: %#v", loaded)
+	}
+	if len(loaded.EvidenceRefs) != 1 || loaded.EvidenceRefs[0] != "evidence.memory" {
+		t.Fatalf("evidence refs did not round-trip: %#v", loaded.EvidenceRefs)
+	}
+}
+
 func testRetrievalRecord(chunkID string, sourceType RetrievalSourceType, sourceID string, trustTier int, authorityRank string) RetrievalRecord {
 	return RetrievalRecord{
 		ChunkID:          chunkID,

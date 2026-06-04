@@ -52,6 +52,7 @@ func (s *Store) migrate() error {
 		{7, migration007},
 		{8, migration008},
 		{9, migration009},
+		{10, migration010},
 	}
 
 	current := 0
@@ -78,12 +79,74 @@ func (s *Store) migrate() error {
 				return err
 			}
 		}
+		if migration.version == 10 {
+			if err := s.ensureRetrievalMetadataColumns(); err != nil {
+				return err
+			}
+		}
 		if _, err := s.DB.Exec(`INSERT INTO schema_version(version, applied_at) VALUES(?, ?)`, migration.version, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return err
 		}
 		current = migration.version
 	}
 	return nil
+}
+
+func (s *Store) ensureRetrievalMetadataColumns() error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"confidence", "REAL NOT NULL DEFAULT 0"},
+		{"contradiction_state", "TEXT NOT NULL DEFAULT 'none'"},
+		{"evidence_refs_json", "TEXT NOT NULL DEFAULT '[]'"},
+		{"suppression_status", "TEXT NOT NULL DEFAULT 'active'"},
+		{"stale_after", "TEXT"},
+		{"last_verified_at", "TEXT"},
+		{"retrieval_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"retrieval_score", "REAL NOT NULL DEFAULT 0"},
+		{"retrieval_backend", "TEXT NOT NULL DEFAULT 'lexical'"},
+		{"used_vector", "INTEGER NOT NULL DEFAULT 0"},
+		{"used_lexical", "INTEGER NOT NULL DEFAULT 1"},
+		{"fallback_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"pack_position", "INTEGER NOT NULL DEFAULT 0"},
+		{"token_estimate", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, column := range columns {
+		exists, err := s.columnExists("retrieval_records", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := s.DB.Exec(`ALTER TABLE retrieval_records ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) columnExists(table, column string) (bool, error) {
+	rows, err := s.DB.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (s *Store) SetRuntimeConfig(key, value string) error {
