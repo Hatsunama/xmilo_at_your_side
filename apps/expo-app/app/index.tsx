@@ -60,6 +60,7 @@ export default function MainHallScreen() {
   const [reportTarget, setReportTarget] = useState<EventEnvelope | null>(null);
   const [reportReason, setReportReason] = useState<(typeof REPORT_REASONS)[number]>("Harmful or unsafe");
   const [reportNote, setReportNote] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
   const promptLenRef = useRef(0);
   const conversationScrollRef = useRef<ScrollView>(null);
   const pendingConversationScrollRef = useRef(false);
@@ -362,6 +363,11 @@ export default function MainHallScreen() {
     setReportNote("");
   }
 
+  function openMenuRoute(path: "/memory" | "/archive" | "/settings") {
+    setMenuOpen(false);
+    router.push(path);
+  }
+
   async function submitReport() {
     if (!reportTarget) return;
     const outputText = safeEventText(reportTarget);
@@ -404,6 +410,14 @@ export default function MainHallScreen() {
 
   return (
     <View style={styles.screen}>
+      <Pressable
+        style={styles.mainMenuButton}
+        onPress={() => setMenuOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Open Main Hall menu"
+      >
+        <Text style={styles.mainMenuButtonText}>☰</Text>
+      </Pressable>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heroCard}>
           <Text style={styles.kicker}>Main Hall</Text>
@@ -651,6 +665,21 @@ export default function MainHallScreen() {
           </View>
         </View>
       </Modal>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={menuOpen}
+        onRequestClose={() => setMenuOpen(false)}
+      >
+        <Pressable style={styles.menuOverlay} onPress={() => setMenuOpen(false)}>
+          <View style={styles.mainMenuCard}>
+            <MenuItem label="Memory" onPress={() => openMenuRoute("/memory")} />
+            <MenuItem label="Archive" onPress={() => openMenuRoute("/archive")} />
+            <MenuItem label="Settings" onPress={() => openMenuRoute("/settings")} />
+            <MenuItem label="Help & privacy" onPress={() => openMenuRoute("/settings")} />
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -664,9 +693,59 @@ function InfoPill({ label, value }: { label: string; value: string }) {
   );
 }
 
+function MenuItem({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable style={styles.menuItem} onPress={onPress} accessibilityRole="button">
+      <Text style={styles.menuItemText}>{label}</Text>
+      <Text style={styles.menuItemArrow}>›</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#0B1020" },
   content: { padding: 16, gap: 16 },
+  mainMenuButton: {
+    position: "absolute",
+    top: 12,
+    right: 16,
+    zIndex: 5,
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: "#13213D",
+    borderWidth: 1,
+    borderColor: "#334155",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  mainMenuButtonText: { color: "#E5E7EB", fontSize: 22, fontWeight: "900", lineHeight: 24 },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(11,16,32,0.28)",
+    alignItems: "flex-end",
+    paddingTop: 72,
+    paddingRight: 16
+  },
+  mainMenuCard: {
+    width: 188,
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#111827",
+    borderWidth: 1,
+    borderColor: "#263653"
+  },
+  menuItem: {
+    minHeight: 48,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1F2937"
+  },
+  menuItemText: { color: "#E5E7EB", fontWeight: "800" },
+  menuItemArrow: { color: "#A78BFA", fontSize: 20, fontWeight: "900" },
   heroCard: { backgroundColor: "#111827", borderRadius: 18, padding: 16, borderWidth: 1, borderColor: "#1F2937" },
   kicker: { color: "#93C5FD", fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1 },
   title: { color: "#F8FAFC", fontSize: 24, fontWeight: "700", marginTop: 6 },

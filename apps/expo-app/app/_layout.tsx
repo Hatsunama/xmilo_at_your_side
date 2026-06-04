@@ -152,6 +152,8 @@ export default function RootLayout() {
             <Stack.Screen name="setup" options={{ title: "Setup" }} />
             <Stack.Screen name="settings" options={{ title: "Settings" }} />
             <Stack.Screen name="archive" options={{ title: "Archive" }} />
+            <Stack.Screen name="memory/index" options={{ title: "Memory", headerShown: false }} />
+            <Stack.Screen name="memory/[memoryId]" options={{ title: "Memory detail", headerShown: false }} />
             <Stack.Screen
               name="lair"
               options={{
