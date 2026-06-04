@@ -23,6 +23,7 @@ import (
 	"xmilo/sidecar-go/internal/legacy"
 	"xmilo/sidecar-go/internal/llm"
 	"xmilo/sidecar-go/internal/maintenance"
+	"xmilo/sidecar-go/internal/memorycontrol"
 	"xmilo/sidecar-go/internal/mind"
 	"xmilo/sidecar-go/internal/movement"
 	"xmilo/sidecar-go/internal/netutil"
@@ -139,6 +140,8 @@ func (a *App) Start(ctx context.Context) error {
 	mux.Handle("/thought/request", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleThoughtRequest)))
 	mux.Handle("/state", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleState)))
 	mux.Handle("/storage/stats", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleStorageStats)))
+	mux.Handle("/memory", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleMemoryRoot)))
+	mux.Handle("/memory/", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleMemoryPath)))
 	mux.Handle("/report/ai", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAIReport)))
 	mux.Handle("/report/settings", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleSettingsReport)))
 	mux.Handle("/reset", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleReset)))
@@ -1111,6 +1114,157 @@ func (a *App) handleStorageStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (a *App) handleMemoryRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method_not_allowed", "error_code": "method_not_allowed"})
+		return
+	}
+	memories, err := memorycontrol.New(a.store).ListMemory()
+	if err != nil {
+		writeMemoryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "memories": memories})
+}
+
+func (a *App) handleMemoryPath(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/memory/"), "/")
+	if path == "" {
+		a.handleMemoryRoot(w, r)
+		return
+	}
+	parts := strings.Split(path, "/")
+	svc := memorycontrol.New(a.store)
+	if len(parts) == 1 && parts[0] == "audit" {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method_not_allowed", "error_code": "method_not_allowed"})
+			return
+		}
+		audits, err := svc.ListAudit()
+		if err != nil {
+			writeMemoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "audit": audits})
+		return
+	}
+	if len(parts) == 1 && parts[0] == "candidates" {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method_not_allowed", "error_code": "method_not_allowed"})
+			return
+		}
+		candidates, err := svc.ListCandidates()
+		if err != nil {
+			writeMemoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "candidates": candidates})
+		return
+	}
+	if len(parts) == 3 && parts[0] == "candidates" && parts[2] == "reject" {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method_not_allowed", "error_code": "method_not_allowed"})
+			return
+		}
+		req, ok := decodeMemoryActionRequest(w, r)
+		if !ok {
+			return
+		}
+		resp, err := svc.RejectCandidate(parts[1], req)
+		if err != nil {
+			writeMemoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method_not_allowed", "error_code": "method_not_allowed"})
+			return
+		}
+		memory, err := svc.GetMemory(parts[0])
+		if err != nil {
+			writeMemoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "memory": memory})
+		return
+	}
+	if len(parts) != 2 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "memory_route_not_found", "error_code": "memory_route_not_found"})
+		return
+	}
+	memoryID, action := parts[0], parts[1]
+	if action == "provenance" {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method_not_allowed", "error_code": "method_not_allowed"})
+			return
+		}
+		evidence, auditID, err := svc.GetProvenance(memoryID)
+		if err != nil {
+			writeMemoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "memory_id": memoryID, "evidence": evidence, "audit_id": auditID})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method_not_allowed", "error_code": "method_not_allowed"})
+		return
+	}
+	req, ok := decodeMemoryActionRequest(w, r)
+	if !ok {
+		return
+	}
+	var (
+		resp *memorycontrol.ActionResponse
+		err  error
+	)
+	switch action {
+	case "suppress":
+		resp, err = svc.Suppress(memoryID, req)
+	case "restore":
+		resp, err = svc.RestoreSuppression(memoryID, req)
+	case "delete":
+		resp, err = svc.Delete(memoryID, req)
+	case "correct":
+		resp, err = svc.Correct(memoryID, req)
+	case "mark-stale":
+		resp, err = svc.MarkStale(memoryID, req)
+	case "rollback":
+		resp, err = svc.Rollback(memoryID, req)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "memory_route_not_found", "error_code": "memory_route_not_found"})
+		return
+	}
+	if err != nil {
+		writeMemoryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func decodeMemoryActionRequest(w http.ResponseWriter, r *http.Request) (memorycontrol.ActionRequest, bool) {
+	var req memorycontrol.ActionRequest
+	if r.Body == nil || r.Body == http.NoBody {
+		return req, true
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": memorycontrol.CodeInvalidRequest, "error_code": memorycontrol.CodeInvalidRequest})
+		return req, false
+	}
+	return req, true
+}
+
+func writeMemoryError(w http.ResponseWriter, err error) {
+	if serviceErr, ok := memorycontrol.AsError(err); ok {
+		writeJSON(w, serviceErr.Status, map[string]any{"ok": false, "error": serviceErr.Code, "error_code": serviceErr.Code})
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": memorycontrol.CodeValidationFailed, "error_code": memorycontrol.CodeValidationFailed})
 }
 
 func (a *App) handleAIReport(w http.ResponseWriter, r *http.Request) {

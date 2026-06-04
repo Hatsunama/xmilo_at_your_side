@@ -687,6 +687,79 @@ func TestPhase18CV1CandidatePipelineContractPresent(t *testing.T) {
 	)
 }
 
+func TestPhase18E2AVisibleMemoryAPIContractPresent(t *testing.T) {
+	manifestPath := filepath.Join("..", "..", "..", "shared", "contracts", "runtime_contracts.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read runtime contract manifest: %v", err)
+	}
+	var manifest struct {
+		HTTPRouteMatrix  []contractRoute `json:"http_route_matrix"`
+		VisibleMemoryAPI struct {
+			Scope                       string   `json:"scope"`
+			AuthBoundary                string   `json:"auth_boundary"`
+			SafeProjectionFields        []string `json:"safe_projection_fields"`
+			ForbiddenProjectionFields   []string `json:"forbidden_projection_fields"`
+			Routes                      []string `json:"routes"`
+			ActionEnum                  []string `json:"action_enum"`
+			ConfirmationRequiredActions []string `json:"confirmation_required_actions"`
+			ProtectedTruthRules         []string `json:"protected_truth_rules"`
+			StableErrorCodes            []string `json:"stable_error_codes"`
+			AppBoundaryRules            []string `json:"app_boundary_rules"`
+			ExplicitDeferrals           []string `json:"explicit_deferrals"`
+		} `json:"phase18e2a_v1_visible_memory_api_contract"`
+		StableUIErrorCodes       map[string][]string `json:"stable_ui_error_codes"`
+		ContractRequiredSections []string            `json:"contract_required_sections"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode runtime contract manifest: %v", err)
+	}
+	requireNonEmpty(t, "phase18e2a_v1_visible_memory_api_contract.scope", manifest.VisibleMemoryAPI.Scope)
+	if !strings.Contains(manifest.VisibleMemoryAPI.AuthBoundary, "app bearer") || !strings.Contains(manifest.VisibleMemoryAPI.AuthBoundary, "local sidecar") {
+		t.Fatalf("memory api auth boundary is not local bearer scoped: %q", manifest.VisibleMemoryAPI.AuthBoundary)
+	}
+	for _, want := range []contractRoute{
+		{Component: "sidecar", Route: "/memory", Method: "GET"},
+		{Component: "sidecar", Route: "/memory/{memory_id}", Method: "GET"},
+		{Component: "sidecar", Route: "/memory/{memory_id}/provenance", Method: "GET"},
+		{Component: "sidecar", Route: "/memory/{memory_id}/suppress", Method: "POST"},
+		{Component: "sidecar", Route: "/memory/{memory_id}/restore", Method: "POST"},
+		{Component: "sidecar", Route: "/memory/{memory_id}/delete", Method: "POST"},
+		{Component: "sidecar", Route: "/memory/{memory_id}/correct", Method: "POST"},
+		{Component: "sidecar", Route: "/memory/{memory_id}/mark-stale", Method: "POST"},
+		{Component: "sidecar", Route: "/memory/audit", Method: "GET"},
+		{Component: "sidecar", Route: "/memory/candidates", Method: "GET"},
+		{Component: "sidecar", Route: "/memory/candidates/{candidate_id}/reject", Method: "POST"},
+	} {
+		if !containsRoute(manifest.HTTPRouteMatrix, want) {
+			t.Fatalf("http_route_matrix missing memory route %#v", want)
+		}
+	}
+	requireStringSet(t, "phase18e2a.safe_projection_fields", manifest.VisibleMemoryAPI.SafeProjectionFields,
+		"memory_id", "memory_class", "status", "title", "summary", "content_excerpt", "source_type", "freshness_state", "retrieval_eligible", "allowed_actions")
+	requireStringSet(t, "phase18e2a.forbidden_projection_fields", manifest.VisibleMemoryAPI.ForbiddenProjectionFields,
+		"provider config", "auth headers", "hidden prompts", "private payloads", "raw secret values")
+	requireStringSet(t, "phase18e2a.routes", manifest.VisibleMemoryAPI.Routes,
+		"GET /memory", "GET /memory/{memory_id}", "GET /memory/{memory_id}/provenance", "POST /memory/{memory_id}/suppress", "POST /memory/{memory_id}/restore", "POST /memory/{memory_id}/delete", "POST /memory/{memory_id}/correct", "POST /memory/{memory_id}/mark-stale", "GET /memory/audit", "GET /memory/candidates", "POST /memory/candidates/{candidate_id}/reject")
+	requireStringSet(t, "phase18e2a.action_enum", manifest.VisibleMemoryAPI.ActionEnum,
+		"view", "view_provenance", "suppress", "restore_suppression", "delete_user_remove", "correct_supersede", "mark_stale", "reject_candidate")
+	requireStringSet(t, "phase18e2a.confirmation_required_actions", manifest.VisibleMemoryAPI.ConfirmationRequiredActions, "delete_user_remove")
+	requireStringSet(t, "phase18e2a.protected_truth_rules", manifest.VisibleMemoryAPI.ProtectedTruthRules,
+		"canon_memory is view-only", "runtime_observation is view-only unless written by verified runtime code outside this user-control surface", "approved_summary correction remains deferred", "candidate approval and promotion are deferred")
+	requireStringSet(t, "phase18e2a.stable_error_codes", manifest.VisibleMemoryAPI.StableErrorCodes,
+		"memory_not_found", "memory_candidate_not_found", "memory_confirmation_required", "memory_canon_memory_cannot_modify", "memory_runtime_truth_cannot_modify", "memory_approved_summary_correction_deferred", "memory_candidate_approval_deferred", "memory_rollback_deferred", "memory_candidate_promotion_not_allowed", "memory_action_validation_failed")
+	requireStringSet(t, "stable_ui_error_codes.memory_control", manifest.StableUIErrorCodes["memory_control"],
+		"memory_not_found", "memory_candidate_not_found", "memory_confirmation_required", "memory_canon_memory_cannot_modify", "memory_runtime_truth_cannot_modify", "memory_approved_summary_correction_deferred", "memory_candidate_approval_deferred", "memory_rollback_deferred", "memory_candidate_promotion_not_allowed")
+	requireStringSet(t, "phase18e2a.app_boundary_rules", manifest.VisibleMemoryAPI.AppBoundaryRules,
+		"App Build renders returned projections and allowed_actions only",
+		"App Build must not call relay for memory control",
+		"App Build must not render mutation success unless the action response includes ok true and audit_id",
+	)
+	requireStringSet(t, "phase18e2a.explicit_deferrals", manifest.VisibleMemoryAPI.ExplicitDeferrals,
+		"App UI implementation", "candidate approval", "candidate promotion", "rollback implementation", "approved_summary correction", "vector retrieval behavior changes", "candidate extraction", "LLM reflection", "Go DTO mirror synchronization")
+	requireStringSet(t, "contract_required_sections", manifest.ContractRequiredSections, "phase18e2a_v1_visible_memory_api_contract")
+}
+
 type contractRoute struct {
 	Component             string   `json:"component"`
 	Route                 string   `json:"route"`

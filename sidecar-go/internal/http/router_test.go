@@ -1019,6 +1019,247 @@ func assertAuthCheckSafeFailure(t *testing.T, body []byte, wantClass string) {
 	}
 }
 
+func TestMemoryRoutesRequireBearer(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	app := &App{cfg: config.Config{BearerToken: "test-token"}, store: store}
+	mux := http.NewServeMux()
+	mux.Handle("/memory", RequireBearer(app.cfg.BearerToken, http.HandlerFunc(app.handleMemoryRoot)))
+
+	req := httptest.NewRequest(http.MethodGet, "/memory", http.NoBody)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected bearer auth failure, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/memory", http.NoBody)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected authorized memory route, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleMemoryRoutesExposeSafeProjectionAndActions(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	entry := testHTTPMemoryEntry("memory.http", "durable_user_preference")
+	if err := store.UpsertMemoryEntry(entry); err != nil {
+		t.Fatalf("upsert memory: %v", err)
+	}
+	if err := store.AppendMemoryEvidenceRef(db.MemoryEvidenceRef{
+		EvidenceID:       "evidence.http",
+		MemoryID:         entry.MemoryID,
+		SourceType:       "direct_user",
+		SourceID:         "user",
+		SourceRef:        "user safe note",
+		EvidenceKind:     "user_statement",
+		TrustTier:        2,
+		AuthorityRank:    "rank_300_direct_user",
+		DisplayAllowed:   true,
+		PromotionAllowed: true,
+	}); err != nil {
+		t.Fatalf("append evidence: %v", err)
+	}
+	app := &App{store: store}
+
+	req := httptest.NewRequest(http.MethodGet, "/memory", http.NoBody)
+	rec := httptest.NewRecorder()
+	app.handleMemoryRoot(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected memory list ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	text := rec.Body.String()
+	for _, want := range []string{"memory.http", "correct_supersede", "view_provenance"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("memory list missing %q in %s", want, text)
+		}
+	}
+	if strings.Contains(text, "api_key") || strings.Contains(text, "Bearer ") {
+		t.Fatalf("memory list leaked forbidden text: %s", text)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/memory/memory.http/provenance", http.NoBody)
+	rec = httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected provenance ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "evidence.http") || !strings.Contains(rec.Body.String(), "audit_id") {
+		t.Fatalf("provenance did not include evidence and audit proof: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/memory/memory.http/suppress", strings.NewReader(`{"reason":"hide this"}`))
+	rec = httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected suppress ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	loaded, err := store.GetMemoryEntry("memory.http")
+	if err != nil {
+		t.Fatalf("get memory: %v", err)
+	}
+	if loaded.Status != "suppressed" || loaded.RetrievalEligible {
+		t.Fatalf("suppress did not disable retrieval: %#v", loaded)
+	}
+}
+
+func TestHandleMemoryRoutesBlockProtectedTruthAndDeferredActions(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	canon := testHTTPMemoryEntry("memory.canon.http", "canon_memory")
+	canon.SourceType = "canon"
+	canon.AuthorityRank = "rank_000_canon"
+	canon.Provenance = map[string]any{"source_type": "canon"}
+	if err := store.UpsertMemoryEntry(canon); err != nil {
+		t.Fatalf("upsert canon memory: %v", err)
+	}
+	summary := testHTTPMemoryEntry("memory.summary.http", "approved_summary")
+	if err := store.UpsertMemoryEntry(summary); err != nil {
+		t.Fatalf("upsert summary memory: %v", err)
+	}
+	candidate := testHTTPMemoryCandidate("candidate.http")
+	if err := store.UpsertMemoryCandidate(candidate); err != nil {
+		t.Fatalf("upsert candidate: %v", err)
+	}
+	app := &App{store: store}
+
+	req := httptest.NewRequest(http.MethodPost, "/memory/memory.canon.http/suppress", strings.NewReader(`{"reason":"hide"}`))
+	rec := httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "memory_canon_memory_cannot_modify") {
+		t.Fatalf("canon mutation should be forbidden, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/memory/memory.summary.http/correct", strings.NewReader(`{"summary":"new"}`))
+	rec = httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), "memory_approved_summary_correction_deferred") {
+		t.Fatalf("approved summary correction should be deferred, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/memory/memory.summary.http/rollback", strings.NewReader(`{}`))
+	rec = httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), "memory_rollback_deferred") {
+		t.Fatalf("rollback should be deferred, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/memory/candidates", http.NoBody)
+	rec = httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected candidates ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "approve_candidate") {
+		t.Fatalf("candidate approval leaked as supported action: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/memory/candidates/candidate.http/reject", strings.NewReader(`{"reason":"not useful"}`))
+	rec = httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected reject ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := store.GetMemoryCandidate("candidate.http")
+	if err != nil {
+		t.Fatalf("get candidate: %v", err)
+	}
+	if updated.Status != "rejected" {
+		t.Fatalf("candidate not rejected: %#v", updated)
+	}
+}
+
+func TestHandleMemoryRoutesRejectWrongMethodsAndUnknownFields(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "sidecar.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	entry := testHTTPMemoryEntry("memory.method", "durable_user_preference")
+	if err := store.UpsertMemoryEntry(entry); err != nil {
+		t.Fatalf("upsert memory: %v", err)
+	}
+	app := &App{store: store}
+
+	req := httptest.NewRequest(http.MethodPost, "/memory", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	app.handleMemoryRoot(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected method not allowed, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/memory/memory.method/suppress", strings.NewReader(`{"reason":"hide","unknown":true}`))
+	rec = httptest.NewRecorder()
+	app.handleMemoryPath(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "memory_invalid_request") {
+		t.Fatalf("expected strict JSON rejection, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func testHTTPMemoryEntry(memoryID, memoryClass string) db.MemoryEntry {
+	return db.MemoryEntry{
+		MemoryID:                        memoryID,
+		MemoryClass:                     memoryClass,
+		Status:                          "active",
+		Title:                           "safe title",
+		Summary:                         "safe summary",
+		Content:                         "safe content",
+		ContentExcerpt:                  "safe content",
+		SourceType:                      "direct_user",
+		SourceID:                        "user",
+		TrustTier:                       2,
+		AuthorityRank:                   "rank_300_direct_user",
+		Provenance:                      map[string]any{"source_type": "direct_user", "source_id": "user"},
+		EvidenceRefs:                    []string{"evidence.user"},
+		FreshnessState:                  "fresh",
+		Confidence:                      0.8,
+		ContradictionState:              "none",
+		QuarantineStatus:                "clean",
+		SuppressionStatus:               "active",
+		AllowedActions:                  []string{"view"},
+		RollbackAvailable:               true,
+		ExternalContentIsNotInstruction: true,
+		RetrievalEligible:               true,
+		RetrievalReason:                 "safe preference",
+		EmbeddingStatus:                 "not_needed",
+		UserVisible:                     true,
+	}
+}
+
+func testHTTPMemoryCandidate(candidateID string) db.MemoryCandidate {
+	return db.MemoryCandidate{
+		CandidateID:        candidateID,
+		CandidateType:      "memory_candidate",
+		Status:             "generated",
+		Title:              "candidate",
+		Summary:            "candidate summary",
+		Content:            "candidate content",
+		SourceType:         "model_output",
+		SourceID:           "turn_1",
+		TrustTier:          6,
+		AuthorityRank:      "rank_700_model_output",
+		Provenance:         map[string]any{"source_type": "model_output", "turn_id": "turn_1"},
+		EvidenceRefs:       []string{"evidence.turn_1"},
+		FreshnessState:     "fresh",
+		Confidence:         0.5,
+		ContradictionState: "none",
+		QuarantineStatus:   "clean",
+		SuppressionStatus:  "active",
+	}
+}
+
 func testUnsignedJWT(t *testing.T, claims map[string]any) string {
 	t.Helper()
 	raw, err := json.Marshal(claims)

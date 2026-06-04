@@ -192,6 +192,28 @@ func TestMemoryActionsAppendAuditRows(t *testing.T) {
 	if strings.Contains(beforeJSON, "Bearer") || strings.Contains(beforeJSON, "secret") {
 		t.Fatalf("audit before state leaked secret: %s", beforeJSON)
 	}
+	audits, err := store.ListMemoryActionAudit()
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	if len(audits) != 3 || audits[0].Action == "" || len(audits[0].BeforeState) == 0 {
+		t.Fatalf("audit list did not round-trip rows: %#v", audits)
+	}
+}
+
+func TestListMemoryCandidatesForVisibleControl(t *testing.T) {
+	store := openMemoryEntryStore(t)
+	candidate := testMemoryCandidate("candidate.visible.control")
+	if err := store.UpsertMemoryCandidate(candidate); err != nil {
+		t.Fatalf("upsert candidate: %v", err)
+	}
+	candidates, err := store.ListMemoryCandidates()
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].CandidateID != candidate.CandidateID || candidates[0].Content != "candidate content" {
+		t.Fatalf("candidate list did not round-trip: %#v", candidates)
+	}
 }
 
 func TestMemoryFindingResolutionRequiresResolverAndAudit(t *testing.T) {

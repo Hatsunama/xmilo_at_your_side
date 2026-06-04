@@ -307,6 +307,191 @@
     },
     {
       "component": "sidecar",
+      "route": "/memory",
+      "method": "GET",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "safe visible memory projections: memory_id, class, status, title, summary, excerpt, source labels, freshness, confidence, contradiction/quarantine/suppression state, retrieval eligibility, warnings, allowed_actions",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Memory list is a governed projection only; App Build must not infer hidden memory, retrieval authority, or mutation success from display labels."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/{memory_id}",
+      "method": "GET",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "memory_id path segment",
+      "response_schema_summary": "single safe visible memory projection",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_not_found",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "A memory detail view exposes safe projection fields only; it must not expose raw hidden payloads, provider config, auth headers, or secret material."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/{memory_id}/provenance",
+      "method": "GET",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "memory_id path segment",
+      "response_schema_summary": "display_allowed evidence refs only plus audit_id",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_not_found",
+        "memory_evidence_display_blocked",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Provenance view is filtered by display_allowed and redaction; hidden/private refs remain unavailable."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/{memory_id}/suppress",
+      "method": "POST",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "optional reason",
+      "response_schema_summary": "ActionResponse with updated safe projection and audit_id",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_not_found",
+        "memory_forbidden_action",
+        "memory_canon_memory_cannot_modify",
+        "memory_runtime_truth_cannot_modify",
+        "memory_protected_truth_cannot_modify",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Suppress disables memory influence without deleting canon/runtime truth and app must render it as a recorded local memory-control action only."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/{memory_id}/restore",
+      "method": "POST",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "optional reason",
+      "response_schema_summary": "ActionResponse with updated safe projection and audit_id",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_not_found",
+        "memory_forbidden_action",
+        "memory_canon_memory_cannot_modify",
+        "memory_runtime_truth_cannot_modify",
+        "memory_protected_truth_cannot_modify",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Restore may return eligible only when existing gates allow it; app must not override quarantine, contradiction, freshness, or authority rules."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/{memory_id}/delete",
+      "method": "POST",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "reason and confirmation boolean",
+      "response_schema_summary": "ActionResponse with tombstoned safe projection and audit_id",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_not_found",
+        "memory_confirmation_required",
+        "memory_forbidden_action",
+        "memory_canon_memory_cannot_modify",
+        "memory_runtime_truth_cannot_modify",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Delete is V1 tombstone/suppress semantics, not a rollback system and not hard deletion of protected truth."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/{memory_id}/correct",
+      "method": "POST",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "reason plus replacement title/summary/content/content_excerpt",
+      "response_schema_summary": "ActionResponse with old memory superseded, corrected_memory projection, and audit_id",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_not_found",
+        "memory_forbidden_action",
+        "memory_approved_summary_correction_deferred",
+        "memory_canon_memory_cannot_modify",
+        "memory_runtime_truth_cannot_modify",
+        "memory_protected_truth_cannot_modify",
+        "memory_unsafe_secret_blocked",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Correction may supersede user-correctable preference/profile/task-continuity memory only; approved_summary correction remains deferred."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/{memory_id}/mark-stale",
+      "method": "POST",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "optional reason",
+      "response_schema_summary": "ActionResponse with stale safe projection and audit_id",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_not_found",
+        "memory_forbidden_action",
+        "memory_canon_memory_cannot_modify",
+        "memory_runtime_truth_cannot_modify",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Mark-stale prevents memory from driving retrieval until future governed repair; app must not treat stale memory as current truth."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/audit",
+      "method": "GET",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "safe memory action audit projection",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Audit projection is a local accountability surface; before/after state remains redacted and does not expose raw hidden payloads."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/candidates",
+      "method": "GET",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "empty",
+      "response_schema_summary": "safe candidate projections and reject-only V1 allowed_actions",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Candidates are inert review items; candidate approval and promotion are not implemented in this phase."
+    },
+    {
+      "component": "sidecar",
+      "route": "/memory/candidates/{candidate_id}/reject",
+      "method": "POST",
+      "auth_boundary": "app bearer required; local sidecar only",
+      "request_schema_summary": "optional reason",
+      "response_schema_summary": "ActionResponse with rejected candidate projection and audit_id",
+      "stable_error_codes": [
+        "sidecar_auth_missing_or_invalid",
+        "memory_candidate_not_found",
+        "memory_candidate_promotion_not_allowed",
+        "memory_action_validation_failed",
+        "method_not_allowed"
+      ],
+      "user_facing_truth_note": "Rejecting a candidate records review state only; it does not approve, promote, mutate, or roll back memory."
+    },
+    {
+      "component": "sidecar",
       "route": "/ws",
       "method": "GET",
       "auth_boundary": "websocket bearer required",
@@ -1084,6 +1269,114 @@
       "no Go DTO mirror changes in this step"
     ]
   },
+  "phase18e2a_v1_visible_memory_api_contract": {
+    "scope": "local sidecar runtime-owned visible memory view/control API for App Build consumption; no App UI implementation in this phase",
+    "auth_boundary": "all /memory routes require the existing local sidecar app bearer token and are not relay/public routes",
+    "safe_projection_fields": [
+      "memory_id",
+      "memory_class",
+      "status",
+      "category",
+      "title",
+      "summary",
+      "content_excerpt",
+      "source_type",
+      "source_id",
+      "freshness_state",
+      "confidence",
+      "contradiction_state",
+      "quarantine_status",
+      "suppression_status",
+      "retrieval_eligible",
+      "retrieval_reason",
+      "rollback_available",
+      "user_visible",
+      "warnings",
+      "allowed_actions"
+    ],
+    "forbidden_projection_fields": [
+      "raw content when not explicitly safe",
+      "provider config",
+      "auth headers",
+      "hidden prompts",
+      "private payloads",
+      "raw secret values",
+      "raw provenance JSON",
+      "promotion gate internals not marked safe",
+      "unredacted audit JSON"
+    ],
+    "routes": [
+      "GET /memory",
+      "GET /memory/{memory_id}",
+      "GET /memory/{memory_id}/provenance",
+      "POST /memory/{memory_id}/suppress",
+      "POST /memory/{memory_id}/restore",
+      "POST /memory/{memory_id}/delete",
+      "POST /memory/{memory_id}/correct",
+      "POST /memory/{memory_id}/mark-stale",
+      "GET /memory/audit",
+      "GET /memory/candidates",
+      "POST /memory/candidates/{candidate_id}/reject"
+    ],
+    "action_enum": [
+      "view",
+      "view_provenance",
+      "suppress",
+      "restore_suppression",
+      "delete_user_remove",
+      "correct_supersede",
+      "mark_stale",
+      "reject_candidate"
+    ],
+    "confirmation_required_actions": [
+      "delete_user_remove"
+    ],
+    "protected_truth_rules": [
+      "canon_memory is view-only",
+      "runtime_observation is view-only unless written by verified runtime code outside this user-control surface",
+      "main_hub/canon/verified_runtime source truth cannot be rewritten by App Build",
+      "approved_summary correction remains deferred",
+      "suppressed/quarantined/stale/confirmed-contradicted memory cannot drive retrieval",
+      "candidate approval and promotion are deferred"
+    ],
+    "stable_error_codes": [
+      "memory_invalid_request",
+      "memory_not_found",
+      "memory_candidate_not_found",
+      "memory_unsupported_action",
+      "memory_forbidden_action",
+      "memory_confirmation_required",
+      "memory_protected_truth_cannot_modify",
+      "memory_canon_memory_cannot_modify",
+      "memory_runtime_truth_cannot_modify",
+      "memory_approved_summary_correction_deferred",
+      "memory_candidate_approval_deferred",
+      "memory_rollback_deferred",
+      "memory_evidence_display_blocked",
+      "memory_unsafe_secret_blocked",
+      "memory_candidate_promotion_not_allowed",
+      "memory_action_validation_failed"
+    ],
+    "app_boundary_rules": [
+      "App Build renders returned projections and allowed_actions only",
+      "App Build must not invent memory classes, statuses, actions, rollback states, approval states, or fallback meanings",
+      "App Build must not call relay for memory control",
+      "App Build must not treat candidate rejection as memory promotion",
+      "App Build must not display hidden/private provenance refs",
+      "App Build must not render mutation success unless the action response includes ok true and audit_id"
+    ],
+    "explicit_deferrals": [
+      "App UI implementation",
+      "candidate approval",
+      "candidate promotion",
+      "rollback implementation",
+      "approved_summary correction",
+      "vector retrieval behavior changes",
+      "candidate extraction",
+      "LLM reflection",
+      "Go DTO mirror synchronization"
+    ]
+  },
   "storage_responsibility_boundaries": {
     "sidecar_sqlite": {
       "owns": [
@@ -1196,6 +1489,24 @@
       "completed_cannot_require_user_choice",
       "completed_requires_evidence"
     ],
+    "memory_control": [
+      "memory_invalid_request",
+      "memory_not_found",
+      "memory_candidate_not_found",
+      "memory_unsupported_action",
+      "memory_forbidden_action",
+      "memory_confirmation_required",
+      "memory_protected_truth_cannot_modify",
+      "memory_canon_memory_cannot_modify",
+      "memory_runtime_truth_cannot_modify",
+      "memory_approved_summary_correction_deferred",
+      "memory_candidate_approval_deferred",
+      "memory_rollback_deferred",
+      "memory_evidence_display_blocked",
+      "memory_unsafe_secret_blocked",
+      "memory_candidate_promotion_not_allowed",
+      "memory_action_validation_failed"
+    ],
     "generic": [
       "sidecar_auth_missing_or_invalid",
       "relay_auth_missing_or_invalid",
@@ -1224,6 +1535,7 @@
     "phase18c_v1_retrieval_pack_contract",
     "phase18c_v1_candidate_pipeline_contract",
     "phase18c_v1_implementation_sequence",
+    "phase18e2a_v1_visible_memory_api_contract",
     "storage_responsibility_boundaries",
     "stable_ui_error_codes",
     "deferred_non_goals",

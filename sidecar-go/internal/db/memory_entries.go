@@ -249,6 +249,31 @@ func (s *Store) ListMemoryEntriesForRetrievalPack() ([]MemoryEntry, error) {
 	return entries, rows.Err()
 }
 
+func (s *Store) ListMemoryCandidates() ([]MemoryCandidate, error) {
+	rows, err := s.DB.Query(`
+        SELECT candidate_id, candidate_type, status, title, summary, content, source_type, source_id, trust_tier,
+            authority_rank, provenance_json, evidence_refs_json, freshness_state, confidence, contradiction_state,
+            quarantine_status, suppression_status, consolidation_run_id, promotion_gate_result_json, created_at,
+            updated_at, COALESCE(expires_at, '')
+        FROM memory_candidates
+        ORDER BY authority_rank ASC, trust_tier ASC, candidate_type ASC, candidate_id ASC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var candidates []MemoryCandidate
+	for rows.Next() {
+		candidate, err := scanMemoryCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, *candidate)
+	}
+	return candidates, rows.Err()
+}
+
 func (s *Store) ListMemoryEvidenceRefsForMemoryIDs(memoryIDs []string) ([]MemoryEvidenceRef, error) {
 	seen := map[string]bool{}
 	var ids []string
@@ -410,6 +435,29 @@ func (s *Store) AppendMemoryActionAudit(audit MemoryActionAudit) error {
 		normalized.Reason, beforeState, afterState, normalized.Timestamp, normalized.RollbackRef, gateResult,
 		boolToInt(normalized.UserConfirmationRequired), normalized.SourceRequestID)
 	return err
+}
+
+func (s *Store) ListMemoryActionAudit() ([]MemoryActionAudit, error) {
+	rows, err := s.DB.Query(`
+        SELECT audit_id, memory_id, candidate_id, action, actor, reason, before_state_json, after_state_json,
+            timestamp, rollback_ref, gate_result_json, user_confirmation_required, source_request_id
+        FROM memory_action_audit
+        ORDER BY timestamp DESC, audit_id DESC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var audits []MemoryActionAudit
+	for rows.Next() {
+		audit, err := scanMemoryActionAudit(rows)
+		if err != nil {
+			return nil, err
+		}
+		audits = append(audits, *audit)
+	}
+	return audits, rows.Err()
 }
 
 func (s *Store) UpsertMemoryFinding(finding MemoryFinding) error {
@@ -793,6 +841,29 @@ func scanMemoryEvidenceRef(scanner retrievalScanner) (*MemoryEvidenceRef, error)
 	ref.DisplayAllowed = displayAllowed == 1
 	ref.PromotionAllowed = promotionAllowed == 1
 	return &ref, nil
+}
+
+func scanMemoryActionAudit(scanner retrievalScanner) (*MemoryActionAudit, error) {
+	var audit MemoryActionAudit
+	var beforeStateJSON, afterStateJSON, gateResultJSON string
+	var userConfirmationRequired int
+	if err := scanner.Scan(&audit.AuditID, &audit.MemoryID, &audit.CandidateID, &audit.Action, &audit.Actor,
+		&audit.Reason, &beforeStateJSON, &afterStateJSON, &audit.Timestamp, &audit.RollbackRef, &gateResultJSON,
+		&userConfirmationRequired, &audit.SourceRequestID); err != nil {
+		return nil, err
+	}
+	var err error
+	if audit.BeforeState, err = decodeStringMap(beforeStateJSON); err != nil {
+		return nil, err
+	}
+	if audit.AfterState, err = decodeStringMap(afterStateJSON); err != nil {
+		return nil, err
+	}
+	if audit.GateResult, err = decodeStringMap(gateResultJSON); err != nil {
+		return nil, err
+	}
+	audit.UserConfirmationRequired = userConfirmationRequired == 1
+	return &audit, nil
 }
 
 func encodeSafeJSON(value map[string]any) (string, error) {
