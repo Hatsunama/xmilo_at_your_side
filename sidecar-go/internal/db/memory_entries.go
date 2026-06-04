@@ -222,6 +222,76 @@ func (s *Store) GetMemoryEntry(memoryID string) (*MemoryEntry, error) {
 	return entry, err
 }
 
+func (s *Store) ListMemoryEntriesForRetrievalPack() ([]MemoryEntry, error) {
+	rows, err := s.DB.Query(`
+        SELECT memory_id, memory_class, status, title, summary, content, content_excerpt, source_type, source_id,
+            trust_tier, authority_rank, provenance_json, evidence_refs_json, freshness_state, confidence,
+            contradiction_state, quarantine_status, suppression_status, COALESCE(stale_after, ''), COALESCE(expires_at, ''),
+            created_at, updated_at, COALESCE(last_verified_at, ''), allowed_actions_json, audit_event_ids_json,
+            supersedes_memory_id, rollback_available, external_content_is_not_instruction, retrieval_eligible,
+            retrieval_reason, embedding_status, candidate_origin_run_id, promotion_gate_result_json, user_visible
+        FROM memory_entries
+        ORDER BY authority_rank ASC, trust_tier ASC, memory_class ASC, memory_id ASC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []MemoryEntry
+	for rows.Next() {
+		entry, err := scanMemoryEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, *entry)
+	}
+	return entries, rows.Err()
+}
+
+func (s *Store) ListMemoryEvidenceRefsForMemoryIDs(memoryIDs []string) ([]MemoryEvidenceRef, error) {
+	seen := map[string]bool{}
+	var ids []string
+	for _, memoryID := range memoryIDs {
+		memoryID = strings.TrimSpace(memoryID)
+		if memoryID == "" || seen[memoryID] {
+			continue
+		}
+		seen[memoryID] = true
+		ids = append(ids, memoryID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.DB.Query(`
+        SELECT evidence_id, memory_id, candidate_id, source_type, source_id, source_ref, evidence_kind,
+            trust_tier, authority_rank, timestamp, content_hash, redaction_status, display_allowed,
+            promotion_allowed, created_at
+        FROM memory_evidence_refs
+        WHERE memory_id IN (`+placeholders+`)
+        ORDER BY memory_id ASC, authority_rank ASC, trust_tier ASC, evidence_id ASC
+    `, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var refs []MemoryEvidenceRef
+	for rows.Next() {
+		ref, err := scanMemoryEvidenceRef(rows)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, *ref)
+	}
+	return refs, rows.Err()
+}
+
 func (s *Store) UpsertMemoryCandidate(candidate MemoryCandidate) error {
 	normalized, err := normalizeMemoryCandidate(candidate)
 	if err != nil {
@@ -710,6 +780,19 @@ func scanMemoryCandidate(scanner retrievalScanner) (*MemoryCandidate, error) {
 		return nil, err
 	}
 	return &candidate, nil
+}
+
+func scanMemoryEvidenceRef(scanner retrievalScanner) (*MemoryEvidenceRef, error) {
+	var ref MemoryEvidenceRef
+	var displayAllowed, promotionAllowed int
+	if err := scanner.Scan(&ref.EvidenceID, &ref.MemoryID, &ref.CandidateID, &ref.SourceType, &ref.SourceID, &ref.SourceRef,
+		&ref.EvidenceKind, &ref.TrustTier, &ref.AuthorityRank, &ref.Timestamp, &ref.ContentHash, &ref.RedactionStatus,
+		&displayAllowed, &promotionAllowed, &ref.CreatedAt); err != nil {
+		return nil, err
+	}
+	ref.DisplayAllowed = displayAllowed == 1
+	ref.PromotionAllowed = promotionAllowed == 1
+	return &ref, nil
 }
 
 func encodeSafeJSON(value map[string]any) (string, error) {

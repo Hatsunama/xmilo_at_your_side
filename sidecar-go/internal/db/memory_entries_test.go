@@ -346,6 +346,89 @@ func TestBoundedConsolidationSchemaBehaviorRemainsUnchanged(t *testing.T) {
 	}
 }
 
+func TestListMemoryEntriesForRetrievalPackOrdersDeterministically(t *testing.T) {
+	store := openMemoryEntryStore(t)
+	lower := testMemoryEntry("memory.lower", "durable_user_preference")
+	lower.AuthorityRank = "rank_300_direct_user"
+	lower.TrustTier = 3
+	higher := testMemoryEntry("memory.higher", "runtime_observation")
+	higher.SourceType = "verified_runtime"
+	higher.AuthorityRank = "rank_200_runtime"
+	higher.TrustTier = 1
+	higher.Provenance = map[string]any{"source_type": "verified_runtime"}
+	if err := store.UpsertMemoryEntry(lower); err != nil {
+		t.Fatalf("upsert lower memory: %v", err)
+	}
+	if err := store.UpsertMemoryEntry(higher); err != nil {
+		t.Fatalf("upsert higher memory: %v", err)
+	}
+	entries, err := store.ListMemoryEntriesForRetrievalPack()
+	if err != nil {
+		t.Fatalf("list memory entries: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected two memory entries, got %#v", entries)
+	}
+	if entries[0].MemoryID != "memory.higher" || entries[1].MemoryID != "memory.lower" {
+		t.Fatalf("entries not deterministically ordered: %#v", entries)
+	}
+}
+
+func TestListMemoryEvidenceRefsForRetrievalPackRoundTripsDisplayFlags(t *testing.T) {
+	store := openMemoryEntryStore(t)
+	entry := testMemoryEntry("memory.evidence.list", "durable_user_preference")
+	if err := store.UpsertMemoryEntry(entry); err != nil {
+		t.Fatalf("upsert memory: %v", err)
+	}
+	refs := []MemoryEvidenceRef{
+		{
+			EvidenceID:       "evidence.display",
+			MemoryID:         entry.MemoryID,
+			SourceType:       "direct_user",
+			SourceID:         "user",
+			SourceRef:        "user visible preference",
+			EvidenceKind:     "user_statement",
+			TrustTier:        2,
+			AuthorityRank:    "rank_300_direct_user",
+			DisplayAllowed:   true,
+			PromotionAllowed: true,
+		},
+		{
+			EvidenceID:       "evidence.secret",
+			MemoryID:         entry.MemoryID,
+			SourceType:       "direct_user",
+			SourceID:         "user",
+			SourceRef:        "api_key=sk-user-provided-value",
+			EvidenceKind:     "user_statement",
+			TrustTier:        2,
+			AuthorityRank:    "rank_300_direct_user",
+			DisplayAllowed:   false,
+			PromotionAllowed: false,
+		},
+	}
+	for _, ref := range refs {
+		if err := store.AppendMemoryEvidenceRef(ref); err != nil {
+			t.Fatalf("append evidence %s: %v", ref.EvidenceID, err)
+		}
+	}
+	loaded, err := store.ListMemoryEvidenceRefsForMemoryIDs([]string{entry.MemoryID, entry.MemoryID, ""})
+	if err != nil {
+		t.Fatalf("list evidence refs: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("expected two evidence refs, got %#v", loaded)
+	}
+	if !loaded[0].DisplayAllowed || !loaded[0].PromotionAllowed {
+		t.Fatalf("display evidence flags drifted: %#v", loaded[0])
+	}
+	if loaded[1].DisplayAllowed || loaded[1].PromotionAllowed {
+		t.Fatalf("secret evidence flags drifted: %#v", loaded[1])
+	}
+	if strings.Contains(loaded[1].SourceRef, "sk-user-provided-value") || strings.Contains(loaded[1].SourceRef, "api_key=") {
+		t.Fatalf("secret evidence ref leaked raw value: %s", loaded[1].SourceRef)
+	}
+}
+
 func testMemoryEntry(memoryID, memoryClass string) MemoryEntry {
 	return MemoryEntry{
 		MemoryID:                        memoryID,
