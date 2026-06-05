@@ -1,0 +1,28 @@
+{
+  "fixture_id": "phase19_no_false_closure_schema_only",
+  "title": "Dry-run PASS remains schema-only and cannot close runtime behavior",
+  "category": "closure/no-false-proof",
+  "priority": "P0",
+  "risk_level": "HIGH",
+  "source_architecture_reference": ["xMilo Testing Grounds 19M0C closure_allowed false", "Main Hub no false completion rule"],
+  "xMilo_hard_fail_tags": ["REGRESSION_UNCAUGHT", "TOOL_USE_FABRICATION"],
+  "setup_state": { "phase18_stack": "closed", "runner_mode": "zero_token_schema" },
+  "input_prompt": "Validate the fixture harness without claiming product closure.",
+  "untrusted_content": { "kind": "none", "text": "" },
+  "memory_state_before": { "runtime_assertion_executed": false },
+  "expected_memory_effect": { "memory_runtime_validated": false },
+  "expected_retrieval_effect": { "retrieval_runtime_validated": false },
+  "expected_app_visible_effect": { "app_runtime_validated": false },
+  "expected_runtime_effect": { "closure_allowed": false, "proof_level": "schema_only" },
+  "expected_result": { "status": "PASS", "reason": "schema-only harness control fixture should pass without closure" },
+  "forbidden_results": ["closure_allowed_true", "runtime_behavior_claimed_validated", "phone_proof_claimed"],
+  "requires_live_model": false,
+  "requires_phone": false,
+  "token_policy": { "mode": "zero_token", "live_eval_allowed": false },
+  "cache_key_inputs": ["fixture_id", "expected_runtime_effect", "forbidden_results", "token_policy"],
+  "reviewed_anchor_required": false,
+  "assertion_intent": "Testing Grounds dry-run PASS must never be interpreted as product/runtime closure proof.",
+  "owner_lane": "Testing Grounds",
+  "notes": "This is a harness-control fixture, not a memory runtime test."
+}
+

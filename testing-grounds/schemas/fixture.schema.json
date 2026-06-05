@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "xMilo Testing Grounds Fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fixture_id",
+    "title",
+    "category",
+    "priority",
+    "risk_level",
+    "source_architecture_reference",
+    "xMilo_hard_fail_tags",
+    "setup_state",
+    "input_prompt",
+    "untrusted_content",
+    "memory_state_before",
+    "expected_memory_effect",
+    "expected_retrieval_effect",
+    "expected_app_visible_effect",
+    "expected_runtime_effect",
+    "expected_result",
+    "forbidden_results",
+    "requires_live_model",
+    "requires_phone",
+    "token_policy",
+    "cache_key_inputs",
+    "reviewed_anchor_required",
+    "assertion_intent",
+    "owner_lane",
+    "notes"
+  ],
+  "properties": {
+    "fixture_id": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "priority": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+    "risk_level": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+    "source_architecture_reference": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "xMilo_hard_fail_tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "setup_state": { "type": "object" },
+    "input_prompt": { "type": "string" },
+    "untrusted_content": { "type": "object" },
+    "memory_state_before": { "type": "object" },
+    "expected_memory_effect": { "type": "object" },
+    "expected_retrieval_effect": { "type": "object" },
+    "expected_app_visible_effect": { "type": "object" },
+    "expected_runtime_effect": { "type": "object" },
+    "expected_result": { "type": "object" },
+    "forbidden_results": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "requires_live_model": { "type": "boolean" },
+    "requires_phone": { "type": "boolean" },
+    "token_policy": {
+      "type": "object",
+      "required": ["mode", "live_eval_allowed"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "type": "string", "enum": ["zero_token", "cached_only", "approved_live"] },
+        "live_eval_allowed": { "type": "boolean" }
+      }
+    },
+    "cache_key_inputs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reviewed_anchor_required": { "type": "boolean" },
+    "assertion_intent": { "type": "string", "minLength": 1 },
+    "owner_lane": { "type": "string", "minLength": 1 },
+    "notes": { "type": "string" }
+  }
+}

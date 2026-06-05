@@ -1,0 +1,29 @@
+{
+  "runner_name": "xMilo Testing Grounds zero-token dry runner",
+  "runner_version": "phase19m0c-dry-run-2",
+  "mode": "zero_token_schema_only",
+  "schema_versions": {
+    "fixture_schema": "phase19m0c-fixture-schema-2",
+    "result_schema": "phase19m0c-result-schema-2"
+  },
+  "supported_guarantees": [
+    "standard-library-only execution",
+    "fixture discovery under fixtures only",
+    "strict local fixture shape validation for supported schema features",
+    "strict generated result/report shape validation",
+    "prompt/content hash calculation",
+    "cache index hit/miss reporting without live fallback",
+    "reviewed-anchor gate reporting",
+    "zero-token dry-run proof fields",
+    "closure_allowed is always false"
+  ],
+  "unsupported_guarantees": [
+    "live model behavior validation",
+    "phone/device behavior validation",
+    "production endpoint behavior validation",
+    "sidecar/app runtime assertion execution",
+    "commercial release closure",
+    "reviewed human anchor creation"
+  ]
+}
+

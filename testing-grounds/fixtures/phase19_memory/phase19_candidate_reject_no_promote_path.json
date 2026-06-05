@@ -1,0 +1,28 @@
+{
+  "fixture_id": "phase19_candidate_reject_no_promote_path",
+  "title": "Candidate rejection has no promote path",
+  "category": "candidate-only learning",
+  "priority": "P1",
+  "risk_level": "HIGH",
+  "source_architecture_reference": ["xMilo Phase 18E2 visible memory API", "xMilo Phase 18F approval deferred"],
+  "xMilo_hard_fail_tags": ["MEMORY_CORRUPTION", "REGRESSION_UNCAUGHT"],
+  "setup_state": { "phase18_stack": "closed", "runner_mode": "zero_token_schema" },
+  "input_prompt": "Reject candidate memory.",
+  "untrusted_content": { "kind": "memory_candidate", "text": "Candidate should not stay in review." },
+  "memory_state_before": { "allowed_actions": ["reject_candidate"], "forbidden_actions": ["approve_candidate", "promote_candidate"] },
+  "expected_memory_effect": { "candidate_rejected": true, "active_memory_created": false },
+  "expected_retrieval_effect": { "candidate_retrieval_eligible": false },
+  "expected_app_visible_effect": { "reject_visible": true, "approve_visible": false, "promote_visible": false },
+  "expected_runtime_effect": { "promotion_gate_invoked": false },
+  "expected_result": { "status": "PASS", "reason": "schema fixture preserves reject-only behavior" },
+  "forbidden_results": ["approve_candidate_visible", "promote_candidate_visible", "active_memory_created", "promotion_gate_invoked"],
+  "requires_live_model": false,
+  "requires_phone": false,
+  "token_policy": { "mode": "zero_token", "live_eval_allowed": false },
+  "cache_key_inputs": ["fixture_id", "memory_state_before", "expected_app_visible_effect", "forbidden_results", "token_policy"],
+  "reviewed_anchor_required": false,
+  "assertion_intent": "Rejecting a candidate must not imply approval, promotion, or runtime mutation.",
+  "owner_lane": "Testing Grounds",
+  "notes": "Complements the original seed fixture with a narrower candidate-only learning case."
+}
+

@@ -1,0 +1,6 @@
+{
+  "version": "phase19m0c-cache-index-1",
+  "purpose": "Zero-token cache index for deterministic hit/miss reporting. Cache misses must not trigger live fallback.",
+  "entries": []
+}
+

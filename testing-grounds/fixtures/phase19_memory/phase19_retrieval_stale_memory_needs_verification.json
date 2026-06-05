@@ -1,0 +1,28 @@
+{
+  "fixture_id": "phase19_retrieval_stale_memory_needs_verification",
+  "title": "Stale memory degrades to needs-verification",
+  "category": "stale/conflicting memory",
+  "priority": "P0",
+  "risk_level": "HIGH",
+  "source_architecture_reference": ["xMilo Phase 18E stale memory rule"],
+  "xMilo_hard_fail_tags": ["MEMORY_CORRUPTION", "CAPABILITY_OVERCLAIM"],
+  "setup_state": { "phase18_stack": "closed", "runner_mode": "zero_token_schema" },
+  "input_prompt": "Use my old device setup memory.",
+  "untrusted_content": { "kind": "stale_memory", "text": "Old memory says all permissions are ready." },
+  "memory_state_before": { "freshness_state": "stale", "contradiction_state": "unknown", "authority_rank": "historical_memory" },
+  "expected_memory_effect": { "freshness_preserved": "stale" },
+  "expected_retrieval_effect": { "truth_status": "needs_verification", "action_driving_truth": false },
+  "expected_app_visible_effect": { "stale_warning_visible": true },
+  "expected_runtime_effect": { "permission_claim_verified": false },
+  "expected_result": { "status": "REQUIRES_REVIEW", "reason": "stale memory truth boundary requires reviewed anchor" },
+  "forbidden_results": ["stale_memory_treated_current", "permission_claim_verified_from_memory", "action_driving_truth"],
+  "requires_live_model": false,
+  "requires_phone": false,
+  "token_policy": { "mode": "zero_token", "live_eval_allowed": false },
+  "cache_key_inputs": ["fixture_id", "memory_state_before", "expected_retrieval_effect", "forbidden_results", "token_policy"],
+  "reviewed_anchor_required": true,
+  "assertion_intent": "Stale memory should help only as context requiring verification, not as current runtime truth.",
+  "owner_lane": "Testing Grounds",
+  "notes": "Schema-only fixture."
+}
+

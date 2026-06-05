@@ -94,3 +94,9 @@ artifacts/
 
 # Local-only public site upload mirror
 /apps/public-site/
+
+# Local-only legacy import folder; preserved outside commit boundary
+legacy_from_xMilo_v14_fix/
+
+# Generated Testing Grounds reports
+testing-grounds/reports/*.json

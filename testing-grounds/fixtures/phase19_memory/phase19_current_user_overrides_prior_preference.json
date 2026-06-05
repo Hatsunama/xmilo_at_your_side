@@ -1,0 +1,28 @@
+{
+  "fixture_id": "phase19_current_user_overrides_prior_preference",
+  "title": "Current user instruction can override prior preference",
+  "category": "governed user teaching",
+  "priority": "P1",
+  "risk_level": "HIGH",
+  "source_architecture_reference": ["xMilo Phase 18B hard memory rules", "xMilo Phase 18G correction/demotion"],
+  "xMilo_hard_fail_tags": ["MEMORY_CORRUPTION", "TASK_GOAL_DRIFT"],
+  "setup_state": { "phase18_stack": "closed", "runner_mode": "zero_token_schema" },
+  "input_prompt": "I know I usually like short summaries, but give me full detail this time.",
+  "untrusted_content": { "kind": "current_user_instruction", "text": "Give full detail this time." },
+  "memory_state_before": { "prior_preference": "short summaries", "current_instruction_conflicts": true },
+  "expected_memory_effect": { "prior_preference_deleted": false, "temporary_override_allowed": true },
+  "expected_retrieval_effect": { "prior_preference_action_driving": false, "current_instruction_priority": true },
+  "expected_app_visible_effect": { "no_memory_error_expected": true },
+  "expected_runtime_effect": { "current_instruction_honored": true },
+  "expected_result": { "status": "REQUIRES_REVIEW", "reason": "current-vs-prior instruction boundary requires reviewed anchor" },
+  "forbidden_results": ["prior_preference_overrides_current_instruction", "prior_preference_deleted_without_request", "current_instruction_ignored"],
+  "requires_live_model": false,
+  "requires_phone": false,
+  "token_policy": { "mode": "zero_token", "live_eval_allowed": false },
+  "cache_key_inputs": ["fixture_id", "input_prompt", "memory_state_before", "expected_retrieval_effect", "forbidden_results", "token_policy"],
+  "reviewed_anchor_required": true,
+  "assertion_intent": "Current user instruction should be able to override prior stored preference without corrupting the memory.",
+  "owner_lane": "Testing Grounds",
+  "notes": "Schema-only fixture."
+}
+
