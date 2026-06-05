@@ -363,7 +363,7 @@ export default function MainHallScreen() {
     setReportNote("");
   }
 
-  function openMenuRoute(path: "/memory" | "/archive" | "/settings") {
+  function openMenuRoute(path: "/memory" | "/archive" | "/settings" | "/help-privacy") {
     setMenuOpen(false);
     router.push(path);
   }
@@ -442,9 +442,6 @@ export default function MainHallScreen() {
         <View style={styles.footerRow}>
           <Pressable style={styles.footerButton} onPress={() => router.push("/setup")}>
             <Text style={styles.footerButtonText}>Setup</Text>
-          </Pressable>
-          <Pressable style={styles.footerButton} onPress={() => router.push("/settings")}>
-            <Text style={styles.footerButtonText}>Settings</Text>
           </Pressable>
         </View>
 
@@ -676,7 +673,7 @@ export default function MainHallScreen() {
             <MenuItem label="Memory" onPress={() => openMenuRoute("/memory")} />
             <MenuItem label="Archive" onPress={() => openMenuRoute("/archive")} />
             <MenuItem label="Settings" onPress={() => openMenuRoute("/settings")} />
-            <MenuItem label="Help & privacy" onPress={() => openMenuRoute("/settings")} />
+            <MenuItem label="Help & privacy" onPress={() => openMenuRoute("/help-privacy")} />
           </View>
         </Pressable>
       </Modal>

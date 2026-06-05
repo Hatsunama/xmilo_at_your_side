@@ -77,6 +77,10 @@ function appSource(fileName: string) {
   return readFileSync(join(__dirname, "../../app/memory", fileName), "utf8");
 }
 
+function rootAppSource(fileName: string) {
+  return readFileSync(join(__dirname, "../../app", fileName), "utf8");
+}
+
 afterEach(() => {
   jest.restoreAllMocks();
   (globalThis as any).fetch = originalFetch;
@@ -277,5 +281,38 @@ describe("memoryControl", () => {
     expect(detailSource).toContain("memoryMutationConfirmed(result)");
     expect(detailSource).not.toContain("approve_candidate");
     expect(detailSource).not.toContain("rollback");
+  });
+
+  it("keeps Main Hall menu routes distinct without a body Settings button", () => {
+    const mainHallSource = rootAppSource("index.tsx");
+    const layoutSource = rootAppSource("_layout.tsx");
+    const settingsSource = rootAppSource("settings.tsx");
+    const helpPrivacySource = rootAppSource("help-privacy.tsx");
+
+    expect(mainHallSource).not.toContain("<Text style={styles.footerButtonText}>Settings</Text>");
+    expect(mainHallSource).toContain('MenuItem label="Settings" onPress={() => openMenuRoute("/settings")}');
+    expect(mainHallSource).toContain('MenuItem label="Help & privacy" onPress={() => openMenuRoute("/help-privacy")}');
+    expect(mainHallSource).toContain('MenuItem label="Memory" onPress={() => openMenuRoute("/memory")}');
+    expect(mainHallSource).toContain('MenuItem label="Archive" onPress={() => openMenuRoute("/archive")}');
+    expect(layoutSource).toContain('name="help-privacy"');
+    expect(layoutSource).toContain('router.push({ pathname: "/help-privacy", params: { reportEntry: "angryShake" } })');
+    expect(helpPrivacySource).toContain("function HelpPrivacyScreen");
+    expect(helpPrivacySource).toContain("const openReportFlow = useCallback");
+    expect(helpPrivacySource).toContain("Send report to xMilo team");
+    expect(helpPrivacySource).toContain("Open privacy policy");
+    expect(helpPrivacySource).toContain("Open support page");
+    expect(helpPrivacySource).toContain("Open delete-account page");
+    expect(helpPrivacySource).toContain("Sign out on this phone");
+    expect(helpPrivacySource).toContain("Delete this xMilo account");
+    expect(helpPrivacySource).not.toContain('router.push({ pathname: "/settings", params: { reportEntry: "angryShake" } })');
+    expect(helpPrivacySource).not.toMatch(/BYOK|2FA|Website handoff|wake word|Hosted access|Runtime route/);
+    expect(settingsSource).toContain("Storage");
+    expect(settingsSource).not.toContain("Privacy and help");
+    expect(settingsSource).not.toContain("Send report to xMilo team");
+    expect(settingsSource).not.toContain("Open privacy policy");
+    expect(settingsSource).not.toContain("Open support page");
+    expect(settingsSource).not.toContain("Open delete-account page");
+    expect(settingsSource).not.toContain("Sign out on this phone");
+    expect(settingsSource).not.toContain("Delete this xMilo account");
   });
 });

@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import * as Clipboard from "expo-clipboard";
-import { ActivityIndicator, Alert, Animated, InteractionManager, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import * as Notifications from "expo-notifications";
 import QRCode from "react-native-qrcode-svg";
 import { useApp } from "../src/state/AppContext";
 import {
   authCheck,
-  authDeleteAccount,
-  authLogout,
   authRedeemInvite,
   beginTwoFactorSetup,
   confirmTwoFactorSetup,
@@ -22,17 +19,10 @@ import {
   regenerateTwoFactorRecoveryCodes,
   resetTier,
   resolveLocalProviderConfig,
-  SidecarRequestError,
-  submitSettingsReport,
   type LocalProviderOption,
   type LocalProviderResolvedConfig,
   verifyTwoFactor
 } from "../src/lib/bridge";
-import { DELETE_ACCOUNT_URL, PRIVACY_POLICY_URL, SUPPORT_URL } from "../src/lib/config";
-import { buildSettingsReportBundle } from "../src/lib/reportBundle";
-import { enqueueSettingsReport } from "../src/lib/reportQueue";
-import type { SettingsReportFailureClass } from "../src/lib/reportFailureClasses";
-import { ensureSettingsReportTransportReady } from "../src/lib/reportTransport";
 import { configureRevenueCat, isRevenueCatConfigured, restoreRevenueCatPurchases } from "../src/lib/revenuecat";
 import {
   deactivateXMiloclawLocalByokRouting,
@@ -46,10 +36,8 @@ import {
 } from "../src/lib/xmiloRuntimeHost";
 
 export default function SettingsScreen() {
-  const params = useLocalSearchParams<{ reportEntry?: string }>();
   const {
     state,
-    events,
     storageStats,
     setStorageStats,
     resetRuntimeTaskProof,
@@ -78,21 +66,6 @@ export default function SettingsScreen() {
   const [providerBaseUrl, setProviderBaseUrl] = useState("");
   const [providerModel, setProviderModel] = useState("");
   const [runtimeRouteStatus, setRuntimeRouteStatus] = useState<XMiloclawRuntimeStatus | null>(null);
-  const [reportModalVisible, setReportModalVisible] = useState(false);
-  const [reportConfirmVisible, setReportConfirmVisible] = useState(false);
-  const [reportComment, setReportComment] = useState("");
-  const [reportStatus, setReportStatus] = useState("");
-  const [reportBusy, setReportBusy] = useState(false);
-  const [reportResult, setReportResult] = useState<
-    | { kind: "sent"; reportId: string; copied: boolean }
-    | { kind: "queued"; reason: "unreachable" | "not_ready" }
-    | null
-  >(null);
-  const settingsScrollRef = useRef<ScrollView>(null);
-  const [privacyHelpCardY, setPrivacyHelpCardY] = useState<number | null>(null);
-  const [reportButtonLocalY, setReportButtonLocalY] = useState<number | null>(null);
-  const reportButtonPulse = useRef(new Animated.Value(0)).current;
-  const handledReportEntryRef = useRef("");
   const [twoFactorStatus, setTwoFactorStatus] = useState({
     verified_email: "",
     email_verified: false,
@@ -114,45 +87,6 @@ export default function SettingsScreen() {
     access_code_grant_days: 30
   });
   const revenueCatPurchasePathVisible = Boolean(accessConfig.subscription_allowed && isRevenueCatConfigured());
-
-  useEffect(() => {
-    if (params.reportEntry !== "angryShake") {
-      handledReportEntryRef.current = "";
-      reportButtonPulse.setValue(0);
-      return;
-    }
-    if (handledReportEntryRef.current === "angryShake") return;
-    if (privacyHelpCardY === null || reportButtonLocalY === null) return;
-    const scrollView = settingsScrollRef.current;
-    if (!scrollView) return;
-    const reportButtonTargetY = privacyHelpCardY + reportButtonLocalY;
-    let active = true;
-    let frameId: ReturnType<typeof requestAnimationFrame> | null = null;
-    let pulseTimer: ReturnType<typeof setTimeout> | null = null;
-    const interactionTask = InteractionManager.runAfterInteractions(() => {
-      frameId = requestAnimationFrame(() => {
-        if (!active) return;
-        reportButtonPulse.setValue(0);
-        scrollView.scrollTo({ y: Math.max(reportButtonTargetY - 28, 0), animated: true });
-        handledReportEntryRef.current = "angryShake";
-        pulseTimer = setTimeout(() => {
-          if (!active) return;
-          Animated.sequence([
-            Animated.timing(reportButtonPulse, { toValue: 1, duration: 260, useNativeDriver: false }),
-            Animated.timing(reportButtonPulse, { toValue: 0, duration: 260, useNativeDriver: false }),
-            Animated.timing(reportButtonPulse, { toValue: 1, duration: 260, useNativeDriver: false }),
-            Animated.timing(reportButtonPulse, { toValue: 0, duration: 260, useNativeDriver: false })
-          ]).start();
-        }, 520);
-      });
-    });
-    return () => {
-      active = false;
-      interactionTask.cancel();
-      if (frameId !== null) cancelAnimationFrame(frameId);
-      if (pulseTimer !== null) clearTimeout(pulseTimer);
-    };
-  }, [params.reportEntry, privacyHelpCardY, reportButtonLocalY, reportButtonPulse]);
 
   const refreshAccessConfig = useCallback(async () => {
     const result = await authCheck();
@@ -525,175 +459,6 @@ export default function SettingsScreen() {
     }
   }
 
-  async function openExternalUrl(url: string, label: string) {
-    try {
-      await Linking.openURL(url);
-    } catch (error: any) {
-      Alert.alert(`${label} failed`, error?.message ?? "Unknown error");
-    }
-  }
-
-  function openReportFlow() {
-    setReportStatus("");
-    setReportConfirmVisible(false);
-    setReportResult(null);
-    setReportModalVisible(true);
-  }
-
-  function closeReportFlow() {
-    setReportConfirmVisible(false);
-    setReportResult(null);
-    setReportModalVisible(false);
-    setReportStatus("");
-    setReportBusy(false);
-    setReportComment("");
-  }
-
-  async function sendSettingsReportFlow() {
-    if (reportBusy) return;
-    logSettingsReportBreadcrumb("settings_report_send_started");
-    setReportBusy(true);
-    setReportConfirmVisible(false);
-    setReportStatus("Preparing redacted report...");
-    let payload: Awaited<ReturnType<typeof buildSettingsReportBundle>>;
-    try {
-      payload = await buildSettingsReportBundle({
-        userNote: reportComment,
-        runtimeState: state,
-        events,
-      });
-    } catch {
-      setReportStatus("Report could not be prepared on this device. Please try again.");
-      setReportBusy(false);
-      return;
-    }
-
-    setReportStatus("Preparing report service...");
-    logSettingsReportBreadcrumb("settings_report_transport_check_started");
-    const readiness = await ensureSettingsReportTransportReady();
-    if (!readiness.ok) {
-      const failureClass = readiness.failure_class ?? classifyTransportFailure(readiness.reason);
-      logSettingsReportBreadcrumb("settings_report_transport_failed", { class: failureClass });
-      await queueSettingsReport(payload, `report transport ${readiness.reason}`, "not_ready", failureClass);
-      return;
-    }
-
-    try {
-      setReportStatus("Sending report to xMilo team...");
-      logSettingsReportBreadcrumb("settings_report_submit_attempted");
-      const proof = await submitSettingsReport(payload);
-      if (proof.accepted === true && proof.report_id) {
-        logSettingsReportBreadcrumb("settings_report_proof_accepted", { report_id_present: true });
-        setReportResult({ kind: "sent", reportId: proof.report_id, copied: false });
-        setReportStatus("");
-        setReportComment("");
-        setReportBusy(false);
-        return;
-      }
-      logSettingsReportBreadcrumb("settings_report_proof_missing", { class: "proof_missing_accepted_or_report_id" });
-      throw new Error("report service did not return accepted proof");
-    } catch (error: unknown) {
-      const failureClass = classifySubmitFailure(error);
-      const safeStatus = error instanceof SidecarRequestError && error.status > 0 ? String(error.status) : undefined;
-      logSettingsReportBreadcrumb("settings_report_submit_failed", { class: failureClass, status: safeStatus });
-      await queueSettingsReport(
-        payload,
-        (error as Error | undefined)?.message ?? "report service unavailable",
-        "unreachable",
-        failureClass
-      );
-    }
-  }
-
-  async function queueSettingsReport(
-    payload: Awaited<ReturnType<typeof buildSettingsReportBundle>>,
-    lastError: string,
-    reason: "unreachable" | "not_ready",
-    failureClass: SettingsReportFailureClass
-  ) {
-    try {
-      await enqueueSettingsReport({ payload, lastError, failureClass });
-      setReportResult({ kind: "queued", reason });
-      setReportStatus("");
-      logSettingsReportBreadcrumb("settings_report_queued", { class: failureClass });
-    } catch {
-      logSettingsReportBreadcrumb("settings_report_submit_failed", { class: "queue_write_failed" });
-      setReportStatus("Report could not be prepared on this device. Please try again.");
-    } finally {
-      setReportBusy(false);
-    }
-  }
-
-  function classifyTransportFailure(reason: string): SettingsReportFailureClass {
-    if (reason === "runtime_host_unavailable") return "transport_start_failed";
-    if (reason === "sidecar_unreachable") return "sidecar_health_unreachable";
-    if (reason === "relay_session_unavailable") return "sidecar_auth_check_failed";
-    if (reason === "backend_unavailable") return "relay_rejected_or_unreachable";
-    return "unknown_report_send_failure";
-  }
-
-  function classifySubmitFailure(error: unknown): SettingsReportFailureClass {
-    const text = String((error as Error | undefined)?.message ?? error ?? "").toLowerCase();
-    if (text.includes("accepted proof")) return "proof_missing_accepted_or_report_id";
-    if (error instanceof SidecarRequestError) {
-      if (error.status >= 500 || error.status === 401 || error.status === 403) return "relay_rejected_or_unreachable";
-      return "sidecar_report_submit_failed";
-    }
-    if (text.includes("relay") || text.includes("bad gateway") || text.includes("502") || text.includes("503")) {
-      return "relay_rejected_or_unreachable";
-    }
-    if (text.includes("runtime") || text.includes("warming") || text.includes("network")) return "sidecar_report_submit_failed";
-    return "unknown_report_send_failure";
-  }
-
-  function logSettingsReportBreadcrumb(event: string, fields?: Record<string, string | boolean | undefined>) {
-    const parts = [`xMilo ${event}`];
-    for (const [key, value] of Object.entries(fields ?? {})) {
-      if (typeof value === "undefined") continue;
-      parts.push(`${key}=${String(value)}`);
-    }
-    console.info(parts.join(" "));
-  }
-
-  async function copyReportId(reportId: string) {
-    await Clipboard.setStringAsync(reportId);
-    setReportResult((current) => current?.kind === "sent" && current.reportId === reportId ? { ...current, copied: true } : current);
-  }
-
-  function resetIdentityStateForLocalSignOut() {
-    setTwoFactorStatus({
-      verified_email: "",
-      email_verified: false,
-      two_factor_enabled: false,
-      two_factor_ok: false,
-      website_handoff_ready: false
-    });
-    setAccessCode("");
-  }
-
-  async function signOutFlow() {
-    try {
-      await authLogout();
-      resetIdentityStateForLocalSignOut();
-      Alert.alert("Signed out", "Local relay session cleared from this device. You can sign in again whenever you are ready.");
-    } catch (error: any) {
-      Alert.alert("Sign out failed", error?.message ?? "Unknown error");
-    }
-  }
-
-  async function deleteAccountFlow() {
-    try {
-      await authDeleteAccount();
-      resetIdentityStateForLocalSignOut();
-      Alert.alert(
-        "Account deleted",
-        "xMilo removed the current verified account data it could delete immediately and cleared this phone's local session."
-      );
-    } catch (error: any) {
-      Alert.alert("Delete account failed", error?.message ?? "Unknown error");
-    }
-  }
-
   async function startTwoFactorSetupFlow() {
     try {
       const result = await beginTwoFactorSetup();
@@ -837,7 +602,7 @@ export default function SettingsScreen() {
 
   return (
     <>
-      <ScrollView ref={settingsScrollRef} style={styles.screen} contentContainerStyle={styles.content}>
+      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
         <View style={styles.card}>
         <Text style={styles.title}>Settings</Text>
         <Text style={styles.body}>
@@ -1177,58 +942,6 @@ export default function SettingsScreen() {
           </Text>
         </View>
 
-        <View style={styles.toggleCard} onLayout={(event) => setPrivacyHelpCardY(event.nativeEvent.layout.y)}>
-          <View style={styles.toggleLabels}>
-            <Text style={styles.toggleTitle}>Privacy and help</Text>
-            <Text style={styles.toggleSubtitle}>
-              Review xMilo policy pages, support path, and the public account-deletion request page.
-            </Text>
-          </View>
-          <Animated.View
-            onLayout={(event) => setReportButtonLocalY(event.nativeEvent.layout.y)}
-            style={[
-              styles.reportButtonPulseShell,
-              {
-                backgroundColor: reportButtonPulse.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ["rgba(37,99,235,0)", "rgba(196,181,253,0.28)"]
-                }),
-                borderColor: reportButtonPulse.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ["rgba(196,181,253,0)", "rgba(196,181,253,0.9)"]
-                }),
-                transform: [
-                  {
-                    scale: reportButtonPulse.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [1, 1.025]
-                    })
-                  }
-                ]
-              }
-            ]}
-          >
-            <Pressable style={styles.reportButton} onPress={openReportFlow}>
-              <Text style={styles.buttonText}>Send report to xMilo team</Text>
-            </Pressable>
-          </Animated.View>
-          <Pressable style={styles.secondaryButton} onPress={() => openExternalUrl(PRIVACY_POLICY_URL, "Privacy policy")}>
-            <Text style={styles.buttonText}>Open privacy policy</Text>
-          </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => openExternalUrl(SUPPORT_URL, "Support page")}>
-            <Text style={styles.buttonText}>Open support page</Text>
-          </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => openExternalUrl(DELETE_ACCOUNT_URL, "Delete-account page")}>
-            <Text style={styles.buttonText}>Open delete-account page</Text>
-          </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={signOutFlow}>
-            <Text style={styles.buttonText}>Sign out on this phone</Text>
-          </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={deleteAccountFlow}>
-            <Text style={styles.buttonText}>Delete this xMilo account</Text>
-          </Pressable>
-        </View>
-
         <View style={styles.statsCard}>
           <Text style={styles.statsTitle}>Storage</Text>
           <Text style={styles.statsRow}>SQLite bytes: {String(storageStats?.pico_sqlite_bytes ?? "unknown")}</Text>
@@ -1265,126 +978,6 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
-      <Modal
-        animationType="fade"
-        transparent
-        visible={reportModalVisible}
-        onRequestClose={closeReportFlow}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={24}
-          style={styles.modalKeyboardAvoider}
-        >
-          <View style={styles.modalScrim}>
-            <View style={[styles.modalCard, styles.reportModalCard]}>
-              <Pressable style={styles.modalCloseButton} onPress={closeReportFlow} accessibilityRole="button" accessibilityLabel="Close report modal">
-                <Text style={styles.modalCloseText}>X</Text>
-              </Pressable>
-              {reportResult?.kind === "sent" ? (
-                <>
-                  <Text style={styles.modalTitle}>Report sent to xMilo team</Text>
-                  <Text style={styles.modalBody}>Your redacted report was sent successfully.</Text>
-                  <Pressable style={styles.reportIdButton} onPress={() => copyReportId(reportResult.reportId)}>
-                    <Text selectable style={styles.reportIdText}>{reportResult.reportId}</Text>
-                  </Pressable>
-                  {reportResult.copied ? <Text style={styles.copiedText}>Report ID copied</Text> : null}
-                  <View style={styles.modalButtonRow}>
-                    <Pressable style={styles.primaryActionButton} onPress={closeReportFlow}>
-                      <Text style={styles.buttonText}>Done</Text>
-                    </Pressable>
-                  </View>
-                </>
-              ) : reportResult?.kind === "queued" ? (
-                <>
-                  <Text style={styles.modalTitle}>Report queued on this device</Text>
-                  <Text style={styles.modalBody}>
-                    {reportResult.reason === "not_ready"
-                      ? "xMilo could not prepare the report service on this device. Your redacted report is saved on this phone and has not been sent yet."
-                      : "xMilo could not reach the report service. Your redacted report is saved on this phone and will be sent when the connection is available. It has not been sent yet."}
-                  </Text>
-                  <View style={styles.modalButtonRow}>
-                    <Pressable style={styles.primaryActionButton} onPress={closeReportFlow}>
-                      <Text style={styles.buttonText}>I understand</Text>
-                    </Pressable>
-                  </View>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.modalTitle}>Send report to xMilo team</Text>
-                  <ScrollView
-                    style={styles.reportWarningScroll}
-                    contentContainerStyle={styles.reportWarningContent}
-                    keyboardShouldPersistTaps="handled"
-                  >
-                    <Text style={styles.modalBody}>
-                      A report may include today's conversation, recent app/runtime logs and diagnostics, and the optional comment you add below. A human on the xMilo team may review it.
-                    </Text>
-                    <Text style={styles.modalBody}>
-                      Stored API keys, tokens, auth headers, provider configs, hidden prompts, and private tool payloads must not be intentionally included.
-                    </Text>
-                    <Text style={styles.modalBody}>
-                      If you typed a secret, password, or API key into chat, rotate it after sending a report.
-                    </Text>
-                    <TextInput
-                      multiline
-                      placeholder="Optional comment for the xMilo team"
-                      placeholderTextColor="#94A3B8"
-                      style={styles.reportInput}
-                      value={reportComment}
-                      onChangeText={setReportComment}
-                      maxLength={1200}
-                      textAlignVertical="top"
-                    />
-                    {reportStatus ? <Text style={styles.reportStatusText}>{reportStatus}</Text> : null}
-                  </ScrollView>
-                  <View style={styles.modalButtonRow}>
-                    <Pressable style={[styles.secondaryActionButton, reportBusy && styles.disabledButton]} onPress={closeReportFlow} disabled={reportBusy}>
-                      <Text style={styles.buttonText}>Cancel</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.primaryActionButton, reportBusy && styles.disabledButton]}
-                      onPress={() => setReportConfirmVisible(true)}
-                      disabled={reportBusy}
-                    >
-                      {reportBusy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.buttonText}>Send now</Text>}
-                    </Pressable>
-                  </View>
-                </>
-              )}
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-      <Modal
-        animationType="fade"
-        transparent
-        visible={reportConfirmVisible}
-        onRequestClose={() => setReportConfirmVisible(false)}
-      >
-        <View style={styles.modalScrim}>
-          <View style={styles.modalCard}>
-            <Pressable
-              style={styles.modalCloseButton}
-              onPress={() => setReportConfirmVisible(false)}
-              accessibilityRole="button"
-              accessibilityLabel="Close confirmation modal"
-            >
-              <Text style={styles.modalCloseText}>X</Text>
-            </Pressable>
-            <Text style={styles.modalTitle}>Confirm report</Text>
-            <Text style={styles.modalBody}>Are you sure you want to send this report?</Text>
-            <View style={styles.modalButtonRow}>
-              <Pressable style={[styles.secondaryActionButton, reportBusy && styles.disabledButton]} onPress={() => setReportConfirmVisible(false)} disabled={reportBusy}>
-                <Text style={styles.buttonText}>Cancel</Text>
-              </Pressable>
-              <Pressable style={[styles.primaryActionButton, reportBusy && styles.disabledButton]} onPress={sendSettingsReportFlow} disabled={reportBusy}>
-                {reportBusy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.buttonText}>Yes, send</Text>}
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </>
   );
 }
@@ -1396,8 +989,6 @@ const styles = StyleSheet.create({
   title: { color: "#F8FAFC", fontSize: 22, fontWeight: "700" },
   body: { color: "#CBD5E1", lineHeight: 22, marginTop: 8 },
   button: { marginTop: 16, backgroundColor: "#2563EB", borderRadius: 14, paddingVertical: 14, alignItems: "center" },
-  reportButtonPulseShell: { marginTop: 16, borderRadius: 16, borderWidth: 1, padding: 3 },
-  reportButton: { backgroundColor: "#2563EB", borderRadius: 12, paddingVertical: 14, alignItems: "center" },
   secondaryButton: { marginTop: 12, backgroundColor: "#1F2937", borderRadius: 14, paddingVertical: 14, alignItems: "center" },
   disabledButton: { opacity: 0.55 },
   buttonText: { color: "#FFFFFF", fontWeight: "700" },
@@ -1448,7 +1039,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 20
   },
-  modalKeyboardAvoider: { flex: 1 },
   modalCard: {
     width: "100%",
     maxWidth: 360,
@@ -1475,32 +1065,6 @@ const styles = StyleSheet.create({
   modalCloseText: { color: "#CBD5E1", fontSize: 14, fontWeight: "800" },
   modalTitle: { color: "#F8FAFC", fontSize: 20, fontWeight: "700" },
   modalBody: { color: "#CBD5E1", lineHeight: 21, marginTop: 10 },
-  reportModalCard: { maxWidth: 420, maxHeight: "88%" },
-  reportWarningScroll: { marginTop: 2, flexShrink: 1 },
-  reportWarningContent: { paddingBottom: 16 },
-  reportInput: {
-    marginTop: 16,
-    minHeight: 104,
-    backgroundColor: "#0F172A",
-    borderWidth: 1,
-    borderColor: "#334155",
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: "#F8FAFC"
-  },
-  reportIdButton: {
-    marginTop: 14,
-    backgroundColor: "#0F172A",
-    borderWidth: 1,
-    borderColor: "#334155",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12
-  },
-  reportIdText: { color: "#BFDBFE", fontWeight: "800" },
-  copiedText: { color: "#86EFAC", fontWeight: "700", marginTop: 10 },
-  reportStatusText: { color: "#FCD34D", lineHeight: 20, marginTop: 12, fontWeight: "700" },
   modalButtonRow: { flexDirection: "row", gap: 12, justifyContent: "flex-end", marginTop: 16 },
   primaryActionButton: {
     minWidth: 112,

@@ -102,12 +102,12 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
-    ndkVersion rootProject.ext.ndkVersion
+    ndkVersion = rootProject.ext.ndkVersion
 
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.hatsunama.xmilo.dev'
+    namespace = 'com.hatsunama.xmilo.dev'
     defaultConfig {
         applicationId 'com.hatsunama.xmilo'
         minSdkVersion rootProject.ext.minSdkVersion
@@ -153,7 +153,7 @@ android {
             dimension "dist"
             applicationIdSuffix ".internal"
             versionNameSuffix "-internal"
-            signingConfig signingConfigs.debug
+            signingConfig = signingConfigs.debug
             // Internal builds use the app-owned native localhost bearer path for phone validation.
             // No static shared localhost token is embedded here.
             buildConfigField "String", "DEFAULT_CASTLE_WS_URL", "\"ws://127.0.0.1:42817/ws\""
@@ -161,14 +161,14 @@ android {
         opensource {
             dimension "dist"
             // Public open-source release builds must not be debug-signed. This is enforced below.
-            signingConfig signingConfigs.release
+            signingConfig = signingConfigs.release
             buildConfigField "String", "DEFAULT_CASTLE_WS_URL", "\"\""
         }
     }
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.debug
+            signingConfig = signingConfigs.debug
         }
         // "phone" is a validation build: it embeds the JS bundle like release (no Metro/DevLauncher),
         // but stays debug-signed so we can iterate quickly on a physical device.
@@ -178,27 +178,27 @@ android {
             // so we don't mix debug-only React renderer symbols with release-prefab artifacts.
             debuggable false
             jniDebuggable false
-            signingConfig signingConfigs.debug
+            signingConfig = signingConfigs.debug
             matchingFallbacks = ["release"]
         }
         release {
             // Caution! In production, you need to generate your own keystore file.
             // see https://reactnative.dev/docs/signed-apk-android.
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
-            shrinkResources enableShrinkResources.toBoolean()
+            shrinkResources = enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
-            crunchPngs enablePngCrunchInRelease.toBoolean()
+            crunchPngs = enablePngCrunchInRelease.toBoolean()
         }
     }
     packagingOptions {
         jniLibs {
-            useLegacyPackaging true
+            useLegacyPackaging = true
         }
     }
     androidResources {
-        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+        ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
 }
 
@@ -219,12 +219,6 @@ afterEvaluate {
         if (!hasSigning) {
             throw new GradleException("Open-source release signing is not configured. Set XMILO_RELEASE_STORE_FILE, XMILO_RELEASE_STORE_PASSWORD, XMILO_RELEASE_KEY_ALIAS, XMILO_RELEASE_KEY_PASSWORD.")
         }
-    }
-}
-
-repositories {
-    flatDir {
-        dirs 'libs'
     }
 }
 
@@ -253,7 +247,7 @@ android.packagingOptions.doNotStrip += "**/libxmilo_sidecar.so"
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-    implementation(name: "castle", ext: "aar")
+    implementation(files("libs/castle.aar"))
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

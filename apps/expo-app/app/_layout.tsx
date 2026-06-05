@@ -95,7 +95,7 @@ function AngryShakeReportController() {
 
   function sendReport() {
     angryShake.close();
-    router.push({ pathname: "/settings", params: { reportEntry: "angryShake" } });
+    router.push({ pathname: "/help-privacy", params: { reportEntry: "angryShake" } });
   }
 
   return (
@@ -151,6 +151,7 @@ export default function RootLayout() {
             <Stack.Screen name="index" options={{ title: "xMilo" }} />
             <Stack.Screen name="setup" options={{ title: "Setup" }} />
             <Stack.Screen name="settings" options={{ title: "Settings" }} />
+            <Stack.Screen name="help-privacy" options={{ title: "Help & privacy", headerShown: false }} />
             <Stack.Screen name="archive" options={{ title: "Archive" }} />
             <Stack.Screen name="memory/index" options={{ title: "Memory", headerShown: false }} />
             <Stack.Screen name="memory/[memoryId]" options={{ title: "Memory detail", headerShown: false }} />
