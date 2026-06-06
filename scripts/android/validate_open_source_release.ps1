@@ -43,6 +43,10 @@ function Test-GitIgnored([string]$RelativePath) {
   return $LASTEXITCODE -eq 0
 }
 
+function Test-RepoFileIgnored([string]$FullName) {
+  return Test-GitIgnored (Get-RepoRelativePath $FullName)
+}
+
 function Get-FileSha256Upper([string]$Path) {
   return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToUpperInvariant()
 }
@@ -245,7 +249,8 @@ $activeRuntimeTextFiles += Get-ChildItem -Path (Join-Path $RepoRoot "docs") -Rec
     $full = Normalize-Path $_.FullName
     $ext = $_.Extension.ToLowerInvariant()
     ($ext -in @(".md", ".txt", ".json", ".sh", ".ps1")) -and
-      $full -notmatch "/docs/archive/"
+      $full -notmatch "/docs/archive/" -and
+      (-not (Test-RepoFileIgnored $_.FullName))
   } |
   ForEach-Object { Get-RepoRelativePath $_.FullName }
 $activeRuntimeTextFiles = @($activeRuntimeTextFiles | Sort-Object -Unique)

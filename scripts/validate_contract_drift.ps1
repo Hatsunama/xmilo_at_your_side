@@ -9,13 +9,35 @@ function Add-Error([string]$Message) {
   $script:errors.Add($Message) | Out-Null
 }
 
+function Normalize-RepoPath([string]$Path) {
+  return ($Path -replace "\\", "/").Trim()
+}
+
+function Get-RepoRelativePath([string]$FullName) {
+  $resolved = (Resolve-Path -LiteralPath $FullName).Path
+  $root = (Resolve-Path -LiteralPath $RepoRoot).Path
+  if (-not $resolved.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Add-Error "Resolved path is outside repo root: $FullName"
+    return ""
+  }
+  return Normalize-RepoPath ($resolved.Substring($root.Length).TrimStart("\", "/"))
+}
+
 function Read-RepoFile([string]$RelativePath) {
+  if (-not $RelativePath.Trim()) {
+    Add-Error "Missing required file path."
+    return ""
+  }
   $path = Join-Path $RepoRoot $RelativePath
-  if (-not (Test-Path $path)) {
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    if (Test-Path -LiteralPath $path -PathType Container) {
+      Add-Error "Expected file but got directory: $RelativePath"
+      return ""
+    }
     Add-Error "Missing required file: $RelativePath"
     return ""
   }
-  return Get-Content -Raw -Path $path
+  return Get-Content -Raw -LiteralPath $path
 }
 
 function Assert-Section($Object, [string]$Name) {
@@ -59,7 +81,7 @@ function Get-SidecarEventNames() {
   $eventNames = New-Object System.Collections.Generic.HashSet[string]
   $goFiles = Get-ChildItem -Path (Join-Path $RepoRoot "sidecar-go/internal") -Recurse -File -Filter "*.go"
   foreach ($file in $goFiles) {
-    $relative = Resolve-Path -Relative $file.FullName
+    $relative = Get-RepoRelativePath $file.FullName
     $text = Read-RepoFile $relative
     foreach ($match in [regex]::Matches($text, '(?:e\.emit|Broadcast)\("([^"]+)"')) {
       [void]$eventNames.Add($match.Groups[1].Value)
@@ -142,7 +164,7 @@ if ($manifest) {
 
 $appScreenFiles = Get-ChildItem -Path (Join-Path $RepoRoot "apps/expo-app/app") -Recurse -File -Include "*.tsx", "*.ts"
 foreach ($file in $appScreenFiles) {
-  $relative = Resolve-Path -Relative $file.FullName
+  $relative = Get-RepoRelativePath $file.FullName
   $text = Read-RepoFile $relative
   if ($text -match 'type\s*:\s*["'']runtime\.error["'']') {
     Add-Error "App UI file creates sidecar runtime.error directly: $relative"
