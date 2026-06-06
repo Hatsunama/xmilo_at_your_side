@@ -1,32 +1,77 @@
-# apps/expo-app
+# xMilo Expo App
 
-Expo Router starter for the xMilo Android app shell.
+This directory contains the Android-first Expo app surface for xMilo.
 
-## What this app is right now
+xMilo is in active development. This README does not claim release readiness,
+commercial readiness, store distribution readiness, hosted access readiness, payment
+readiness, or phone-proof completion. Passing local validation is release hygiene
+evidence, not proof that deployment, provider access, or commercial launch is
+complete.
 
-- a fixed-dark-theme starter shell
-- localhost bridge client to the sidecar
-- basic event feed
-- task input form
-- setup and settings starter screens
-- local archive cache via expo-sqlite
-- app-side RevenueCat wiring for paywall open + restore purchases
+## App Responsibilities
 
-## Important limitations
+The Expo app owns React Native UI and user interaction for setup, settings,
+Main Hall and Lair interaction, report surfaces, and runtime-host bridge
+interaction.
 
-- this is not the final Wizard Lair world view
-- the setup wizard is still a starter shell, not the finished automated flow
-- relay-side entitlement truth still depends on RevenueCat webhook delivery before xMilo access flips fully active
-- restore-purchases is wired in the app shell, but broader account/logout/payment management surfaces are still incomplete
-- no final icon/splash/art assets are included yet
-- this should be treated as the first real app shell, not public-release polish
+The app does not own durable runtime truth. Native Android runtime state, local
+runtime host status, sidecar bridge evidence, and task/runtime proof must come
+from the runtime and bridge layers that provide those facts.
 
-## Native build validation note
+## Runtime Host Direction
 
-- `app-debug.apk` is an Expo development build and may open Dev Launcher behavior instead of acting like the final embedded app when Metro/dev-client expectations are present
-- `app-release.apk` is the correct embedded validation artifact for first native castle-renderer handoff and release-style on-device testing
+xMilo uses an app-owned local runtime host and sidecar bridge direction. The app
+does not depend on a retired external-terminal bootstrap path or a user-managed
+terminal runtime.
 
-## Hosted access dev note
+`xMiloclaw` may appear in code and native bridge names as the current internal
+runtime subsystem/fork naming. Product-facing release truth should describe the
+system as xMilo unless a lower-level internal subsystem name is technically
+required.
 
-- use an Expo development build for real purchases; hot reload / Expo Go is not enough for full native billing behavior
-- add `EXPO_PUBLIC_RC_ANDROID_API_KEY` before testing the subscribe or restore flows
+## Access And Providers
+
+BYOK and provider configuration surfaces exist in the app. Hosted access,
+payment, account administration, and deployment readiness are separate release
+tracks and are not claimed by this README.
+
+Do not treat this directory as proof that hosted access, payments, entitlement
+handling, or app-store distribution are complete.
+
+## Native Artifacts
+
+The Android package path depends on generated native artifacts. See
+`android/app/RELEASE_ARTIFACTS.md` for the current artifact provenance rules.
+
+Current validation expects generated artifacts such as:
+
+- `android/app/src/main/jniLibs/arm64-v8a/libxmilo_sidecar.so`
+- `android/app/libs/castle.aar`
+
+These artifacts are package requirements, not a claim that the app is
+commercial-ready.
+
+## Validation Commands
+
+Run these from the repository root:
+
+```powershell
+.\scripts\validate_contract_drift.ps1
+.\scripts\android\validate_open_source_release.ps1 -AllowDirty -RequireNativeArtifacts
+python .\testing-grounds\runners\dry_run.py
+python .\testing-grounds\runners\dry_run.py --self-test
+```
+
+These checks validate contract drift, open-source release hygiene, required
+native artifact presence, and Testing Grounds fixture behavior. They do not
+replace device proof, provider proof, hosted access proof, payment proof, or
+deployment approval.
+
+## Boundaries
+
+Do not put secrets, local credentials, provider keys, private deployment details,
+or private website source details in this README.
+
+This app README is scoped to the Expo app and its Android packaging path. Public
+source documentation should stay truthful about what is currently validated and
+what remains gated.
