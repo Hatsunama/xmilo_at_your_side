@@ -29,13 +29,13 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Host:         getenvAny([]string{"XMILO_SIDECAR_HOST", "PICOCLAW_HOST"}, "127.0.0.1"),
-		Port:         getenvIntAny([]string{"XMILO_SIDECAR_PORT", "PICOCLAW_PORT"}, 42817),
-		DBPath:       getenvAny([]string{"XMILO_SIDECAR_DB_PATH", "PICOCLAW_DB_PATH"}, filepath.Join(".xmilo", "xmilo.db")),
-		BearerToken:  getenvAny([]string{"XMILO_BEARER_TOKEN", "XMILO_SIDECAR_BEARER_TOKEN", "PICOCLAW_BEARER_TOKEN"}, ""),
-		RelayBaseURL: getenvAny([]string{"XMILO_RELAY_BASE_URL", "XMILO_RELAY_URL", "XMILO_SIDECAR_RELAY_BASE_URL", "PICOCLAW_RELAY_BASE_URL"}, "http://127.0.0.1:8080"),
-		MindRoot:     getenvAny([]string{"XMILO_MIND_ROOT", "XMILO_SIDECAR_MIND_ROOT", "PICOCLAW_MIND_ROOT"}, filepath.Join("..", "docs", "authority", "xMilo_v1")),
-		RuntimeID:    getenvAny([]string{"XMILO_RUNTIME_ID", "XMILO_SIDECAR_RUNTIME_ID", "PICOCLAW_RUNTIME_ID"}, "dev-local"),
+		Host:         getenvAny([]string{"XMILOCLAW_HOST", "XMILO_SIDECAR_HOST"}, "127.0.0.1"),
+		Port:         getenvIntAny([]string{"XMILOCLAW_PORT", "XMILO_SIDECAR_PORT"}, 42817),
+		DBPath:       getenvAny([]string{"XMILOCLAW_DB_PATH", "XMILO_SIDECAR_DB_PATH"}, filepath.Join(".xmilo", "xmilo.db")),
+		BearerToken:  getenvAny([]string{"XMILOCLAW_BEARER_TOKEN", "XMILO_BEARER_TOKEN", "XMILO_SIDECAR_BEARER_TOKEN"}, ""),
+		RelayBaseURL: getenvAny([]string{"XMILOCLAW_RELAY_BASE_URL", "XMILO_RELAY_BASE_URL", "XMILO_RELAY_URL", "XMILO_SIDECAR_RELAY_BASE_URL"}, "http://127.0.0.1:8080"),
+		MindRoot:     getenvAny([]string{"XMILOCLAW_MIND_ROOT", "XMILO_MIND_ROOT", "XMILO_SIDECAR_MIND_ROOT"}, filepath.Join("..", "docs", "authority", "xMilo_v1")),
+		RuntimeID:    getenvAny([]string{"XMILOCLAW_RUNTIME_ID", "XMILO_RUNTIME_ID", "XMILO_SIDECAR_RUNTIME_ID"}, "dev-local"),
 		LLMMode:      getenvAny([]string{"XMILO_LLM_MODE", "XMILO_SIDECAR_LLM_MODE"}, "relay"),
 		BYOKProvider: getenvAny([]string{"XMILO_BYOK_PROVIDER", "XMILO_SIDECAR_BYOK_PROVIDER"}, "xai"),
 		BYOKKeyEnv:   getenvAny([]string{"XMILO_BYOK_KEY_ENV", "XMILO_SIDECAR_BYOK_KEY_ENV"}, "XMILO_BYOK_API_KEY"),
@@ -44,7 +44,7 @@ func Load() (Config, error) {
 		BYOKModel:    getenvAny([]string{"XMILO_BYOK_MODEL", "XMILO_SIDECAR_BYOK_MODEL"}, ""),
 	}
 
-	if path := getenvAny([]string{"XMILO_SIDECAR_CONFIG", "PICOCLAW_CONFIG"}, ""); path != "" {
+	if path := getenvAny([]string{"XMILOCLAW_CONFIG", "XMILO_SIDECAR_CONFIG"}, ""); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return Config{}, err
@@ -55,7 +55,7 @@ func Load() (Config, error) {
 	}
 
 	if cfg.BearerToken == "" {
-		return Config{}, errors.New("missing bearer token: set XMILO_BEARER_TOKEN or provide config file bearer_token")
+		return Config{}, errors.New("missing bearer token: set XMILOCLAW_BEARER_TOKEN, XMILO_BEARER_TOKEN, or provide config file bearer_token")
 	}
 	cfg.ApplyBYOKProviderDefaults()
 
