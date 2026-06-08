@@ -8,24 +8,42 @@ import (
 )
 
 const (
-	ProviderXAI       = "xai"
-	ProviderOpenAI    = "openai"
-	ProviderAnthropic = "anthropic"
-	ProviderOllama    = "ollama"
+	ProviderXAI         = "xai"
+	ProviderOpenAI      = "openai"
+	ProviderAnthropic   = "anthropic"
+	ProviderOllama      = "ollama"
+	ProviderOllamaCloud = "ollama_cloud"
 
 	DevAllowCloudProviderCustomBaseURLEnv = "XMILO_DEV_ALLOW_CLOUD_PROVIDER_CUSTOM_BASE_URL"
+
+	ConnectionKindCloudCanonical = "cloud_canonical"
+	ConnectionKindLocalServer    = "local_server"
+
+	BaseURLEntryModeHiddenCanonical   = "hidden_canonical"
+	BaseURLEntryModeGuidedLocalServer = "guided_local_server"
+
+	ReasonConnectionTargetRequired = "local_provider_connection_target_required"
+	ReasonManualURLInvalid         = "local_provider_manual_url_invalid"
+
+	SetupGuidanceOllamaConnectionTargetRequired = "ollama_connection_target_required"
 )
 
 type ProviderSpec struct {
-	ID                   string   `json:"id"`
-	Label                string   `json:"label"`
-	DefaultModel         string   `json:"default_model"`
-	DefaultBaseURL       string   `json:"default_base_url"`
-	KeyRequired          bool     `json:"key_required"`
-	CustomBaseURLAllowed bool     `json:"custom_base_url_allowed"`
-	BaseURLRequired      bool     `json:"base_url_required"`
-	AllowedSchemes       []string `json:"allowed_schemes"`
-	DevCustomBaseURLEnv  string   `json:"dev_custom_base_url_env,omitempty"`
+	ID                           string   `json:"id"`
+	Label                        string   `json:"label"`
+	DefaultModel                 string   `json:"default_model"`
+	DefaultBaseURL               string   `json:"default_base_url"`
+	KeyRequired                  bool     `json:"key_required"`
+	CustomBaseURLAllowed         bool     `json:"custom_base_url_allowed"`
+	BaseURLRequired              bool     `json:"base_url_required"`
+	AllowedSchemes               []string `json:"allowed_schemes"`
+	DevCustomBaseURLEnv          string   `json:"dev_custom_base_url_env,omitempty"`
+	ConnectionKind               string   `json:"connection_kind"`
+	BaseURLEntryMode             string   `json:"base_url_entry_mode"`
+	AdvancedManualBaseURLAllowed bool     `json:"advanced_manual_base_url_allowed"`
+	RequiresConnectionTarget     bool     `json:"requires_connection_target"`
+	RequiresReachabilityProbe    bool     `json:"requires_reachability_probe"`
+	SetupGuidanceCode            string   `json:"setup_guidance_code,omitempty"`
 }
 
 type ResolveInput struct {
@@ -37,15 +55,21 @@ type ResolveInput struct {
 }
 
 type ResolvedConfig struct {
-	Provider         string         `json:"provider"`
-	Model            string         `json:"model"`
-	BaseURL          string         `json:"base_url"`
-	KeyRequired      bool           `json:"key_required"`
-	BaseURLRequired  bool           `json:"base_url_required"`
-	LocalTurnAllowed bool           `json:"local_turn_allowed"`
-	ReadinessReason  string         `json:"readiness_reason,omitempty"`
-	SafeDiagnostic   SafeDiagnostic `json:"safe_diagnostic"`
-	Spec             ProviderSpec   `json:"spec"`
+	Provider                     string         `json:"provider"`
+	Model                        string         `json:"model"`
+	BaseURL                      string         `json:"base_url"`
+	KeyRequired                  bool           `json:"key_required"`
+	BaseURLRequired              bool           `json:"base_url_required"`
+	LocalTurnAllowed             bool           `json:"local_turn_allowed"`
+	ReadinessReason              string         `json:"readiness_reason,omitempty"`
+	SafeDiagnostic               SafeDiagnostic `json:"safe_diagnostic"`
+	Spec                         ProviderSpec   `json:"spec"`
+	ConnectionKind               string         `json:"connection_kind"`
+	BaseURLEntryMode             string         `json:"base_url_entry_mode"`
+	AdvancedManualBaseURLAllowed bool           `json:"advanced_manual_base_url_allowed"`
+	RequiresConnectionTarget     bool           `json:"requires_connection_target"`
+	RequiresReachabilityProbe    bool           `json:"requires_reachability_probe"`
+	SetupGuidanceCode            string         `json:"setup_guidance_code,omitempty"`
 }
 
 type SafeDiagnostic struct {
@@ -55,47 +79,84 @@ type SafeDiagnostic struct {
 
 var providerSpecs = []ProviderSpec{
 	{
-		ID:                   ProviderXAI,
-		Label:                "xAI",
-		DefaultModel:         "grok-4",
-		DefaultBaseURL:       "https://api.x.ai/v1",
-		KeyRequired:          true,
-		CustomBaseURLAllowed: false,
-		BaseURLRequired:      true,
-		AllowedSchemes:       []string{"https"},
-		DevCustomBaseURLEnv:  DevAllowCloudProviderCustomBaseURLEnv,
+		ID:                           ProviderXAI,
+		Label:                        "xAI",
+		DefaultModel:                 "grok-4",
+		DefaultBaseURL:               "https://api.x.ai/v1",
+		KeyRequired:                  true,
+		CustomBaseURLAllowed:         false,
+		BaseURLRequired:              true,
+		AllowedSchemes:               []string{"https"},
+		DevCustomBaseURLEnv:          DevAllowCloudProviderCustomBaseURLEnv,
+		ConnectionKind:               ConnectionKindCloudCanonical,
+		BaseURLEntryMode:             BaseURLEntryModeHiddenCanonical,
+		AdvancedManualBaseURLAllowed: false,
+		RequiresConnectionTarget:     false,
+		RequiresReachabilityProbe:    false,
 	},
 	{
-		ID:                   ProviderOpenAI,
-		Label:                "OpenAI / GPT",
-		DefaultModel:         "gpt-5.4",
-		DefaultBaseURL:       "https://api.openai.com/v1",
-		KeyRequired:          true,
-		CustomBaseURLAllowed: false,
-		BaseURLRequired:      true,
-		AllowedSchemes:       []string{"https"},
-		DevCustomBaseURLEnv:  DevAllowCloudProviderCustomBaseURLEnv,
+		ID:                           ProviderOpenAI,
+		Label:                        "OpenAI / GPT",
+		DefaultModel:                 "gpt-5.4",
+		DefaultBaseURL:               "https://api.openai.com/v1",
+		KeyRequired:                  true,
+		CustomBaseURLAllowed:         false,
+		BaseURLRequired:              true,
+		AllowedSchemes:               []string{"https"},
+		DevCustomBaseURLEnv:          DevAllowCloudProviderCustomBaseURLEnv,
+		ConnectionKind:               ConnectionKindCloudCanonical,
+		BaseURLEntryMode:             BaseURLEntryModeHiddenCanonical,
+		AdvancedManualBaseURLAllowed: false,
+		RequiresConnectionTarget:     false,
+		RequiresReachabilityProbe:    false,
 	},
 	{
-		ID:                   ProviderAnthropic,
-		Label:                "Claude / Anthropic",
-		DefaultModel:         "claude-sonnet-4-5",
-		DefaultBaseURL:       "https://api.anthropic.com/v1",
-		KeyRequired:          true,
-		CustomBaseURLAllowed: false,
-		BaseURLRequired:      true,
-		AllowedSchemes:       []string{"https"},
-		DevCustomBaseURLEnv:  DevAllowCloudProviderCustomBaseURLEnv,
+		ID:                           ProviderAnthropic,
+		Label:                        "Claude / Anthropic",
+		DefaultModel:                 "claude-sonnet-4-5",
+		DefaultBaseURL:               "https://api.anthropic.com/v1",
+		KeyRequired:                  true,
+		CustomBaseURLAllowed:         false,
+		BaseURLRequired:              true,
+		AllowedSchemes:               []string{"https"},
+		DevCustomBaseURLEnv:          DevAllowCloudProviderCustomBaseURLEnv,
+		ConnectionKind:               ConnectionKindCloudCanonical,
+		BaseURLEntryMode:             BaseURLEntryModeHiddenCanonical,
+		AdvancedManualBaseURLAllowed: false,
+		RequiresConnectionTarget:     false,
+		RequiresReachabilityProbe:    false,
 	},
 	{
-		ID:                   ProviderOllama,
-		Label:                "Ollama",
-		DefaultModel:         "llama3.2",
-		DefaultBaseURL:       "",
-		KeyRequired:          false,
-		CustomBaseURLAllowed: true,
-		BaseURLRequired:      true,
-		AllowedSchemes:       []string{"http", "https"},
+		ID:                           ProviderOllama,
+		Label:                        "Ollama Local",
+		DefaultModel:                 "llama3.2",
+		DefaultBaseURL:               "",
+		KeyRequired:                  false,
+		CustomBaseURLAllowed:         true,
+		BaseURLRequired:              true,
+		AllowedSchemes:               []string{"http", "https"},
+		ConnectionKind:               ConnectionKindLocalServer,
+		BaseURLEntryMode:             BaseURLEntryModeGuidedLocalServer,
+		AdvancedManualBaseURLAllowed: true,
+		RequiresConnectionTarget:     true,
+		RequiresReachabilityProbe:    false,
+		SetupGuidanceCode:            SetupGuidanceOllamaConnectionTargetRequired,
+	},
+	{
+		ID:                           ProviderOllamaCloud,
+		Label:                        "Ollama Cloud",
+		DefaultModel:                 "gpt-oss:120b",
+		DefaultBaseURL:               "https://ollama.com",
+		KeyRequired:                  true,
+		CustomBaseURLAllowed:         false,
+		BaseURLRequired:              true,
+		AllowedSchemes:               []string{"https"},
+		DevCustomBaseURLEnv:          DevAllowCloudProviderCustomBaseURLEnv,
+		ConnectionKind:               ConnectionKindCloudCanonical,
+		BaseURLEntryMode:             BaseURLEntryModeHiddenCanonical,
+		AdvancedManualBaseURLAllowed: false,
+		RequiresConnectionTarget:     false,
+		RequiresReachabilityProbe:    false,
 	},
 }
 
@@ -117,6 +178,8 @@ func NormalizeProvider(provider string) (string, error) {
 		return ProviderAnthropic, nil
 	case ProviderOllama:
 		return ProviderOllama, nil
+	case ProviderOllamaCloud, "ollama-cloud", "ollama cloud":
+		return ProviderOllamaCloud, nil
 	default:
 		return "", errors.New("local_provider_unavailable")
 	}
@@ -159,6 +222,9 @@ func Resolve(input ResolveInput) (ResolvedConfig, error) {
 	}
 
 	if spec.BaseURLRequired && baseURL == "" {
+		if spec.ID == ProviderOllama {
+			return resolved(spec, model, baseURL, input, ReasonConnectionTargetRequired), nil
+		}
 		return resolved(spec, model, baseURL, input, "missing_base_url"), errors.New("local_provider_base_url_required")
 	}
 	host, err := validateBaseURL(spec, baseURL)
@@ -177,9 +243,15 @@ func Resolve(input ResolveInput) (ResolvedConfig, error) {
 func validateBaseURL(spec ProviderSpec, baseURL string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		if spec.ID == ProviderOllama {
+			return "", errors.New(ReasonManualURLInvalid)
+		}
 		return "", errors.New("local_provider_unavailable")
 	}
 	if !contains(spec.AllowedSchemes, parsed.Scheme) {
+		if spec.ID == ProviderOllama {
+			return "", errors.New(ReasonManualURLInvalid)
+		}
 		return "", errors.New("local_provider_disallowed_url_scheme")
 	}
 	if !spec.CustomBaseURLAllowed && strings.TrimRight(baseURL, "/") != strings.TrimRight(spec.DefaultBaseURL, "/") && !devCloudCustomBaseURLAllowed(spec) {
@@ -207,14 +279,25 @@ func resolved(spec ProviderSpec, model string, baseURL string, input ResolveInpu
 			reason = "missing_key"
 		}
 	}
+	requiresConnectionTarget := spec.RequiresConnectionTarget && strings.TrimSpace(baseURL) == ""
+	setupGuidanceCode := ""
+	if requiresConnectionTarget {
+		setupGuidanceCode = spec.SetupGuidanceCode
+	}
 	return ResolvedConfig{
-		Provider:         spec.ID,
-		Model:            model,
-		BaseURL:          baseURL,
-		KeyRequired:      spec.KeyRequired,
-		BaseURLRequired:  spec.BaseURLRequired,
-		LocalTurnAllowed: ready,
-		ReadinessReason:  reason,
+		Provider:                     spec.ID,
+		Model:                        model,
+		BaseURL:                      baseURL,
+		KeyRequired:                  spec.KeyRequired,
+		BaseURLRequired:              spec.BaseURLRequired,
+		LocalTurnAllowed:             ready,
+		ReadinessReason:              reason,
+		ConnectionKind:               spec.ConnectionKind,
+		BaseURLEntryMode:             spec.BaseURLEntryMode,
+		AdvancedManualBaseURLAllowed: spec.AdvancedManualBaseURLAllowed,
+		RequiresConnectionTarget:     requiresConnectionTarget,
+		RequiresReachabilityProbe:    spec.RequiresReachabilityProbe,
+		SetupGuidanceCode:            setupGuidanceCode,
 		SafeDiagnostic: SafeDiagnostic{
 			Provider: spec.ID,
 		},

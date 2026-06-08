@@ -80,17 +80,23 @@ export function toUserFacingLocalProviderError(rawMessage: string) {
     case "local_provider_rate_limited":
       return "Local provider rate limited this request. Wait a moment or choose another provider/model.";
     case "local_provider_unreachable":
-      return "Local provider is unreachable from this phone. Check the provider base URL and network.";
+      return "Local provider is unreachable from this phone. Check the provider connection and network.";
     case "local_provider_request_failed":
       return "Local provider request failed. Check provider status, model, and local configuration.";
     case "local_provider_unavailable":
       return "Local provider is unavailable right now. Check the provider service or local Ollama server.";
+    case "missing_key":
+      return "Provider API key is required before saving.";
     case "local_provider_base_url_required":
-      return "Local provider base URL is required before saving.";
+      return "Provider connection settings are incomplete.";
+    case "local_provider_connection_target_required":
+      return "Ollama Local must be running on this phone or on a computer your phone can reach before xMilo can use it.";
+    case "local_provider_manual_url_invalid":
+      return "Check the Ollama Local server address and try again.";
     case "local_provider_disallowed_url_scheme":
       return "Local provider URL scheme is not allowed for this provider.";
     case "local_provider_custom_base_url_not_allowed":
-      return "Custom base URL is not allowed for this provider.";
+      return "Custom provider server address is not allowed for this provider.";
     case "local_provider_model_required":
       return "Local provider model is required before saving.";
     case "Network request failed":
@@ -119,8 +125,6 @@ function safeResponseString(value: unknown) {
   if (!/^[a-zA-Z0-9_.:-]{1,80}$/.test(clean)) return undefined;
   return clean;
 }
-
-// ─── Core sidecar calls ───────────────────────────────────────────────────────
 
 export async function getHealth() {
   return request("/health");
@@ -151,6 +155,12 @@ export type LocalProviderOption = {
   custom_base_url_allowed: boolean;
   base_url_required: boolean;
   allowed_schemes: string[];
+  connection_kind: string;
+  base_url_entry_mode: string;
+  advanced_manual_base_url_allowed: boolean;
+  requires_connection_target: boolean;
+  requires_reachability_probe: boolean;
+  setup_guidance_code?: string;
 };
 
 export type LocalProviderResolveRequest = {
@@ -170,6 +180,12 @@ export type LocalProviderResolvedConfig = {
   local_turn_allowed: boolean;
   readiness_reason?: string;
   spec?: LocalProviderOption;
+  connection_kind: string;
+  base_url_entry_mode: string;
+  advanced_manual_base_url_allowed: boolean;
+  requires_connection_target: boolean;
+  requires_reachability_probe: boolean;
+  setup_guidance_code?: string;
 };
 
 export async function getLocalProviderOptions(): Promise<LocalProviderOption[]> {
@@ -248,12 +264,6 @@ export async function resetTier(tier: string) {
   });
 }
 
-// ─── Auth / setup flows ───────────────────────────────────────────────────────
-
-/**
- * Sends an email verification request to the relay via sidecar.
- * The relay emails a verification link to the user.
- */
 export async function authRegister(email: string, deviceUserID: string) {
   return request("/auth/register", {
     method: "POST",
@@ -261,11 +271,6 @@ export async function authRegister(email: string, deviceUserID: string) {
   });
 }
 
-/**
- * Refreshes the current access contract exposed by the sidecar.
- * Hosted relay entitlement remains separate from Phase 9 local BYOK eligibility;
- * first-task UX should read first_task_eligible/local_llm_turn_allowed.
- */
 export async function authCheck(): Promise<{
   device_user_id?: string;
   entitled: boolean;
@@ -295,9 +300,6 @@ export async function authCheck(): Promise<{
   });
 }
 
-/**
- * Redeems a single-use access code for the currently configured launch period.
- */
 export async function authRedeemInvite(code: string, deviceUserID: string) {
   return request("/auth/invite", {
     method: "POST",
@@ -396,8 +398,6 @@ export async function submitSettingsReport(payload: SettingsReportSubmitPayload)
     body: JSON.stringify(payload)
   });
 }
-
-// ─── WebSocket bridge ─────────────────────────────────────────────────────────
 
 export function connectBridge(onEvent: (event: EventEnvelope) => void) {
   initArchiveDb().catch(() => null);

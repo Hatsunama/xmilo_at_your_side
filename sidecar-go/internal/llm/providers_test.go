@@ -84,6 +84,20 @@ func TestOllamaTurnAllowsNoKeyAndParsesResponse(t *testing.T) {
 	}
 }
 
+func TestOllamaCloudTurnRequiresBearerAndUsesGeneratePath(t *testing.T) {
+	server := providerServer(t, "/api/generate", "Bearer local-test-key", ollamaPayload("ollama cloud done"), nil)
+	defer server.Close()
+	client := mustLocalClient(t, localConfig(t, "ollama_cloud", server.URL, "gpt-oss:120b", true))
+	client.HTTP = server.Client()
+	resp, err := client.Turn(context.Background(), contracts.RelayTurnRequest{TaskID: "task_cloud_ollama", Phase: "intake"})
+	if err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if resp.Summary != "ollama cloud done" {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+}
+
 func TestXAIAndOpenAIHaveDistinctDefaults(t *testing.T) {
 	xai := config.Config{BYOKProvider: "xai"}
 	xai.ApplyBYOKProviderDefaults()
@@ -100,6 +114,19 @@ func TestXAIAndOpenAIHaveDistinctDefaults(t *testing.T) {
 	}
 }
 
+func TestOllamaLocalAndCloudHaveDistinctDefaults(t *testing.T) {
+	local := config.Config{BYOKProvider: "ollama"}
+	local.ApplyBYOKProviderDefaults()
+	cloud := config.Config{BYOKProvider: "ollama_cloud"}
+	cloud.ApplyBYOKProviderDefaults()
+	if local.BYOKBaseURL != "" || local.BYOKModel != "llama3.2" {
+		t.Fatalf("unexpected ollama local defaults: %#v", local)
+	}
+	if cloud.BYOKBaseURL != "https://ollama.com" || cloud.BYOKModel != "gpt-oss:120b" {
+		t.Fatalf("unexpected ollama cloud defaults: %#v", cloud)
+	}
+}
+
 func TestMissingRequiredKeyReturnsPreciseError(t *testing.T) {
 	client := mustLocalClient(t, config.Config{
 		LLMMode:      "local_byok",
@@ -107,6 +134,18 @@ func TestMissingRequiredKeyReturnsPreciseError(t *testing.T) {
 		BYOKKeyFile:  filepath.Join(t.TempDir(), "missing.key"),
 		BYOKBaseURL:  "https://example.invalid/v1",
 		BYOKModel:    "gpt-test",
+	})
+	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{}); err == nil || err.Error() != "missing_local_provider_key" {
+		t.Fatalf("expected missing_local_provider_key, got %v", err)
+	}
+}
+
+func TestOllamaCloudMissingKeyReturnsPreciseError(t *testing.T) {
+	client := mustLocalClient(t, config.Config{
+		LLMMode:      "local_byok",
+		BYOKProvider: "ollama_cloud",
+		BYOKBaseURL:  "https://ollama.com",
+		BYOKModel:    "gpt-oss:120b",
 	})
 	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{}); err == nil || err.Error() != "missing_local_provider_key" {
 		t.Fatalf("expected missing_local_provider_key, got %v", err)
@@ -398,12 +437,19 @@ func TestLocalProviderUsesResilientHTTPClient(t *testing.T) {
 	}
 }
 
-func TestLocalProviderReadyRequiresExplicitOllamaBaseURL(t *testing.T) {
+func TestLocalProviderReadyRequiresGuidedOllamaConnectionTarget(t *testing.T) {
 	if LocalProviderReady(config.Config{LLMMode: "local_byok", BYOKProvider: "ollama", BYOKModel: "llama3.2"}) {
-		t.Fatalf("ollama must require explicit base URL")
+		t.Fatalf("blank ollama must require guided connection target before readiness")
 	}
 	if !LocalProviderReady(config.Config{LLMMode: "local_byok", BYOKProvider: "ollama", BYOKBaseURL: "http://192.168.1.10:11434", BYOKModel: "llama3.2"}) {
 		t.Fatalf("ollama with explicit base URL and model should be locally eligible without a key")
+	}
+}
+
+func TestOllamaManualURLInvalidUsesTypedReason(t *testing.T) {
+	client := mustLocalClient(t, config.Config{LLMMode: "local_byok", BYOKProvider: "ollama", BYOKBaseURL: "localhost:11434", BYOKModel: "llama3.2"})
+	if _, err := client.Turn(context.Background(), contracts.RelayTurnRequest{}); err == nil || err.Error() != providerpolicy.ReasonManualURLInvalid {
+		t.Fatalf("expected %s, got %v", providerpolicy.ReasonManualURLInvalid, err)
 	}
 }
 

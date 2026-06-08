@@ -23,7 +23,6 @@ const config: ExpoConfig = {
     package: androidPackage,
     permissions: [
       "INTERNET",
-      "com.android.vending.BILLING",
       "POST_NOTIFICATIONS",
       "CAMERA",
       "RECORD_AUDIO",
@@ -40,9 +39,7 @@ const config: ExpoConfig = {
     sidecarBaseUrl: process.env.EXPO_PUBLIC_SIDECAR_BASE_URL || "http://localhost:42817",
     localhostToken: process.env.EXPO_PUBLIC_LOCALHOST_TOKEN || "",
     relayBaseUrl: publicRelayBaseUrl,
-    websiteBaseUrl: process.env.EXPO_PUBLIC_WEBSITE_BASE_URL || "https://sol.xmiloatyourside.com",
-    revenueCatAndroidApiKey: process.env.EXPO_PUBLIC_RC_ANDROID_API_KEY || "",
-    revenueCatEntitlementId: process.env.EXPO_PUBLIC_RC_ENTITLEMENT_ID || "xmilo_pro"
+    websiteBaseUrl: process.env.EXPO_PUBLIC_WEBSITE_BASE_URL || "https://sol.xmiloatyourside.com"
   }
 };
 

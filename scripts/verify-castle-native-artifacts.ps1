@@ -127,13 +127,23 @@ if ($RebuildAar) {
 if ($BuildApk -and !$SkipBuild) {
   Write-Host "Building Android APK for $Variant..."
   $previousLocation = Get-Location
+  $previousNodeEnvExists = Test-Path Env:\NODE_ENV
+  $previousNodeEnv = if ($previousNodeEnvExists) { $env:NODE_ENV } else { $null }
   try {
     Set-Location $androidDir
+    if (-not $previousNodeEnvExists -or [string]::IsNullOrWhiteSpace($env:NODE_ENV)) {
+      $env:NODE_ENV = "production"
+    }
     & .\gradlew.bat $config.AssembleTask --no-daemon --console=plain
     if ($LASTEXITCODE -ne 0) {
       throw "Android APK build failed with exit code $LASTEXITCODE"
     }
   } finally {
+    if ($previousNodeEnvExists) {
+      $env:NODE_ENV = $previousNodeEnv
+    } else {
+      Remove-Item Env:\NODE_ENV -ErrorAction SilentlyContinue
+    }
     Set-Location $previousLocation
   }
 }

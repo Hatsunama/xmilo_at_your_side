@@ -23,7 +23,28 @@ import {
   type LocalProviderResolvedConfig,
   verifyTwoFactor
 } from "../src/lib/bridge";
-import { configureRevenueCat, isRevenueCatConfigured, restoreRevenueCatPurchases } from "../src/lib/revenuecat";
+import {
+  OLLAMA_ACCEPTANCE_BODY,
+  OLLAMA_ACCEPTANCE_PRIMARY,
+  OLLAMA_ACCEPTANCE_SECONDARY,
+  OLLAMA_ACCEPTANCE_TITLE,
+  OLLAMA_CHOICE_BODY,
+  OLLAMA_CHOICE_CANCEL,
+  OLLAMA_CHOICE_CLOUD,
+  OLLAMA_CHOICE_LOCAL,
+  OLLAMA_CHOICE_TITLE,
+  OLLAMA_SETUP_UNAVAILABLE_MESSAGE,
+  OLLAMA_SETUP_UNAVAILABLE_TITLE,
+  allowsAdvancedManualServer,
+  buildProviderDisplayRows,
+  getProviderLabel,
+  getProviderSaveFailureCopy,
+  getProviderSetupCopy,
+  getOllamaProviderChoices,
+  isGroupedOllamaProviderRow,
+  isGuidedLocalServerProvider,
+  isProviderApiKeyRequired
+} from "../src/lib/providerSetup";
 import {
   deactivateXMiloclawLocalByokRouting,
   getXMiloclawLocalByokStatus,
@@ -65,6 +86,7 @@ export default function SettingsScreen() {
   const [providerKey, setProviderKey] = useState("");
   const [providerBaseUrl, setProviderBaseUrl] = useState("");
   const [providerModel, setProviderModel] = useState("");
+  const [providerAdvancedManualServerVisible, setProviderAdvancedManualServerVisible] = useState(false);
   const [runtimeRouteStatus, setRuntimeRouteStatus] = useState<XMiloclawRuntimeStatus | null>(null);
   const [twoFactorStatus, setTwoFactorStatus] = useState({
     verified_email: "",
@@ -86,8 +108,6 @@ export default function SettingsScreen() {
     subscription_allowed: false,
     access_code_grant_days: 30
   });
-  const revenueCatPurchasePathVisible = Boolean(accessConfig.subscription_allowed && isRevenueCatConfigured());
-
   const refreshAccessConfig = useCallback(async () => {
     const result = await authCheck();
     const next = {
@@ -158,17 +178,6 @@ export default function SettingsScreen() {
     } catch (error: any) {
       Alert.alert("Reset failed", error?.message ?? "Unknown error");
     }
-  }
-
-  async function waitForRelayEntitlement() {
-    for (let i = 0; i < 6; i += 1) {
-      const result = await authCheck().catch(() => null);
-      if (result?.entitled) {
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-    return false;
   }
 
   async function ensureRuntimeId() {
@@ -284,7 +293,10 @@ export default function SettingsScreen() {
         key_file_ready: existing.provider === selectedProvider && existing.keyFileReady
       });
       if (!resolved.local_turn_allowed) {
-        throw new Error(providerSwitchFailureMessage(resolved));
+        const failure = getProviderSaveFailureCopy(resolved.readiness_reason || "provider configuration was rejected", providerConfig ?? resolved);
+        setProviderSwitchError(`${providerLabel(selectedProvider)}: ${failure.message}`);
+        Alert.alert(failure.title, `${providerLabel(selectedProvider)}: ${failure.message}`);
+        return;
       }
       await saveXMiloclawLocalByokApiKey(resolved.provider, trimmedKey, resolved.base_url, resolved.model);
       await assertSavedByokConfig(resolved);
@@ -296,8 +308,9 @@ export default function SettingsScreen() {
       Alert.alert("BYOK provider active", `New tasks now use ${providerConfig?.label ?? resolved.provider}.`);
     } catch (error: any) {
       const message = error?.message ?? `Could not switch to ${providerLabel(selectedProvider)}.`;
-      setProviderSwitchError(`${providerLabel(selectedProvider)}: ${message}`);
-      Alert.alert("BYOK switch failed", `${providerLabel(selectedProvider)}: ${message}`);
+      const failure = getProviderSaveFailureCopy(message, providerConfig);
+      setProviderSwitchError(`${providerLabel(selectedProvider)}: ${failure.message}`);
+      Alert.alert(failure.title, `${providerLabel(selectedProvider)}: ${failure.message}`);
     } finally {
       setProviderSwitchBusy(false);
     }
@@ -319,52 +332,63 @@ export default function SettingsScreen() {
     }
   }
 
-  function providerSwitchFailureMessage(resolved: LocalProviderResolvedConfig) {
-    const label = providerLabel(resolved.provider || selectedProvider);
-    switch (resolved.readiness_reason) {
-      case "missing_key":
-        return `${label} needs a local API key before it can handle new tasks.`;
-      case "missing_base_url":
-      case "local_provider_base_url_required":
-        return `${label} needs a base URL before it can handle new tasks.`;
-      case "missing_model":
-        return `${label} needs a model before it can handle new tasks.`;
-      default:
-        return `${label} is not ready: ${resolved.readiness_reason || "provider configuration was rejected"}.`;
+  function chooseProviderOption(option: LocalProviderOption) {
+    const applySelection = () => {
+      setSelectedProvider(option.id);
+      setProviderBaseUrl("");
+      setProviderModel("");
+      setProviderAdvancedManualServerVisible(false);
+      setProviderSwitchError("");
+    };
+    if (!isGuidedLocalServerProvider(option)) {
+      applySelection();
+      return;
     }
+    Alert.alert(
+      OLLAMA_ACCEPTANCE_TITLE,
+      OLLAMA_ACCEPTANCE_BODY,
+      [
+        {
+          text: OLLAMA_ACCEPTANCE_SECONDARY,
+          style: "cancel",
+          onPress: () => {
+            setProviderSwitchError("");
+          }
+        },
+        {
+          text: OLLAMA_ACCEPTANCE_PRIMARY,
+          onPress: applySelection
+        }
+      ]
+    );
   }
 
-  async function restorePurchases() {
-    try {
-      if (!isRevenueCatConfigured()) {
-        Alert.alert("RevenueCat not configured", "Add EXPO_PUBLIC_RC_ANDROID_API_KEY first.");
-        return;
-      }
-
-      const runtimeId = await ensureRuntimeId();
-      if (!runtimeId) {
-        Alert.alert("Restore failed", "xMilo runtime ID is missing.");
-        return;
-      }
-
-      configureRevenueCat(runtimeId);
-      const result = await restoreRevenueCatPurchases();
-
-      if (!result.entitled) {
-        Alert.alert("No purchase found", "No active xMilo Pro entitlement was restored.");
-        return;
-      }
-
-      const relayReady = await waitForRelayEntitlement();
-      if (relayReady) {
-        Alert.alert("Restored", "Your xMilo Pro access is active.");
-        return;
-      }
-
-      Alert.alert("Restored", "RevenueCat restored the purchase. Relay access is still finalizing.");
-    } catch (error: any) {
-      Alert.alert("Restore failed", error?.message ?? "Unknown error");
+  function chooseProviderDisplayRow(row: ReturnType<typeof buildProviderDisplayRows>[number]) {
+    if (!isGroupedOllamaProviderRow(row)) {
+      chooseProviderOption(row.option);
+      return;
     }
+    const choices = getOllamaProviderChoices(providerOptions);
+    if (!choices.local || !choices.cloud) {
+      Alert.alert(OLLAMA_SETUP_UNAVAILABLE_TITLE, OLLAMA_SETUP_UNAVAILABLE_MESSAGE);
+      return;
+    }
+    const local = choices.local;
+    const cloud = choices.cloud;
+    Alert.alert(OLLAMA_CHOICE_TITLE, OLLAMA_CHOICE_BODY, [
+      {
+        text: OLLAMA_CHOICE_CLOUD,
+        onPress: () => chooseProviderOption(cloud)
+      },
+      {
+        text: OLLAMA_CHOICE_LOCAL,
+        onPress: () => chooseProviderOption(local)
+      },
+      {
+        text: OLLAMA_CHOICE_CANCEL,
+        style: "cancel"
+      }
+    ]);
   }
 
   async function redeemAccessCode() {
@@ -660,76 +684,93 @@ export default function SettingsScreen() {
             <Text style={styles.buttonText}>Use xMilo hosted access</Text>
           </Pressable>
 
-          <Text style={[styles.toggleTitle, { marginTop: 16 }]}>Use my own API key</Text>
+          <Text style={[styles.toggleTitle, { marginTop: 16 }]}>Use my own provider</Text>
           {providerOptionsBusy ? <ActivityIndicator color="#C4B5FD" style={{ marginTop: 12 }} /> : null}
           <View style={styles.providerGrid}>
-            {providerOptions.map((option) => {
-              const selected = selectedProvider === option.id;
+            {buildProviderDisplayRows(providerOptions).map((row) => {
+              const selected = row.kind === "provider" && selectedProvider === row.id;
               return (
                 <Pressable
-                  key={option.id}
+                  key={row.id}
                   style={[styles.providerPill, selected && styles.providerPillSelected]}
-                  onPress={() => {
-                    setSelectedProvider(option.id);
-                    setProviderBaseUrl("");
-                    setProviderModel("");
-                    setProviderSwitchError("");
-                  }}
+                  onPress={() => chooseProviderDisplayRow(row)}
                   disabled={providerSwitchBusy}
                 >
-                  <Text style={[styles.providerPillText, selected && styles.providerPillTextSelected]}>{option.label}</Text>
+                  <Text style={[styles.providerPillText, selected && styles.providerPillTextSelected]}>{row.label}</Text>
                 </Pressable>
               );
             })}
           </View>
 
-          {selectedProvider ? (
-            <>
-              {providerOptions.find((option) => option.id === selectedProvider)?.key_required ? (
+          {selectedProvider ? (() => {
+            const selectedOption = providerOptions.find((option) => option.id === selectedProvider);
+            const providerSetupSource = selectedOption ?? { id: selectedProvider, label: providerLabel(selectedProvider) };
+            const label = getProviderLabel(providerSetupSource, providerLabel(selectedProvider));
+            const keyRequired = isProviderApiKeyRequired(providerSetupSource);
+            const setupCopy = getProviderSetupCopy(providerSetupSource, label);
+            const canShowAdvancedManualServer = allowsAdvancedManualServer(providerSetupSource);
+            const showAdvancedManualServer = canShowAdvancedManualServer && providerAdvancedManualServerVisible;
+            return (
+              <>
+                <Text style={styles.toggleHint}>{setupCopy.body}</Text>
+                {keyRequired ? (
+                  <TextInput
+                    style={styles.normalInput}
+                    placeholder={`${label} API key`}
+                    placeholderTextColor="#6B7280"
+                    value={providerKey}
+                    onChangeText={setProviderKey}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    secureTextEntry
+                  />
+                ) : null}
+                {canShowAdvancedManualServer ? (
+                  <Pressable
+                    style={styles.secondaryButton}
+                    onPress={() => setProviderAdvancedManualServerVisible((visible) => !visible)}
+                    disabled={providerSwitchBusy}
+                  >
+                    <Text style={styles.buttonText}>
+                      {showAdvancedManualServer ? "Hide advanced server address" : "Advanced: enter server address"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {showAdvancedManualServer ? (
+                  <>
+                    <Text style={styles.toggleHint}>Use this only if you know where {label} is running.</Text>
+                    <TextInput
+                      style={styles.normalInput}
+                      placeholder={`${label} server address`}
+                      placeholderTextColor="#6B7280"
+                      value={providerBaseUrl}
+                      onChangeText={setProviderBaseUrl}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <Text style={styles.toggleHint}>Example: http://192.168.1.10:11434</Text>
+                  </>
+                ) : null}
                 <TextInput
                   style={styles.normalInput}
-                  placeholder={`${providerLabel(selectedProvider)} API key`}
+                  placeholder="Model, optional for provider default"
                   placeholderTextColor="#6B7280"
-                  value={providerKey}
-                  onChangeText={setProviderKey}
+                  value={providerModel}
+                  onChangeText={setProviderModel}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  secureTextEntry
                 />
-              ) : (
-                <Text style={styles.toggleHint}>{providerLabel(selectedProvider)} does not require an API key.</Text>
-              )}
-              <TextInput
-                style={styles.normalInput}
-                placeholder="Base URL, optional unless provider requires it"
-                placeholderTextColor="#6B7280"
-                value={providerBaseUrl}
-                onChangeText={setProviderBaseUrl}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <TextInput
-                style={styles.normalInput}
-                placeholder="Model, optional for provider default"
-                placeholderTextColor="#6B7280"
-                value={providerModel}
-                onChangeText={setProviderModel}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <Text style={styles.toggleHint}>
-                Default: {providerOptions.find((option) => option.id === selectedProvider)?.default_model || "sidecar default"} · Base URL:{" "}
-                {providerOptions.find((option) => option.id === selectedProvider)?.default_base_url || "enter local URL"}
-              </Text>
-              <Pressable
-                style={[styles.button, providerSwitchBusy && styles.disabledButton]}
-                onPress={switchToByokProvider}
-                disabled={providerSwitchBusy}
-              >
-                <Text style={styles.buttonText}>{providerSwitchBusy ? "Switching..." : `Use ${providerLabel(selectedProvider)}`}</Text>
-              </Pressable>
-            </>
-          ) : null}
+                <Text style={styles.toggleHint}>Default model: {selectedOption?.default_model || "sidecar default"}</Text>
+                <Pressable
+                  style={[styles.button, providerSwitchBusy && styles.disabledButton]}
+                  onPress={switchToByokProvider}
+                  disabled={providerSwitchBusy}
+                >
+                  <Text style={styles.buttonText}>{providerSwitchBusy ? "Switching..." : `Use ${label}`}</Text>
+                </Pressable>
+              </>
+            );
+          })() : null}
 
           {providerSwitchStatus ? <Text style={styles.toggleHint}>{providerSwitchStatus}</Text> : null}
           {providerSwitchError ? <Text style={styles.errorText}>{providerSwitchError}</Text> : null}
@@ -738,11 +779,6 @@ export default function SettingsScreen() {
         <Pressable style={styles.button} onPress={refreshStats}>
           <Text style={styles.buttonText}>Refresh storage stats</Text>
         </Pressable>
-        {revenueCatPurchasePathVisible ? (
-          <Pressable style={styles.secondaryButton} onPress={restorePurchases}>
-            <Text style={styles.buttonText}>Restore purchases</Text>
-          </Pressable>
-        ) : null}
         <Pressable style={styles.secondaryButton} onPress={wipeChatCache}>
           <Text style={styles.buttonText}>Reset chat cache only</Text>
         </Pressable>

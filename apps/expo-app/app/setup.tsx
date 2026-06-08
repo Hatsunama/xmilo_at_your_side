@@ -25,14 +25,6 @@ import {
   type LocalProviderOption
 } from "../src/lib/bridge";
 import {
-  configureRevenueCat,
-  getCustomerInfo,
-  hasRequiredEntitlement,
-  isRevenueCatConfigured,
-  PAYWALL_RESULT,
-  presentSubscriptionPaywall
-} from "../src/lib/revenuecat";
-import {
   getXMiloclawRuntimeStatus,
   hasNativeXMiloclawRuntimeHost,
   openXMiloclawAccessibilitySettings,
@@ -56,6 +48,28 @@ import {
   type XMiloclawRuntimeStatus
 } from "../src/lib/xmiloRuntimeHost";
 import { hasSetupCompletedOnce, markSetupCompletedOnce } from "../src/lib/setupCompletion";
+import {
+  OLLAMA_ACCEPTANCE_BODY,
+  OLLAMA_ACCEPTANCE_PRIMARY,
+  OLLAMA_ACCEPTANCE_SECONDARY,
+  OLLAMA_ACCEPTANCE_TITLE,
+  OLLAMA_CHOICE_BODY,
+  OLLAMA_CHOICE_CANCEL,
+  OLLAMA_CHOICE_CLOUD,
+  OLLAMA_CHOICE_LOCAL,
+  OLLAMA_CHOICE_TITLE,
+  OLLAMA_SETUP_UNAVAILABLE_MESSAGE,
+  OLLAMA_SETUP_UNAVAILABLE_TITLE,
+  allowsAdvancedManualServer,
+  buildProviderDisplayRows,
+  getProviderLabel,
+  getProviderSaveFailureCopy,
+  getProviderSetupCopy,
+  getOllamaProviderChoices,
+  isGroupedOllamaProviderRow,
+  isGuidedLocalServerProvider,
+  isProviderApiKeyRequired
+} from "../src/lib/providerSetup";
 import { useApp } from "../src/state/AppContext";
 
 type Step =
@@ -230,6 +244,7 @@ export default function SetupScreen() {
   const [byokKey, setByokKey] = useState("");
   const [byokBaseUrl, setByokBaseUrl] = useState("");
   const [byokModel, setByokModel] = useState("");
+  const [byokAdvancedManualServerVisible, setByokAdvancedManualServerVisible] = useState(false);
   const [byokBusy, setByokBusy] = useState(false);
   const [runtimeStep, setRuntimeStep] = useState<
     Page3RuntimeStep
@@ -254,7 +269,6 @@ export default function SetupScreen() {
     subscription_allowed: false,
     access_code_grant_days: 30
   });
-  const subscriptionEntryVisible = Boolean(accessConfig.subscription_allowed && isRevenueCatConfigured());
   const setupSeamSatisfied = useCallback((status: XMiloclawRuntimeStatus | null) => {
     if (!status) return false;
     return (
@@ -848,26 +862,6 @@ export default function SetupScreen() {
     }
   }
 
-  function syncRevenueCat(appUserID: string) {
-    if (!appUserID || !isRevenueCatConfigured()) return;
-    try {
-      configureRevenueCat(appUserID);
-    } catch {
-    }
-  }
-
-  async function waitForRelayEntitlement() {
-    for (let i = 0; i < 6; i += 1) {
-      const result = await authCheck().catch(() => null);
-      if (result?.entitled) {
-        router.replace("/lair");
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-    return false;
-  }
-
   async function handleSendEmail() {
     setError("");
     const trimmed = email.trim().toLowerCase();
@@ -970,48 +964,10 @@ export default function SetupScreen() {
     }
   }
 
-  async function handleOpenSubscription() {
-    setError("");
-    if (!deviceUserID) {
-      setError("xMilo runtime ID missing. Restart setup and try again.");
-      return;
-    }
-    if (!isRevenueCatConfigured()) {
-      setError("RevenueCat is not configured yet. Add EXPO_PUBLIC_RC_ANDROID_API_KEY first.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      configureRevenueCat(deviceUserID);
-      const result = await presentSubscriptionPaywall();
-
-      if (result === PAYWALL_RESULT.PURCHASED || result === PAYWALL_RESULT.RESTORED) {
-        const relayReady = await waitForRelayEntitlement();
-        if (relayReady) return;
-
-        const customerInfo = await getCustomerInfo().catch(() => null);
-        if (customerInfo && hasRequiredEntitlement(customerInfo)) {
-          setError("Purchase succeeded. xMilo is finalizing access — tap again in a moment.");
-        } else {
-          setError("Purchase did not complete.");
-        }
-        return;
-      }
-
-      if (result === PAYWALL_RESULT.ERROR) {
-        setError("Subscription flow failed. Check your RevenueCat offering and Play Billing setup.");
-      }
-    } catch (e: any) {
-      setError(e?.message ?? "Subscription flow failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleByokSaveAndContinue() {
     if (!byokProvider) return;
 
+    const providerConfig = localProviderOptions.find((option) => option.id === byokProvider);
     const trimmedKey = byokKey.trim();
     const trimmedBaseUrl = byokBaseUrl.trim();
     const trimmedModel = byokModel.trim();
@@ -1027,7 +983,9 @@ export default function SetupScreen() {
         key_file_ready: false
       });
       if (!resolved.local_turn_allowed) {
-        throw new Error(resolved.readiness_reason || "Local provider configuration is not ready.");
+        const failure = getProviderSaveFailureCopy(resolved.readiness_reason || "Local provider configuration is not ready.", providerConfig ?? resolved);
+        Alert.alert(failure.title, failure.message);
+        return;
       }
       await saveXMiloclawLocalByokApiKey(resolved.provider, trimmedKey, resolved.base_url, resolved.model);
       resetRuntimeTaskProof();
@@ -1041,10 +999,79 @@ export default function SetupScreen() {
       setByokModel("");
       router.replace("/lair");
     } catch (error: any) {
-      Alert.alert("BYOK key not saved", error?.message ?? "Could not save local API key.");
+      const message = error?.message ?? "Could not save local provider configuration.";
+      const failure = getProviderSaveFailureCopy(message, providerConfig);
+      Alert.alert(failure.title, failure.message);
     } finally {
       setByokBusy(false);
     }
+  }
+
+  function enterByokProvider(option: LocalProviderOption) {
+    setError("");
+    setByokProvider(option.id);
+    setByokKey("");
+    setByokBaseUrl("");
+    setByokModel("");
+    setByokAdvancedManualServerVisible(false);
+    setStep("byok_enter_key");
+  }
+
+  function handleChooseByokProvider(option: LocalProviderOption) {
+    if (!isGuidedLocalServerProvider(option)) {
+      enterByokProvider(option);
+      return;
+    }
+    Alert.alert(
+      OLLAMA_ACCEPTANCE_TITLE,
+      OLLAMA_ACCEPTANCE_BODY,
+      [
+        {
+          text: OLLAMA_ACCEPTANCE_SECONDARY,
+          style: "cancel",
+          onPress: () => {
+            setByokProvider("");
+            setByokKey("");
+            setByokBaseUrl("");
+            setByokModel("");
+            setByokAdvancedManualServerVisible(false);
+            setStep("byok_choose_provider");
+          }
+        },
+        {
+          text: OLLAMA_ACCEPTANCE_PRIMARY,
+          onPress: () => enterByokProvider(option)
+        }
+      ]
+    );
+  }
+
+  function handleChooseProviderDisplayRow(row: ReturnType<typeof buildProviderDisplayRows>[number]) {
+    if (!isGroupedOllamaProviderRow(row)) {
+      handleChooseByokProvider(row.option);
+      return;
+    }
+    const choices = getOllamaProviderChoices(localProviderOptions);
+    if (!choices.local || !choices.cloud) {
+      Alert.alert(OLLAMA_SETUP_UNAVAILABLE_TITLE, OLLAMA_SETUP_UNAVAILABLE_MESSAGE);
+      return;
+    }
+    const local = choices.local;
+    const cloud = choices.cloud;
+    Alert.alert(OLLAMA_CHOICE_TITLE, OLLAMA_CHOICE_BODY, [
+      {
+        text: OLLAMA_CHOICE_CLOUD,
+        onPress: () => enterByokProvider(cloud)
+      },
+      {
+        text: OLLAMA_CHOICE_LOCAL,
+        onPress: () => handleChooseByokProvider(local)
+      },
+      {
+        text: OLLAMA_CHOICE_CANCEL,
+        style: "cancel"
+      }
+    ]);
   }
 
   if (step === "checking") {
@@ -1913,20 +1940,13 @@ export default function SetupScreen() {
 
         <View style={styles.card}>
           {providerOptionsBusy ? <ActivityIndicator color={CLR.accent} /> : null}
-          {localProviderOptions.map((option) => (
+          {buildProviderDisplayRows(localProviderOptions).map((row) => (
             <Pressable
-              key={option.id}
+              key={row.id}
               style={[styles.linkButton, { marginTop: 10 }]}
-              onPress={() => {
-                setError("");
-                setByokProvider(option.id);
-                setByokKey("");
-                setByokBaseUrl("");
-                setByokModel("");
-                setStep("byok_enter_key");
-              }}
+              onPress={() => handleChooseProviderDisplayRow(row)}
             >
-              <Text style={styles.linkButtonText}>{option.label}</Text>
+              <Text style={styles.linkButtonText}>{row.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -1940,45 +1960,64 @@ export default function SetupScreen() {
 
   if (step === "byok_enter_key") {
     const providerConfig = byokProvider ? localProviderOptions.find((option) => option.id === byokProvider) : null;
-    const keyRequired = providerConfig?.key_required ?? false;
-    const showBaseUrlInput = Boolean(providerConfig?.custom_base_url_allowed || (providerConfig?.base_url_required && !providerConfig.default_base_url));
+    const providerSetupSource = providerConfig ?? (byokProvider ? { id: byokProvider, label: byokProvider } : null);
+    const keyRequired = isProviderApiKeyRequired(providerSetupSource);
+    const providerLabel = getProviderLabel(providerSetupSource);
+    const providerCopy = getProviderSetupCopy(providerSetupSource, providerLabel);
+    const canShowAdvancedManualServer = allowsAdvancedManualServer(providerSetupSource);
+    const showAdvancedManualServer = canShowAdvancedManualServer && byokAdvancedManualServerVisible;
     return (
       <ScrollView style={styles.scroll} contentContainerStyle={styles.padded}>
-        <Text style={styles.title}>{keyRequired ? "Enter your API key" : "Configure local provider"}</Text>
+        <Text style={styles.title}>{providerCopy.title}</Text>
         <Text style={styles.body}>
-          Provider: <Text style={styles.inlineAccent}>{providerConfig?.label ?? "—"}</Text>
+          Provider: <Text style={styles.inlineAccent}>{providerLabel}</Text>
         </Text>
-        <Text style={styles.body}>Provider rules are resolved by the local sidecar before the key is saved.</Text>
+        <Text style={styles.body}>{providerCopy.body}</Text>
 
-        <TextInput
-          style={styles.input}
-          placeholder={keyRequired ? "API key" : "API key (optional)"}
-          placeholderTextColor={CLR.muted}
-          value={byokKey}
-          onChangeText={setByokKey}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-
-        {showBaseUrlInput ? (
+        {keyRequired ? (
           <TextInput
             style={styles.input}
-            placeholder="Base URL"
+            placeholder="API key"
             placeholderTextColor={CLR.muted}
-            value={byokBaseUrl}
-            onChangeText={setByokBaseUrl}
+            value={byokKey}
+            onChangeText={setByokKey}
             autoCapitalize="none"
             autoCorrect={false}
-            keyboardType="url"
+            secureTextEntry
           />
-        ) : (
-          <Text style={styles.fine}>Base URL: {providerConfig?.default_base_url || "sidecar default"}</Text>
-        )}
+        ) : null}
+
+        {canShowAdvancedManualServer ? (
+          <Pressable
+            style={styles.textBtn}
+            onPress={() => setByokAdvancedManualServerVisible((visible) => !visible)}
+          >
+            <Text style={styles.textBtnLabel}>
+              {showAdvancedManualServer ? "Hide advanced server address" : "Advanced: enter server address"}
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {showAdvancedManualServer ? (
+          <>
+            <Text style={styles.fine}>Use this only if you know where {providerLabel} is running.</Text>
+            <TextInput
+              style={styles.input}
+              placeholder={`${providerLabel} server address`}
+              placeholderTextColor={CLR.muted}
+              value={byokBaseUrl}
+              onChangeText={setByokBaseUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <Text style={styles.fine}>Example: http://192.168.1.10:11434</Text>
+          </>
+        ) : null}
 
         <Text style={styles.fine}>Model: {providerConfig?.default_model || "sidecar default"}</Text>
 
-        <Btn label="Save & continue" onPress={handleByokSaveAndContinue} busy={byokBusy} />
+        <Btn label={providerCopy.primary} onPress={handleByokSaveAndContinue} busy={byokBusy} />
 
         <Pressable style={styles.textBtn} onPress={() => setStep("byok_choose_provider")}>
           <Text style={styles.textBtnLabel}>← Back</Text>
@@ -2094,21 +2133,11 @@ export default function SetupScreen() {
           />
         ) : null}
 
-        {subscriptionEntryVisible ? (
-          <ChoiceCard
-            title="Subscribe  ·  $19.99 / month"
-            sub="Unlimited access billed via Google Play."
-            accent={CLR.warn}
-            onPress={handleOpenSubscription}
-            busy={busy}
-          />
-        ) : (
-          <Text style={styles.fine}>
-            {accessConfig.subscription_allowed
-              ? "Subscriptions are allowed by the relay, but this build is not configured for the Google Play purchase path yet. For now, use a trial or access code."
-              : "Public subscriptions stay hidden during launch. For now, get your access code separately and bring it back here."}
-          </Text>
-        )}
+        <Text style={styles.fine}>
+          {accessConfig.subscription_allowed
+            ? "Hosted paid access is parked during launch. For now, use a trial or access code."
+            : "Public subscriptions stay hidden during launch. For now, get your access code separately and bring it back here."}
+        </Text>
       </ScrollView>
     );
   }

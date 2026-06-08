@@ -16,6 +16,7 @@ import {
   type SetupPermissionSnapshot,
   type XMiloclawRuntimeStatus
 } from "./xmiloRuntimeHost";
+import { OLLAMA_CONNECTION_MESSAGE, buildProviderDisplayRows, getProviderSetupCopy, getProviderSetupMode, isGuidedLocalServerProvider } from "./providerSetup";
 import fs from "fs";
 import path from "path";
 
@@ -213,5 +214,114 @@ describe("setup battery background compatibility", () => {
   it("keeps battery setup copy free of fake unrestricted or guaranteed background claims", () => {
     const setupSource = fs.readFileSync(path.join(__dirname, "../../app/setup.tsx"), "utf8");
     expect(setupSource).not.toMatch(/unrestricted granted|guaranteed background work|background work guaranteed|guaranteed background/i);
+  });
+});
+
+describe("provider setup UX contract", () => {
+  it("consumes sidecar provider connection fields in the app bridge contract", () => {
+    const bridgeSource = fs.readFileSync(path.join(__dirname, "./bridge.ts"), "utf8");
+    expect(bridgeSource).toContain("connection_kind");
+    expect(bridgeSource).toContain("base_url_entry_mode");
+    expect(bridgeSource).toContain("advanced_manual_base_url_allowed");
+    expect(bridgeSource).toContain("requires_connection_target");
+    expect(bridgeSource).toContain("requires_reachability_probe");
+    expect(bridgeSource).toContain("setup_guidance_code");
+    expect(bridgeSource).toContain("local_provider_connection_target_required");
+    expect(bridgeSource).toContain("local_provider_manual_url_invalid");
+  });
+
+  it("keeps cloud setup on canonical provider defaults without normal endpoint entry", () => {
+    const setupSource = fs.readFileSync(path.join(__dirname, "../../app/setup.tsx"), "utf8");
+    const cloudCopy = getProviderSetupCopy({ id: "openai", label: "OpenAI / GPT", key_required: true });
+    expect(setupSource).toContain("getProviderSetupCopy(providerSetupSource");
+    expect(cloudCopy.body).toContain("xMilo will use the standard OpenAI / GPT endpoint automatically.");
+    expect(cloudCopy.body).toContain("Paste your API key to continue.");
+    expect(getProviderSetupCopy({ id: "ollama_cloud", label: "Ollama Cloud", key_required: true }).body).toContain("Paste your Ollama API key to continue.");
+    expect(setupSource).not.toContain('placeholder="Base URL"');
+    expect(setupSource).not.toContain("Base URL:");
+  });
+
+  it("uses guided Ollama setup with advanced manual server address fallback only", () => {
+    const setupSource = fs.readFileSync(path.join(__dirname, "../../app/setup.tsx"), "utf8");
+    const settingsSource = fs.readFileSync(path.join(__dirname, "../../app/settings.tsx"), "utf8");
+    const helperSource = fs.readFileSync(path.join(__dirname, "./providerSetup.ts"), "utf8");
+    expect(helperSource).toContain('base_url_entry_mode, "guided_local_server"');
+    expect(helperSource).toContain('setup_guidance_code, "ollama_connection_target_required"');
+    expect(getProviderSetupCopy({ id: "ollama", label: "Ollama Local" }).body).toBe(OLLAMA_CONNECTION_MESSAGE);
+    expect(setupSource).toContain("Advanced: enter server address");
+    expect(setupSource).toContain("server address");
+    expect(settingsSource).toContain("Advanced: enter server address");
+    expect(settingsSource).toContain("server address");
+    expect(setupSource).not.toContain("API key (optional)");
+    expect(settingsSource).not.toContain("Base URL, optional unless provider requires it");
+  });
+
+  it("groups Ollama provider choices before routing Cloud or Local setup", () => {
+    const setupSource = fs.readFileSync(path.join(__dirname, "../../app/setup.tsx"), "utf8");
+    const settingsSource = fs.readFileSync(path.join(__dirname, "../../app/settings.tsx"), "utf8");
+    const helperSource = fs.readFileSync(path.join(__dirname, "./providerSetup.ts"), "utf8");
+    const rows = buildProviderDisplayRows([
+      { id: "openai", label: "OpenAI / GPT", default_model: "gpt-5.4", default_base_url: "https://api.openai.com/v1", key_required: true, custom_base_url_allowed: false, base_url_required: true, allowed_schemes: ["https"], connection_kind: "cloud_canonical", base_url_entry_mode: "hidden_canonical", advanced_manual_base_url_allowed: false, requires_connection_target: false, requires_reachability_probe: false },
+      { id: "ollama", label: "Ollama Local", default_model: "llama3.2", default_base_url: "", key_required: false, custom_base_url_allowed: true, base_url_required: true, allowed_schemes: ["http", "https"], connection_kind: "local_server", base_url_entry_mode: "guided_local_server", advanced_manual_base_url_allowed: true, requires_connection_target: true, requires_reachability_probe: false, setup_guidance_code: "ollama_connection_target_required" },
+      { id: "ollama_cloud", label: "Ollama Cloud", default_model: "gpt-oss:120b", default_base_url: "https://ollama.com", key_required: true, custom_base_url_allowed: false, base_url_required: true, allowed_schemes: ["https"], connection_kind: "cloud_canonical", base_url_entry_mode: "hidden_canonical", advanced_manual_base_url_allowed: false, requires_connection_target: false, requires_reachability_probe: false }
+    ]);
+    expect(rows.map((row) => row.label)).toEqual(["OpenAI / GPT", "Ollama"]);
+    expect(setupSource).toContain("function handleChooseProviderDisplayRow");
+    expect(setupSource).toContain("buildProviderDisplayRows(localProviderOptions).map");
+    expect(setupSource).toContain("OLLAMA_CHOICE_CLOUD");
+    expect(setupSource).toContain("onPress: () => enterByokProvider(cloud)");
+    expect(setupSource).toContain("onPress: () => handleChooseByokProvider(local)");
+    expect(settingsSource).toContain("function chooseProviderDisplayRow");
+    expect(settingsSource).toContain("buildProviderDisplayRows(providerOptions).map");
+    expect(settingsSource).toContain("OLLAMA_CHOICE_CLOUD");
+    expect(settingsSource).toContain("onPress: () => chooseProviderOption(cloud)");
+    expect(settingsSource).toContain("onPress: () => chooseProviderOption(local)");
+    expect(helperSource).toContain("OLLAMA_SETUP_UNAVAILABLE_TITLE");
+    expect(helperSource).toContain("xMilo could not load both Ollama setup options");
+  });
+
+  it("gates Ollama behind the advanced local model acceptance popup before guided setup", () => {
+    const setupSource = fs.readFileSync(path.join(__dirname, "../../app/setup.tsx"), "utf8");
+    const settingsSource = fs.readFileSync(path.join(__dirname, "../../app/settings.tsx"), "utf8");
+    const helperSource = fs.readFileSync(path.join(__dirname, "./providerSetup.ts"), "utf8");
+    expect(setupSource).toContain("function handleChooseByokProvider(option: LocalProviderOption)");
+    expect(setupSource).toContain("if (!isGuidedLocalServerProvider(option))");
+    expect(settingsSource).toContain("function chooseProviderOption(option: LocalProviderOption)");
+    expect(settingsSource).toContain("if (!isGuidedLocalServerProvider(option))");
+    expect(`${setupSource}\n${settingsSource}`).toContain("OLLAMA_ACCEPTANCE_TITLE");
+    expect(helperSource).toContain("Advanced local model setup");
+    expect(helperSource).toContain("Ollama Local uses a reachable Ollama server. It does not use Ollama Cloud or an ollama.com API key in this setup.");
+    expect(helperSource).toContain("Use Ollama Local");
+    expect(helperSource).toContain("Choose another provider");
+    expect(setupSource).toContain("setByokProvider(\"\")");
+    expect(setupSource).toContain('setStep("byok_choose_provider")');
+  });
+
+  it("removes the old generic base-url save failure from normal provider setup", () => {
+    const setupSource = fs.readFileSync(path.join(__dirname, "../../app/setup.tsx"), "utf8");
+    const settingsSource = fs.readFileSync(path.join(__dirname, "../../app/settings.tsx"), "utf8");
+    const bridgeSource = fs.readFileSync(path.join(__dirname, "./bridge.ts"), "utf8");
+    expect(setupSource).not.toContain("BYOK key not saved");
+    expect(`${setupSource}\n${settingsSource}\n${bridgeSource}`).not.toContain("Local provider base URL is required before saving.");
+    expect(bridgeSource).toContain("Ollama Local must be running on this phone or on a computer your phone can reach before xMilo can use it.");
+    expect(bridgeSource).toContain("Check the Ollama Local server address and try again.");
+  });
+
+  it("does not rely only on strings for stale Ollama compatibility", () => {
+    expect(getProviderSetupMode({ id: "ollama", label: "Ollama", key_required: false })).toBe("guided_local_server");
+    expect(isGuidedLocalServerProvider({ id: "ollama", label: "Ollama", key_required: false })).toBe(true);
+    expect(getProviderSetupCopy({ id: "ollama", label: "Ollama", key_required: false }).title).toBe("Connect to Ollama Local");
+    expect(getProviderSetupCopy({ id: "ollama_cloud", label: "Ollama Cloud", key_required: true }).title).toBe("Enter your API key");
+    expect(isGuidedLocalServerProvider({ id: "ollama_cloud", label: "Ollama Cloud", key_required: true })).toBe(false);
+    expect(getProviderSetupCopy({ id: "ollama", label: "Ollama", key_required: false }).body).not.toContain("Paste your API key");
+    expect(getProviderSetupCopy({ id: "ollama_cloud", label: "Ollama Cloud", key_required: true }).body).not.toContain("server address");
+  });
+
+  it("keeps app-store billing stack removed", () => {
+    const packageSource = fs.readFileSync(path.join(__dirname, "../../package.json"), "utf8");
+    const setupSource = fs.readFileSync(path.join(__dirname, "../../app/setup.tsx"), "utf8");
+    const settingsSource = fs.readFileSync(path.join(__dirname, "../../app/settings.tsx"), "utf8");
+    const combined = `${packageSource}\n${setupSource}\n${settingsSource}`;
+    expect(combined).not.toMatch(/RevenueCat|react-native-purchases|react-native-purchases-ui|com\.android\.vending\.BILLING|amazon-appstore|com\.amazon\.device|restorePurchases|Paywall/i);
   });
 });

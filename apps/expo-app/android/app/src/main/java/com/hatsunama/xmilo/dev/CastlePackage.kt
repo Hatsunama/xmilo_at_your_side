@@ -6,6 +6,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
 class CastlePackage : ReactPackage {
+  @Suppress("OVERRIDE_DEPRECATION")
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
     return emptyList()
   }

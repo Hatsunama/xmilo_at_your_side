@@ -112,7 +112,7 @@ func (a *App) Start(ctx context.Context) error {
 	mux.Handle("/auth/register", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthRegister)))
 	mux.Handle("/auth/invite", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthInvite)))
 	mux.Handle("/auth/check", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthCheck)))
-	// /auth/refresh receives a JWT pushed down from the app (e.g. after RevenueCat purchase).
+	// /auth/refresh receives an updated JWT pushed down from the app.
 	mux.Handle("/auth/refresh", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthRefresh)))
 	mux.Handle("/auth/logout", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthLogout)))
 	mux.Handle("/auth/account/delete", RequireBearer(a.cfg.BearerToken, http.HandlerFunc(a.handleAuthDeleteAccount)))

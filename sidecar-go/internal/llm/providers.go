@@ -135,7 +135,9 @@ func adapterFor(provider string) (ProviderAdapter, error) {
 	case providerpolicy.ProviderAnthropic:
 		return anthropicAdapter{}, nil
 	case providerpolicy.ProviderOllama:
-		return ollamaAdapter{}, nil
+		return ollamaAdapter{provider: providerpolicy.ProviderOllama}, nil
+	case providerpolicy.ProviderOllamaCloud:
+		return ollamaAdapter{provider: providerpolicy.ProviderOllamaCloud}, nil
 	default:
 		return nil, errors.New("local_provider_unavailable")
 	}
@@ -232,27 +234,29 @@ func (anthropicAdapter) Turn(ctx context.Context, httpClient *http.Client, cfg c
 	return out, nil
 }
 
-type ollamaAdapter struct{}
-
-func (ollamaAdapter) Provider() string { return providerpolicy.ProviderOllama }
-func (ollamaAdapter) KeyRequired() bool {
-	return providerpolicy.MustSpec(providerpolicy.ProviderOllama).KeyRequired
+type ollamaAdapter struct {
+	provider string
 }
-func (ollamaAdapter) Turn(ctx context.Context, httpClient *http.Client, cfg config.Config, apiKey string, req contracts.RelayTurnRequest) (contracts.RelayTurnResponse, error) {
+
+func (a ollamaAdapter) Provider() string { return a.provider }
+func (a ollamaAdapter) KeyRequired() bool {
+	return providerpolicy.MustSpec(a.provider).KeyRequired
+}
+func (a ollamaAdapter) Turn(ctx context.Context, httpClient *http.Client, cfg config.Config, apiKey string, req contracts.RelayTurnRequest) (contracts.RelayTurnResponse, error) {
 	var out contracts.RelayTurnResponse
 	if strings.TrimSpace(cfg.BYOKBaseURL) == "" {
 		return out, errors.New("local_provider_unavailable")
 	}
 	rawBody, err := json.Marshal(map[string]any{
 		"model":  cfg.BYOKModel,
-		"prompt": buildProviderPrompt(req, "ollama"),
+		"prompt": buildProviderPrompt(req, a.provider),
 		"stream": false,
 		"format": "json",
 	})
 	if err != nil {
 		return out, errors.New("local_provider_request_failed")
 	}
-	endpoint, diag, err := providerEndpoint(cfg.BYOKBaseURL, "/api/generate", providerpolicy.ProviderOllama)
+	endpoint, diag, err := providerEndpoint(cfg.BYOKBaseURL, "/api/generate", a.provider)
 	if err != nil {
 		return out, err
 	}
@@ -422,7 +426,7 @@ func providerEndpointErrorCode(err error) string {
 		return "local_provider_unavailable"
 	}
 	switch err.Error() {
-	case "local_provider_disallowed_url_scheme", "local_provider_custom_base_url_not_allowed":
+	case "local_provider_disallowed_url_scheme", "local_provider_custom_base_url_not_allowed", providerpolicy.ReasonManualURLInvalid:
 		return err.Error()
 	default:
 		return "local_provider_unavailable"

@@ -619,20 +619,123 @@ func TestHandleLocalProviderOptionsReturnsSidecarPolicy(t *testing.T) {
 	}
 	var out struct {
 		Providers []struct {
-			ID             string   `json:"id"`
-			AllowedSchemes []string `json:"allowed_schemes"`
+			ID                           string   `json:"id"`
+			AllowedSchemes               []string `json:"allowed_schemes"`
+			ConnectionKind               string   `json:"connection_kind"`
+			BaseURLEntryMode             string   `json:"base_url_entry_mode"`
+			AdvancedManualBaseURLAllowed bool     `json:"advanced_manual_base_url_allowed"`
+			RequiresConnectionTarget     bool     `json:"requires_connection_target"`
+			RequiresReachabilityProbe    bool     `json:"requires_reachability_probe"`
+			SetupGuidanceCode            string   `json:"setup_guidance_code"`
 		} `json:"providers"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(out.Providers) != 4 {
-		t.Fatalf("expected four providers, got %#v", out)
+	if len(out.Providers) != 5 {
+		t.Fatalf("expected five providers, got %#v", out)
 	}
+	seen := map[string]bool{}
 	for _, provider := range out.Providers {
+		seen[provider.ID] = true
 		if provider.ID == "openai" && (len(provider.AllowedSchemes) != 1 || provider.AllowedSchemes[0] != "https") {
 			t.Fatalf("openai must remain https-only by default: %#v", provider)
 		}
+		if provider.ID == "openai" && (provider.ConnectionKind != "cloud_canonical" || provider.BaseURLEntryMode != "hidden_canonical" || provider.AdvancedManualBaseURLAllowed || provider.RequiresConnectionTarget || provider.RequiresReachabilityProbe) {
+			t.Fatalf("openai must expose no-normal-manual-base-url contract: %#v", provider)
+		}
+		if provider.ID == "ollama" && (provider.ConnectionKind != "local_server" || provider.BaseURLEntryMode != "guided_local_server" || !provider.AdvancedManualBaseURLAllowed || !provider.RequiresConnectionTarget || provider.RequiresReachabilityProbe || provider.SetupGuidanceCode != "ollama_connection_target_required") {
+			t.Fatalf("ollama must expose guided local-server contract: %#v", provider)
+		}
+		if provider.ID == "ollama_cloud" && (provider.ConnectionKind != "cloud_canonical" || provider.BaseURLEntryMode != "hidden_canonical" || provider.AdvancedManualBaseURLAllowed || provider.RequiresConnectionTarget || provider.RequiresReachabilityProbe || provider.SetupGuidanceCode != "") {
+			t.Fatalf("ollama cloud must expose canonical cloud contract: %#v", provider)
+		}
+	}
+	if !seen["ollama"] {
+		t.Fatalf("provider options missing ollama local")
+	}
+	if !seen["ollama_cloud"] {
+		t.Fatalf("provider options missing ollama cloud")
+	}
+}
+
+func TestHandleLocalProviderResolveReturnsGuidedOllamaState(t *testing.T) {
+	app := &App{}
+	req := httptest.NewRequest(http.MethodPost, "/local-provider/resolve", strings.NewReader(`{"provider":"ollama"}`))
+	rec := httptest.NewRecorder()
+
+	app.handleLocalProviderResolve(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var out struct {
+		OK       bool `json:"ok"`
+		Resolved struct {
+			Provider                     string `json:"provider"`
+			LocalTurnAllowed             bool   `json:"local_turn_allowed"`
+			ReadinessReason              string `json:"readiness_reason"`
+			ConnectionKind               string `json:"connection_kind"`
+			BaseURLEntryMode             string `json:"base_url_entry_mode"`
+			AdvancedManualBaseURLAllowed bool   `json:"advanced_manual_base_url_allowed"`
+			RequiresConnectionTarget     bool   `json:"requires_connection_target"`
+			RequiresReachabilityProbe    bool   `json:"requires_reachability_probe"`
+			SetupGuidanceCode            string `json:"setup_guidance_code"`
+		} `json:"resolved"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !out.OK || out.Resolved.Provider != "ollama" || out.Resolved.LocalTurnAllowed {
+		t.Fatalf("blank ollama must return non-ready resolved state: %#v", out)
+	}
+	if out.Resolved.ReadinessReason != "local_provider_connection_target_required" ||
+		out.Resolved.ConnectionKind != "local_server" ||
+		out.Resolved.BaseURLEntryMode != "guided_local_server" ||
+		!out.Resolved.AdvancedManualBaseURLAllowed ||
+		!out.Resolved.RequiresConnectionTarget ||
+		out.Resolved.RequiresReachabilityProbe ||
+		out.Resolved.SetupGuidanceCode != "ollama_connection_target_required" {
+		t.Fatalf("blank ollama resolve missing guided setup contract: %#v", out.Resolved)
+	}
+}
+
+func TestHandleLocalProviderResolveHandlesOllamaCloud(t *testing.T) {
+	app := &App{}
+	req := httptest.NewRequest(http.MethodPost, "/local-provider/resolve", strings.NewReader(`{"provider":"ollama_cloud","has_api_key":true}`))
+	rec := httptest.NewRecorder()
+
+	app.handleLocalProviderResolve(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var out struct {
+		OK       bool `json:"ok"`
+		Resolved struct {
+			Provider                  string `json:"provider"`
+			BaseURL                   string `json:"base_url"`
+			Model                     string `json:"model"`
+			KeyRequired               bool   `json:"key_required"`
+			LocalTurnAllowed          bool   `json:"local_turn_allowed"`
+			ConnectionKind            string `json:"connection_kind"`
+			BaseURLEntryMode          string `json:"base_url_entry_mode"`
+			RequiresConnectionTarget  bool   `json:"requires_connection_target"`
+			RequiresReachabilityProbe bool   `json:"requires_reachability_probe"`
+		} `json:"resolved"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !out.OK || out.Resolved.Provider != "ollama_cloud" || !out.Resolved.LocalTurnAllowed || !out.Resolved.KeyRequired {
+		t.Fatalf("ollama cloud must resolve as key-required canonical provider: %#v", out)
+	}
+	if out.Resolved.BaseURL != "https://ollama.com" || out.Resolved.Model != "gpt-oss:120b" ||
+		out.Resolved.ConnectionKind != "cloud_canonical" ||
+		out.Resolved.BaseURLEntryMode != "hidden_canonical" ||
+		out.Resolved.RequiresConnectionTarget ||
+		out.Resolved.RequiresReachabilityProbe {
+		t.Fatalf("ollama cloud resolve missing canonical contract: %#v", out.Resolved)
 	}
 }
 
