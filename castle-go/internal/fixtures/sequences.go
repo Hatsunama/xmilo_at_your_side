@@ -29,6 +29,21 @@ func AcceptanceNames() []string {
 	}
 }
 
+func Phase20CurrentMapNames() []string {
+	return []string{
+		"arrival_main_hall",
+		"arrival_archive",
+		"arrival_trophy",
+		"arrival_study",
+		"arrival_workshop",
+		"arrival_observatory",
+		"arrival_potions",
+		"arrival_threshold",
+		"arrival_bedroom",
+		"route_trophy_threshold_proof",
+	}
+}
+
 func Named(name string) (Sequence, error) {
 	switch name {
 	case "main_hall_arrival":
@@ -47,6 +62,8 @@ func Named(name string) (Sequence, error) {
 		return arrivalMainHall(), nil
 	case "arrival_archive":
 		return arrivalArchive(), nil
+	case "arrival_trophy":
+		return arrivalTrophy(), nil
 	case "arrival_study":
 		return arrivalStudy(), nil
 	case "arrival_observatory":
@@ -59,6 +76,8 @@ func Named(name string) (Sequence, error) {
 		return arrivalThreshold(), nil
 	case "arrival_bedroom":
 		return arrivalBedroom(), nil
+	case "route_trophy_threshold_proof":
+		return routeTrophyThresholdProof(), nil
 	case "topology_segment_proof":
 		return topologySegmentProof(), nil
 	default:
@@ -67,7 +86,11 @@ func Named(name string) (Sequence, error) {
 }
 
 func Names() []string {
-	return append(append(append(AcceptanceNames(), "threshold_route_demo", "threshold_variant_demo", "home_idle_demo"), "arrival_main_hall", "arrival_archive", "arrival_study", "arrival_observatory"), "arrival_workshop", "arrival_potions", "arrival_threshold", "arrival_bedroom", "topology_segment_proof")
+	names := append([]string{}, AcceptanceNames()...)
+	names = append(names, "threshold_route_demo", "threshold_variant_demo", "home_idle_demo")
+	names = append(names, Phase20CurrentMapNames()...)
+	names = append(names, "topology_segment_proof")
+	return names
 }
 
 func mainHallArrival() Sequence {
@@ -393,6 +416,46 @@ func arrivalArchive() Sequence {
 	}
 }
 
+func arrivalTrophy() Sequence {
+	return Sequence{
+		Name:        "arrival_trophy",
+		Description: "Trophy Room arrival settle validation near display.",
+		Steps: []Step{
+			{
+				Label:   "01_trophy_move",
+				Ticks:   40,
+				Capture: true,
+				Event: rawEvent("milo.movement_started", game.MovementStarted{
+					FromRoom:    "main_hall",
+					FromAnchor:  "main_hall_center",
+					ToRoom:      "trophy_room",
+					ToAnchor:    "trophy_display",
+					Reason:      "arrival_fixture",
+					EstimatedMS: 900,
+				}),
+			},
+			{
+				Label:   "02_trophy_arrive",
+				Ticks:   64,
+				Capture: true,
+				Event: rawEvent("milo.room_changed", game.RoomChanged{
+					RoomID:   "trophy_room",
+					AnchorID: "trophy_display",
+				}),
+			},
+			{
+				Label:   "03_trophy_idle_proud",
+				Ticks:   48,
+				Capture: true,
+				Event: rawEvent("milo.state_changed", game.StateChanged{
+					FromState: "moving",
+					ToState:   "idle",
+				}),
+			},
+		},
+	}
+}
+
 func arrivalStudy() Sequence {
 	return Sequence{
 		Name:        "arrival_study",
@@ -620,6 +683,61 @@ func arrivalBedroom() Sequence {
 				Label:   "03_bedroom_idle_calm",
 				Ticks:   48,
 				Capture: true,
+			},
+		},
+	}
+}
+
+func routeTrophyThresholdProof() Sequence {
+	return Sequence{
+		Name:        "route_trophy_threshold_proof",
+		Description: "Proves trophy_room routes through bedroom before threshold without crossing non-walkable black space.",
+		Steps: []Step{
+			{
+				Label:   "01_start_trophy_room",
+				Ticks:   1,
+				Capture: true,
+				Event: rawEvent("milo.room_changed", game.RoomChanged{
+					RoomID:   "trophy_room",
+					AnchorID: "trophy_display",
+				}),
+			},
+			{
+				Label:   "02_depart_trophy_to_bedroom",
+				Ticks:   34,
+				Capture: true,
+				Event: rawEvent("milo.movement_started", game.MovementStarted{
+					FromRoom:    "trophy_room",
+					FromAnchor:  "trophy_display",
+					ToRoom:      "threshold",
+					ToAnchor:    "threshold_center",
+					Reason:      "phase20_route_proof",
+					EstimatedMS: 2400,
+				}),
+			},
+			{
+				Label:   "03_enter_bedroom_intermediate",
+				Ticks:   54,
+				Capture: true,
+			},
+			{
+				Label:   "04_cross_bedroom_to_threshold",
+				Ticks:   54,
+				Capture: true,
+			},
+			{
+				Label:   "05_enter_threshold",
+				Ticks:   54,
+				Capture: true,
+			},
+			{
+				Label:   "06_settle_threshold",
+				Ticks:   34,
+				Capture: true,
+				Event: rawEvent("milo.room_changed", game.RoomChanged{
+					RoomID:   "threshold",
+					AnchorID: "threshold_center",
+				}),
 			},
 		},
 	}

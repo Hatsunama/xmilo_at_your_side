@@ -121,6 +121,22 @@ func roomAnchorFraction(roomID RoomID, anchorID string) (float64, float64) {
 		if anchorID == "archive_lectern" {
 			return 0.50, 0.62
 		}
+		if anchorID == "archive_crystal" {
+			return 0.66, 0.54
+		}
+		if anchorID == "archive_shelf" {
+			return 0.34, 0.54
+		}
+	case RoomTrophy:
+		if anchorID == "trophy_display" {
+			return 0.50, 0.62
+		}
+		if anchorID == "trophy_pedestal" {
+			return 0.62, 0.52
+		}
+		if anchorID == "trophy_wall" {
+			return 0.38, 0.50
+		}
 	case RoomStudy:
 		if anchorID == "library_desk" {
 			return 0.45, 0.62

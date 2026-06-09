@@ -28,13 +28,17 @@ type Game struct {
 	eventCh chan client.RawEvent
 
 	// current known room and anchor from the sidecar
-	currentRoomID string
-	currentAnchor string
-	currentState  string
-	currentRoute  []RouteStep
-	routeLast     map[string]int
-	moveSegments  []movementSegment
-	activeSegment *movementSegment
+	currentRoomID  string
+	currentAnchor  string
+	currentState   string
+	currentRoute   []RouteStep
+	routeLast      map[string]int
+	moveSegments   []movementSegment
+	activeSegment  *movementSegment
+	proofOverlay   bool
+	proofFixture   string
+	proofFrame     string
+	proofWaypoints []ProofWaypoint
 
 	// screen dimensions — updated in Layout()
 	screenW int
@@ -61,11 +65,16 @@ type Game struct {
 }
 
 type movementSegment struct {
-	fromRoom string
-	toRoom   string
-	toAnchor string
-	reason   string
-	duration int
+	fromRoom     string
+	toRoom       string
+	toAnchor     string
+	reason       string
+	duration     int
+	targetX      float64
+	targetY      float64
+	label        string
+	arriveRoom   string
+	arriveAnchor string
 }
 
 func newGameWithChannel(ch chan client.RawEvent) *Game {
@@ -272,6 +281,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		return
 	}
 	g.maybeApplyMainHallProceduralFallback()
+	g.syncProofOverlay()
 
 	// RoomScene.Draw takes a z-order value for Milo and a closure that draws him.
 	// This lets the scene interleave Milo correctly between props (painter's algorithm).
@@ -279,6 +289,41 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		g.milo.Draw(screen)
 	})
 	g.logFirstFrameContentProbe(screen)
+}
+
+func (g *Game) SetProofOverlay(enabled bool, fixtureName, frameLabel string) {
+	g.proofOverlay = enabled
+	g.proofFixture = fixtureName
+	g.proofFrame = frameLabel
+	if g.scene != nil && !enabled {
+		g.scene.SetProofOverlay(ProofOverlayState{})
+	}
+}
+
+func (g *Game) syncProofOverlay() {
+	if g.scene == nil {
+		return
+	}
+	if !g.proofOverlay {
+		g.scene.SetProofOverlay(ProofOverlayState{})
+		return
+	}
+	if g.cam != nil {
+		g.cam.FitToBounds(g.cameraWorldBounds(), 72, 128)
+	}
+	state := ProofOverlayState{
+		Enabled:       true,
+		Fixture:       g.proofFixture,
+		FrameLabel:    g.proofFrame,
+		CurrentRoom:   g.currentRoomID,
+		Waypoints:     append([]ProofWaypoint(nil), g.proofWaypoints...),
+		ExpectedRoute: append([]RouteStep(nil), g.currentRoute...),
+	}
+	if g.activeSegment != nil {
+		state.ActiveSegment = g.activeSegment.label
+		state.TargetRoom = g.activeSegment.toRoom
+	}
+	g.scene.SetProofOverlay(state)
 }
 
 func (g *Game) maybeApplyMainHallProceduralFallback() {
@@ -389,10 +434,7 @@ func (g *Game) handleEvent(ev client.RawEvent) {
 			return
 		}
 		g.startTopologyMovement(p)
-		g.currentAnchor = p.ToAnchor
 		g.scene.SetMovementIntent(p.ToRoom, p.ToAnchor, p.Reason)
-		variant := g.nextRouteVariant(g.currentRoomID, p.ToRoom)
-		g.currentRoute = RouteBetweenVariant(g.currentRoomID, p.ToRoom, variant)
 		g.scene.SetRoute(g.currentRoute)
 
 	// "milo.room_changed" — Milo has arrived. Place him at the room-aware anchor,
@@ -496,7 +538,10 @@ func (g *Game) placeMiloAtRoomAnchor(roomID, anchorID string) {
 }
 
 func (g *Game) startTopologyMovement(p MovementStarted) {
+	variant := g.nextRouteVariant(g.currentRoomID, p.ToRoom)
+	g.currentRoute = RouteBetweenVariant(g.currentRoomID, p.ToRoom, variant)
 	g.moveSegments = g.buildMovementSegments(p)
+	g.proofWaypoints = g.movementProofWaypoints()
 	g.startNextMovementSegment()
 }
 
@@ -510,28 +555,32 @@ func (g *Game) buildMovementSegments(p MovementStarted) []movementSegment {
 	if duration <= 0 {
 		duration = 1
 	}
-
-	if from == to || SharesWall(from, to) {
+	if from == to {
+		targetX, targetY := g.cam.AnchorToRoomScreen(to, p.ToAnchor)
 		return []movementSegment{{
-			fromRoom: from,
-			toRoom:   to,
-			toAnchor: p.ToAnchor,
-			reason:   p.Reason,
-			duration: duration,
+			fromRoom:     from,
+			toRoom:       to,
+			toAnchor:     p.ToAnchor,
+			reason:       p.Reason,
+			duration:     duration,
+			targetX:      targetX,
+			targetY:      targetY,
+			label:        "same room " + to,
+			arriveRoom:   to,
+			arriveAnchor: p.ToAnchor,
 		}}
 	}
 
-	variant := g.nextRouteVariant(from, to)
-	route := RouteBetweenVariant(from, to, variant)
+	route := g.currentRoute
+	if len(route) == 0 {
+		route = RouteBetween(from, to)
+	}
 	if len(route) < 2 {
 		return nil
 	}
 
-	segmentDuration := duration / (len(route) - 1)
-	if segmentDuration < 1 {
-		segmentDuration = 1
-	}
-	segments := make([]movementSegment, 0, len(route)-1)
+	edgeCount := len(route) - 1
+	segments := make([]movementSegment, 0, edgeCount*4)
 	for index := 1; index < len(route); index++ {
 		fromRoom := string(route[index-1].Room)
 		toRoom := string(route[index].Room)
@@ -542,13 +591,15 @@ func (g *Game) buildMovementSegments(p MovementStarted) []movementSegment {
 		if index == len(route)-1 {
 			toAnchor = p.ToAnchor
 		}
-		segments = append(segments, movementSegment{
-			fromRoom: fromRoom,
-			toRoom:   toRoom,
-			toAnchor: toAnchor,
-			reason:   p.Reason,
-			duration: segmentDuration,
-		})
+		edgeSegments := g.buildEdgeWaypointSegments(fromRoom, toRoom, toAnchor, p.Reason)
+		segments = append(segments, edgeSegments...)
+	}
+	segmentDuration := duration / len(segments)
+	if segmentDuration < 1 {
+		segmentDuration = 1
+	}
+	for index := range segments {
+		segments[index].duration = segmentDuration
 	}
 	return segments
 }
@@ -558,8 +609,15 @@ func (g *Game) advanceMovementSegments() {
 		return
 	}
 	if g.activeSegment != nil {
-		g.currentRoomID = g.activeSegment.toRoom
-		g.currentAnchor = g.activeSegment.toAnchor
+		if g.activeSegment.arriveRoom != "" {
+			g.currentRoomID = g.activeSegment.arriveRoom
+			if g.scene != nil {
+				g.scene.SetActiveRoom(g.activeSegment.arriveRoom)
+			}
+		}
+		if g.activeSegment.arriveAnchor != "" {
+			g.currentAnchor = g.activeSegment.arriveAnchor
+		}
 		g.activeSegment = nil
 	}
 	g.startNextMovementSegment()
@@ -572,10 +630,129 @@ func (g *Game) startNextMovementSegment() {
 	segment := g.moveSegments[0]
 	g.moveSegments = g.moveSegments[1:]
 	g.activeSegment = &segment
-	toX, toY := g.cam.AnchorToRoomScreen(segment.toRoom, segment.toAnchor)
-	facing := WalkFacing(g.currentAnchor, segment.toAnchor)
+	toX, toY := segment.targetX, segment.targetY
+	facing := facingForDelta(toX-g.milo.screenX, toY-g.milo.screenY)
 	g.milo.StartWalk(toX, toY, facing, segment.duration)
-	g.scene.SetMovementIntent(segment.toRoom, segment.toAnchor, segment.reason)
+	if segment.toAnchor != "" {
+		g.scene.SetMovementIntent(segment.toRoom, segment.toAnchor, segment.reason)
+	}
+}
+
+func (g *Game) buildEdgeWaypointSegments(fromRoom, toRoom, finalAnchor, reason string) []movementSegment {
+	if g.cam == nil {
+		return nil
+	}
+	fromDoor := roomDoorWaypoint(fromRoom, toRoom)
+	toDoor := roomDoorWaypoint(toRoom, fromRoom)
+	targetX, targetY := g.cam.AnchorToRoomScreen(toRoom, finalAnchor)
+	corridor := ProofWaypoint{
+		X:     (fromDoor.X + toDoor.X) / 2,
+		Y:     (fromDoor.Y + toDoor.Y) / 2,
+		Label: fromRoom + "_to_" + toRoom + "_corridor",
+	}
+	return []movementSegment{
+		{
+			fromRoom: fromRoom,
+			toRoom:   fromRoom,
+			reason:   reason,
+			targetX:  fromDoor.X,
+			targetY:  fromDoor.Y,
+			label:    fromRoom + " door to " + toRoom,
+		},
+		{
+			fromRoom: fromRoom,
+			toRoom:   toRoom,
+			reason:   reason,
+			targetX:  corridor.X,
+			targetY:  corridor.Y,
+			label:    fromRoom + " -> " + toRoom + " corridor",
+		},
+		{
+			fromRoom: fromRoom,
+			toRoom:   toRoom,
+			reason:   reason,
+			targetX:  toDoor.X,
+			targetY:  toDoor.Y,
+			label:    toRoom + " door from " + fromRoom,
+		},
+		{
+			fromRoom:     fromRoom,
+			toRoom:       toRoom,
+			toAnchor:     finalAnchor,
+			reason:       reason,
+			targetX:      targetX,
+			targetY:      targetY,
+			label:        "enter " + toRoom,
+			arriveRoom:   toRoom,
+			arriveAnchor: finalAnchor,
+		},
+	}
+}
+
+func (g *Game) movementProofWaypoints() []ProofWaypoint {
+	points := make([]ProofWaypoint, 0, len(g.moveSegments)+1)
+	if g.milo != nil {
+		points = append(points, ProofWaypoint{X: g.milo.screenX, Y: g.milo.screenY, Label: "start"})
+	}
+	for _, segment := range g.moveSegments {
+		label := segment.label
+		if label == "" {
+			label = segment.toRoom
+		}
+		points = append(points, ProofWaypoint{X: segment.targetX, Y: segment.targetY, Label: label})
+	}
+	return points
+}
+
+func roomDoorWaypoint(fromRoom, toRoom string) ProofWaypoint {
+	fromLayout, ok := RoomWorldLayoutFor(fromRoom)
+	if !ok {
+		return ProofWaypoint{Label: fromRoom + "_door"}
+	}
+	toLayout, ok := RoomWorldLayoutFor(toRoom)
+	if !ok {
+		return ProofWaypoint{X: fromLayout.CenterX, Y: fromLayout.CenterY, Label: fromRoom + "_door"}
+	}
+	plate := fromLayout.OverviewPlateBounds()
+	dx := toLayout.CenterX - fromLayout.CenterX
+	dy := toLayout.CenterY - fromLayout.CenterY
+	x := fromLayout.CenterX
+	y := fromLayout.CenterY
+	if absFloat(dx) >= absFloat(dy) {
+		if dx >= 0 {
+			x = plate.MaxX
+		} else {
+			x = plate.MinX
+		}
+		if absFloat(dx) > 0 {
+			y = fromLayout.CenterY + dy/absFloat(dx)*(plate.Width()/2)
+		}
+		y = clamp(y, plate.MinY+48, plate.MaxY-48)
+	} else {
+		if dy >= 0 {
+			y = plate.MaxY
+		} else {
+			y = plate.MinY
+		}
+		if absFloat(dy) > 0 {
+			x = fromLayout.CenterX + dx/absFloat(dy)*(plate.Height()/2)
+		}
+		x = clamp(x, plate.MinX+48, plate.MaxX-48)
+	}
+	return ProofWaypoint{X: x, Y: y, Label: fromRoom + "_door_to_" + toRoom}
+}
+
+func facingForDelta(dx, dy float64) string {
+	if absFloat(dx) >= absFloat(dy) {
+		if dx >= 0 {
+			return "e"
+		}
+		return "w"
+	}
+	if dy >= 0 {
+		return "s"
+	}
+	return "n"
 }
 
 func roomCenterAnchor(roomID string) string {

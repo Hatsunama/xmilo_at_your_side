@@ -58,7 +58,7 @@ func (d *IdleDirector) Tick(g *Game) {
 	if d.remainingTicks <= 0 {
 		beat := d.currentLoop.Beats[d.currentBeat]
 		if g.currentAnchor != beat.AnchorID {
-			toX, toY := g.cam.AnchorToScreen(beat.AnchorID)
+			toX, toY := g.cam.AnchorToRoomScreen(g.currentRoomID, beat.AnchorID)
 			duration := WalkDurationMS(g.currentAnchor, beat.AnchorID)
 			if duration == 0 {
 				duration = 450

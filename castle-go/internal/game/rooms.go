@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"xmilo/castle-go/internal/assets"
@@ -60,6 +61,23 @@ type RoomWorldLayout struct {
 	BackgroundH float64
 }
 
+type ProofWaypoint struct {
+	X     float64
+	Y     float64
+	Label string
+}
+
+type ProofOverlayState struct {
+	Enabled       bool
+	Fixture       string
+	FrameLabel    string
+	CurrentRoom   string
+	TargetRoom    string
+	ActiveSegment string
+	ExpectedRoute []RouteStep
+	Waypoints     []ProofWaypoint
+}
+
 func (l RoomWorldLayout) Bounds() WorldBounds {
 	return WorldBounds{
 		MinX: l.MinX,
@@ -99,6 +117,7 @@ type RoomScene struct {
 	miloState    string
 	moveIntent   *movementIntent
 	route        []RouteStep
+	proof        ProofOverlayState
 }
 
 const (
@@ -166,6 +185,12 @@ func (rs *RoomScene) ClearMovementIntent() {
 
 func (rs *RoomScene) SetRoute(route []RouteStep) {
 	rs.route = append([]RouteStep(nil), route...)
+}
+
+func (rs *RoomScene) SetProofOverlay(proof ProofOverlayState) {
+	rs.proof = proof
+	rs.proof.ExpectedRoute = append([]RouteStep(nil), proof.ExpectedRoute...)
+	rs.proof.Waypoints = append([]ProofWaypoint(nil), proof.Waypoints...)
 }
 
 // TriggerAmbient activates an ambient prop effect by effect ID.
@@ -258,6 +283,7 @@ func (rs *RoomScene) Draw(screen *ebiten.Image, miloZ int, drawMilo func()) {
 	for _, d := range drawables {
 		d.draw()
 	}
+	rs.drawProofOverlay(screen)
 }
 
 func (rs *RoomScene) shouldDrawRoomDetail() bool {
@@ -358,6 +384,54 @@ func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, 
 	rs.drawWorldRect(screen, plateX+36, plateY+36, plateW-72, plateH-72, inner)
 	rs.drawWorldRect(screen, plateX+56, plateY+56, plateW-112, 32, accent)
 	rs.drawWorldRect(screen, plateX+56, plateY+plateH-88, plateW-112, 28, color.RGBA{R: accent.R, G: accent.G, B: accent.B, A: accent.A / 2})
+}
+
+func (rs *RoomScene) drawProofOverlay(screen *ebiten.Image) {
+	if !rs.proof.Enabled || rs.cam == nil {
+		return
+	}
+	for roomID, layout := range RoomWorldLayouts() {
+		x, y := rs.cam.ApplyToScreen(layout.CenterX, layout.CenterY)
+		drawDebugText(screen, int(x)-36, int(y)-4, string(roomID), 2, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+	}
+	for index := 1; index < len(rs.proof.Waypoints); index++ {
+		from := rs.proof.Waypoints[index-1]
+		to := rs.proof.Waypoints[index]
+		rs.drawWorldLine(screen, from.X, from.Y, to.X, to.Y, 42, color.RGBA{R: 255, G: 238, B: 80, A: 190})
+		rs.drawWorldLine(screen, from.X, from.Y, to.X, to.Y, 12, color.RGBA{R: 40, G: 20, B: 10, A: 220})
+	}
+	for index, point := range rs.proof.Waypoints {
+		x, y := rs.cam.ApplyToScreen(point.X, point.Y)
+		marker := color.RGBA{R: 255, G: 238, B: 80, A: 255}
+		if index == 0 {
+			marker = color.RGBA{R: 80, G: 255, B: 150, A: 255}
+		} else if index == len(rs.proof.Waypoints)-1 {
+			marker = color.RGBA{R: 255, G: 90, B: 90, A: 255}
+		}
+		drawTintRect(screen, int(x)-5, int(y)-5, 10, 10, color.RGBA{R: 0, G: 0, B: 0, A: 220})
+		drawTintRect(screen, int(x)-3, int(y)-3, 6, 6, marker)
+		if point.Label != "" && (index == 0 || index == len(rs.proof.Waypoints)-1) {
+			drawDebugText(screen, int(x)+8, int(y)-8, point.Label, 1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		}
+	}
+	panelH := 76
+	drawTintRect(screen, 4, 4, screen.Bounds().Dx()-8, panelH, color.RGBA{R: 0, G: 0, B: 0, A: 190})
+	drawDebugText(screen, 10, 10, "FIXTURE "+rs.proof.Fixture, 1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+	drawDebugText(screen, 10, 24, "FRAME "+rs.proof.FrameLabel, 1, color.RGBA{R: 255, G: 235, B: 110, A: 255})
+	drawDebugText(screen, 10, 38, "ROUTE "+routeLabel(rs.proof.ExpectedRoute), 1, color.RGBA{R: 120, G: 220, B: 255, A: 255})
+	drawDebugText(screen, 10, 52, "SEG "+rs.proof.ActiveSegment, 1, color.RGBA{R: 170, G: 255, B: 170, A: 255})
+	drawDebugText(screen, 10, 66, "CUR "+rs.proof.CurrentRoom+" TARGET "+rs.proof.TargetRoom, 1, color.RGBA{R: 255, G: 190, B: 190, A: 255})
+}
+
+func routeLabel(route []RouteStep) string {
+	if len(route) == 0 {
+		return "NONE"
+	}
+	parts := make([]string, 0, len(route))
+	for _, step := range route {
+		parts = append(parts, string(step.Room))
+	}
+	return strings.Join(parts, ">")
 }
 
 func (rs *RoomScene) drawWorldRect(screen *ebiten.Image, x, y, w, h float64, c color.RGBA) {
@@ -846,4 +920,77 @@ func drawTintRect(screen *ebiten.Image, x, y, w, h int, c color.RGBA) {
 	op.GeoM.Translate(float64(x), float64(y))
 	op.ColorScale.Scale(float32(c.R)/255, float32(c.G)/255, float32(c.B)/255, float32(c.A)/255)
 	screen.DrawImage(colorWhite, op)
+}
+
+func drawDebugText(screen *ebiten.Image, x, y int, text string, scale int, c color.RGBA) {
+	if scale < 1 {
+		scale = 1
+	}
+	cursorX := x
+	for _, ch := range strings.ToUpper(text) {
+		if ch == '\n' {
+			cursorX = x
+			y += 9 * scale
+			continue
+		}
+		glyph, ok := debugFont5x7[ch]
+		if !ok {
+			glyph = debugFont5x7['?']
+		}
+		for row, bits := range glyph {
+			for col, bit := range bits {
+				if bit == '1' {
+					drawTintRect(screen, cursorX+col*scale, y+row*scale, scale, scale, c)
+				}
+			}
+		}
+		cursorX += 6 * scale
+	}
+}
+
+var debugFont5x7 = map[rune][7]string{
+	' ': {"00000", "00000", "00000", "00000", "00000", "00000", "00000"},
+	'?': {"11110", "00001", "00001", "00110", "00100", "00000", "00100"},
+	'_': {"00000", "00000", "00000", "00000", "00000", "00000", "11111"},
+	'-': {"00000", "00000", "00000", "11111", "00000", "00000", "00000"},
+	'>': {"10000", "01000", "00100", "00010", "00100", "01000", "10000"},
+	':': {"00000", "00100", "00100", "00000", "00100", "00100", "00000"},
+	'.': {"00000", "00000", "00000", "00000", "00000", "01100", "01100"},
+	'/': {"00001", "00010", "00100", "01000", "10000", "00000", "00000"},
+	'0': {"01110", "10001", "10011", "10101", "11001", "10001", "01110"},
+	'1': {"00100", "01100", "00100", "00100", "00100", "00100", "01110"},
+	'2': {"01110", "10001", "00001", "00010", "00100", "01000", "11111"},
+	'3': {"11110", "00001", "00001", "01110", "00001", "00001", "11110"},
+	'4': {"00010", "00110", "01010", "10010", "11111", "00010", "00010"},
+	'5': {"11111", "10000", "10000", "11110", "00001", "00001", "11110"},
+	'6': {"01110", "10000", "10000", "11110", "10001", "10001", "01110"},
+	'7': {"11111", "00001", "00010", "00100", "01000", "01000", "01000"},
+	'8': {"01110", "10001", "10001", "01110", "10001", "10001", "01110"},
+	'9': {"01110", "10001", "10001", "01111", "00001", "00001", "01110"},
+	'A': {"01110", "10001", "10001", "11111", "10001", "10001", "10001"},
+	'B': {"11110", "10001", "10001", "11110", "10001", "10001", "11110"},
+	'C': {"01111", "10000", "10000", "10000", "10000", "10000", "01111"},
+	'D': {"11110", "10001", "10001", "10001", "10001", "10001", "11110"},
+	'E': {"11111", "10000", "10000", "11110", "10000", "10000", "11111"},
+	'F': {"11111", "10000", "10000", "11110", "10000", "10000", "10000"},
+	'G': {"01111", "10000", "10000", "10011", "10001", "10001", "01111"},
+	'H': {"10001", "10001", "10001", "11111", "10001", "10001", "10001"},
+	'I': {"01110", "00100", "00100", "00100", "00100", "00100", "01110"},
+	'J': {"00001", "00001", "00001", "00001", "10001", "10001", "01110"},
+	'K': {"10001", "10010", "10100", "11000", "10100", "10010", "10001"},
+	'L': {"10000", "10000", "10000", "10000", "10000", "10000", "11111"},
+	'M': {"10001", "11011", "10101", "10101", "10001", "10001", "10001"},
+	'N': {"10001", "11001", "10101", "10011", "10001", "10001", "10001"},
+	'O': {"01110", "10001", "10001", "10001", "10001", "10001", "01110"},
+	'P': {"11110", "10001", "10001", "11110", "10000", "10000", "10000"},
+	'Q': {"01110", "10001", "10001", "10001", "10101", "10010", "01101"},
+	'R': {"11110", "10001", "10001", "11110", "10100", "10010", "10001"},
+	'S': {"01111", "10000", "10000", "01110", "00001", "00001", "11110"},
+	'T': {"11111", "00100", "00100", "00100", "00100", "00100", "00100"},
+	'U': {"10001", "10001", "10001", "10001", "10001", "10001", "01110"},
+	'V': {"10001", "10001", "10001", "10001", "10001", "01010", "00100"},
+	'W': {"10001", "10001", "10001", "10101", "10101", "10101", "01010"},
+	'X': {"10001", "10001", "01010", "00100", "01010", "10001", "10001"},
+	'Y': {"10001", "10001", "01010", "00100", "00100", "00100", "00100"},
+	'Z': {"11111", "00001", "00010", "00100", "01000", "10000", "11111"},
 }
