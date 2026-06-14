@@ -1,18 +1,3 @@
-/**
- * lair.tsx — Milo's Wizard Lair screen
- *
- * This screen is the primary visual experience of xMilo.
- * It renders the castle scene (Ebiten via CastleView) and overlays
- * the chat input bar at the bottom so the user can give Milo tasks
- * without leaving the castle view.
- *
- * The castle renderer connects directly to the xMilo Sidecar via WebSocket.
- * Room routing, Milo movement, and all spatial decisions happen
- * inside the sidecar runtime — this screen just shows the result.
- *
- * Navigation: accessible from the main index screen via "Enter the Lair".
- */
-
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -30,7 +15,7 @@ import {
   View,
 } from "react-native";
 
-import { usePersistentCastleSurface } from "../src/components/PersistentCastleSurface";
+import { CastleMap3DView, CastleMapLegendPanel } from "../src/castleMap3d/CastleMap3DView";
 import { StagedContentChip } from "../src/components/StagedContentChip";
 import { useApp } from "../src/state/AppContext";
 import { getAppSetting, initArchiveDb, setAppSetting } from "../src/lib/archiveDb";
@@ -69,17 +54,16 @@ export default function WizardLairScreen() {
   const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [pastedContext, setPastedContext] = useState<{ preview: string; charCount: number } | null>(null);
   const [firstRunOverlayVisible, setFirstRunOverlayVisible] = useState(false);
+  const [firstRunOverlayReady, setFirstRunOverlayReady] = useState(false);
   const promptLenRef = useRef(0);
   const inputRef = useRef<TextInput>(null);
   const chatScrollRef = useRef<ScrollView>(null);
-  const castleSurface = usePersistentCastleSurface();
   const expandedChatMaxHeight = Math.round(windowHeight * 0.75);
   const dailyConversation = useDailyConversation(events, currentSubmitTaskId || state.active_task?.task_id);
   const chatMessages = dailyConversation.messages;
   const loadDailyConversation = dailyConversation.loadDailyConversation;
   const forceNextChatScrollRef = dailyConversation.forceNextChatScrollRef;
 
-  // Chars added in a single onChangeText that signals a paste rather than typing.
   const PASTE_THRESHOLD = 800;
 
   const chatPanResponder = useMemo(
@@ -113,7 +97,6 @@ export default function WizardLairScreen() {
       await initArchiveDb();
       await setAppSetting(LAIR_FIRST_RUN_OVERLAY_KEY, "true");
     } catch {
-      // Non-blocking: the overlay can reappear if local persistence is unavailable.
     }
   }
 
@@ -130,11 +113,17 @@ export default function WizardLairScreen() {
     initArchiveDb()
       .then(() => getAppSetting(LAIR_FIRST_RUN_OVERLAY_KEY))
       .then((value) => {
-        if (!disposed && value !== "true") {
-          setFirstRunOverlayVisible(true);
+        if (!disposed) {
+          setFirstRunOverlayVisible(value !== "true");
+          setFirstRunOverlayReady(true);
         }
       })
-      .catch(() => null);
+      .catch(() => {
+        if (!disposed) {
+          setFirstRunOverlayVisible(true);
+          setFirstRunOverlayReady(true);
+        }
+      });
     return () => {
       disposed = true;
     };
@@ -255,7 +244,6 @@ export default function WizardLairScreen() {
       setInputVisible(false);
       setSendStatus(submitResponseMessage(response));
       await refreshRuntimeState();
-      // Context persists in sidecar until user explicitly dismisses the chip
     } catch (error: any) {
       const message = firstTaskErrorMessage(error?.message ?? "Failed to send prompt");
       setInputVisible(true);
@@ -333,26 +321,10 @@ export default function WizardLairScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={styles.screen}
     >
-      {!castleSurface.ready ? (
-        <View style={[StyleSheet.absoluteFill, styles.wsPrep]}>
-          <Text style={styles.wsPrepTitle}>Preparing castle link…</Text>
-          <Text style={styles.wsPrepBody}>
-            {castleSurface.prepError ? `Localhost bearer token not ready: ${castleSurface.prepError}` : "Loading localhost bearer token."}
-          </Text>
-        </View>
-      ) : null}
+      <View style={styles.mapSurface}>
+        <CastleMap3DView variant="lair" />
+      </View>
 
-      <View
-        style={styles.gestureSurface}
-        onStartShouldSetResponder={() => true}
-        onMoveShouldSetResponder={() => true}
-        onTouchStart={({ nativeEvent }) => castleSurface.emitGesturePacket("start", nativeEvent)}
-        onTouchMove={({ nativeEvent }) => castleSurface.emitGesturePacket("move", nativeEvent)}
-        onTouchEnd={({ nativeEvent }) => castleSurface.emitGesturePacket("end", nativeEvent)}
-        onTouchCancel={({ nativeEvent }) => castleSurface.emitGesturePacket("cancel", nativeEvent)}
-      />
-
-      {/* Top HUD — room + state indicators */}
       <View style={styles.topHud} pointerEvents="none">
         <View style={styles.hudPill}>
           <Text style={styles.hudPillText}>
@@ -396,6 +368,7 @@ export default function WizardLairScreen() {
           Platform.OS === "android" ? { bottom: keyboardOffset } : null,
         ]}
       >
+        <CastleMapLegendPanel suppressLegendOverlay={!firstRunOverlayReady || firstRunOverlayVisible} />
         <View
           style={[
             styles.chatPanel,
@@ -548,8 +521,6 @@ export default function WizardLairScreen() {
   );
 }
 
-// ── Room metadata ─────────────────────────────────────────────────────────────
-
 const ROOM_LABELS: Record<string, string> = {
   main_hall: "Main Hall",
   trophy_room: "Trophy Room",
@@ -630,31 +601,14 @@ function formatEvent(event: EventEnvelope): string {
   }
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "transparent",
+    backgroundColor: "#07101D",
   },
-  wsPrep: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 22,
-    gap: 10,
-    backgroundColor: "#0D0A1A",
-  },
-  wsPrepTitle: {
-    color: "#EAF4FF",
-    fontSize: 18,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  wsPrepBody: {
-    color: "#9BB7D8",
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 18,
+  mapSurface: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
   },
   topHud: {
     position: "absolute",
@@ -785,6 +739,7 @@ const styles = StyleSheet.create({
     right: 0,
     padding: 16,
     paddingBottom: 28,
+    gap: 12,
     backgroundColor: "transparent",
     borderTopWidth: 0,
     zIndex: 20,
@@ -914,15 +869,6 @@ const styles = StyleSheet.create({
     color: "#F4EEFF",
     fontSize: 14,
     lineHeight: 20,
-  },
-  gestureSurface: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 140,
-    backgroundColor: "transparent",
-    zIndex: 5,
   },
   controlRow: {
     flexDirection: "row",

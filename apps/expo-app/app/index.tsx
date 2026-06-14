@@ -423,7 +423,7 @@ export default function MainHallScreen() {
           <Text style={styles.kicker}>Main Hall</Text>
           <Text style={styles.title}>xMilo Main Hall</Text>
           <Text style={styles.subtitle}>
-            App-owned sidecar runtime, local BYOK access, and global task events are active for Phase 9 proof.
+            App-owned sidecar runtime, local BYOK access, and global task events are active.
           </Text>
           <View style={styles.statsRow}>
             <InfoPill label="Bridge" value={health} />

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Stack, useRouter } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Modal, Pressable, StatusBar, StyleSheet, Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as Clipboard from "expo-clipboard";
 import * as Notifications from "expo-notifications";
 import { AppProvider } from "../src/state/AppContext";
@@ -10,7 +11,6 @@ import { useSettingsReportQueueDrain } from "../src/hooks/useSettingsReportQueue
 import type { SettingsReportProof } from "../src/lib/bridge";
 import { useWakeWord } from "../src/hooks/useWakeWord";
 import { useNightlyRitualCues } from "../src/hooks/useNightlyRitualCues";
-import { PersistentCastleSurfaceProvider } from "../src/components/PersistentCastleSurface";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -133,9 +133,9 @@ function AngryShakeReportController() {
 
 export default function RootLayout() {
   return (
-    <SafeAreaProvider>
-      <AppProvider>
-        <PersistentCastleSurfaceProvider>
+    <GestureHandlerRootView style={styles.gestureRoot}>
+      <SafeAreaProvider>
+        <AppProvider>
           <WakeWordController />
           <NightlyRitualCueController />
           <SettingsReportQueueDrainController />
@@ -164,13 +164,14 @@ export default function RootLayout() {
               }}
             />
           </Stack>
-        </PersistentCastleSurfaceProvider>
-      </AppProvider>
-    </SafeAreaProvider>
+        </AppProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  gestureRoot: { flex: 1 },
   modalScrim: {
     flex: 1,
     backgroundColor: "rgba(11,16,32,0.82)",
