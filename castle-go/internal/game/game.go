@@ -318,6 +318,7 @@ func (g *Game) syncProofOverlay() {
 		CurrentRoom:   g.currentRoomID,
 		Waypoints:     append([]ProofWaypoint(nil), g.proofWaypoints...),
 		ExpectedRoute: append([]RouteStep(nil), g.currentRoute...),
+		ShowWalkable:  g.proofFixture == "route_trophy_threshold_walkable_proof",
 	}
 	if g.activeSegment != nil {
 		state.ActiveSegment = g.activeSegment.label
@@ -645,6 +646,9 @@ func (g *Game) buildEdgeWaypointSegments(fromRoom, toRoom, finalAnchor, reason s
 	fromDoor := roomDoorWaypoint(fromRoom, toRoom)
 	toDoor := roomDoorWaypoint(toRoom, fromRoom)
 	targetX, targetY := g.cam.AnchorToRoomScreen(toRoom, finalAnchor)
+	if point, ok := AuthoredInteriorWaypoint(toRoom, finalAnchor); ok {
+		targetX, targetY = point.X, point.Y
+	}
 	corridor := ProofWaypoint{
 		X:     (fromDoor.X + toDoor.X) / 2,
 		Y:     (fromDoor.Y + toDoor.Y) / 2,
@@ -705,6 +709,9 @@ func (g *Game) movementProofWaypoints() []ProofWaypoint {
 }
 
 func roomDoorWaypoint(fromRoom, toRoom string) ProofWaypoint {
+	if point, ok := AuthoredDoorWaypoint(fromRoom, toRoom); ok {
+		return point
+	}
 	fromLayout, ok := RoomWorldLayoutFor(fromRoom)
 	if !ok {
 		return ProofWaypoint{Label: fromRoom + "_door"}

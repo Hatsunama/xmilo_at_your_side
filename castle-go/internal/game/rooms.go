@@ -76,6 +76,7 @@ type ProofOverlayState struct {
 	ActiveSegment string
 	ExpectedRoute []RouteStep
 	Waypoints     []ProofWaypoint
+	ShowWalkable  bool
 }
 
 func (l RoomWorldLayout) Bounds() WorldBounds {
@@ -367,6 +368,10 @@ func (rs *RoomScene) drawOverviewConnection(screen *ebiten.Image, from, to RoomW
 }
 
 func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, layout RoomWorldLayout) {
+	if def, ok := AuthoredRoomDefinitionFor(string(roomID)); ok {
+		rs.drawAuthoredRoomDefinition(screen, def)
+		return
+	}
 	plate := layout.OverviewPlateBounds()
 	plateX := plate.MinX
 	plateY := plate.MinY
@@ -386,9 +391,40 @@ func (rs *RoomScene) drawOverviewRoomPlate(screen *ebiten.Image, roomID RoomID, 
 	rs.drawWorldRect(screen, plateX+56, plateY+plateH-88, plateW-112, 28, color.RGBA{R: accent.R, G: accent.G, B: accent.B, A: accent.A / 2})
 }
 
+func (rs *RoomScene) drawAuthoredRoomDefinition(screen *ebiten.Image, def RoomSceneDefinition) {
+	rs.drawRoomLayer(screen, def.Floor)
+	rs.drawRoomLayer(screen, def.RearWall)
+	for _, layer := range def.SideWalls {
+		rs.drawRoomLayer(screen, layer)
+	}
+	for _, layer := range def.Lighting {
+		rs.drawRoomLayer(screen, layer)
+	}
+	for _, layer := range def.Props {
+		rs.drawRoomLayer(screen, layer)
+	}
+	for _, door := range def.Doors {
+		rs.drawWorldRect(screen, door.X-door.Width/2, door.Y-14, door.Width, 28, color.RGBA{R: 232, G: 208, B: 130, A: 235})
+	}
+	for _, layer := range def.ForegroundOccluders {
+		rs.drawRoomLayer(screen, layer)
+	}
+}
+
+func (rs *RoomScene) drawRoomLayer(screen *ebiten.Image, layer RoomLayer) {
+	if !layer.ProductVisible {
+		return
+	}
+	bounds := layer.Bounds.Normalized()
+	rs.drawWorldRect(screen, bounds.MinX, bounds.MinY, bounds.Width(), bounds.Height(), layer.Color)
+}
+
 func (rs *RoomScene) drawProofOverlay(screen *ebiten.Image) {
 	if !rs.proof.Enabled || rs.cam == nil {
 		return
+	}
+	if rs.proof.ShowWalkable {
+		rs.drawAuthoredProofGeometry(screen)
 	}
 	for roomID, layout := range RoomWorldLayouts() {
 		x, y := rs.cam.ApplyToScreen(layout.CenterX, layout.CenterY)
@@ -421,6 +457,23 @@ func (rs *RoomScene) drawProofOverlay(screen *ebiten.Image) {
 	drawDebugText(screen, 10, 38, "ROUTE "+routeLabel(rs.proof.ExpectedRoute), 1, color.RGBA{R: 120, G: 220, B: 255, A: 255})
 	drawDebugText(screen, 10, 52, "SEG "+rs.proof.ActiveSegment, 1, color.RGBA{R: 170, G: 255, B: 170, A: 255})
 	drawDebugText(screen, 10, 66, "CUR "+rs.proof.CurrentRoom+" TARGET "+rs.proof.TargetRoom, 1, color.RGBA{R: 255, G: 190, B: 190, A: 255})
+}
+
+func (rs *RoomScene) drawAuthoredProofGeometry(screen *ebiten.Image) {
+	for _, def := range AuthoredRoomDefinitions() {
+		for _, area := range def.WalkableAreas {
+			bounds := area.Bounds.Normalized()
+			rs.drawWorldRect(screen, bounds.MinX, bounds.MinY, bounds.Width(), 8, color.RGBA{R: 80, G: 255, B: 150, A: 220})
+			rs.drawWorldRect(screen, bounds.MinX, bounds.MaxY-8, bounds.Width(), 8, color.RGBA{R: 80, G: 255, B: 150, A: 220})
+			rs.drawWorldRect(screen, bounds.MinX, bounds.MinY, 8, bounds.Height(), color.RGBA{R: 80, G: 255, B: 150, A: 220})
+			rs.drawWorldRect(screen, bounds.MaxX-8, bounds.MinY, 8, bounds.Height(), color.RGBA{R: 80, G: 255, B: 150, A: 220})
+		}
+		for _, door := range def.Doors {
+			rs.drawWorldRect(screen, door.X-door.Width/2, door.Y-door.Width/2, door.Width, door.Width, color.RGBA{R: 255, G: 180, B: 70, A: 190})
+			x, y := rs.cam.ApplyToScreen(door.X, door.Y)
+			drawDebugText(screen, int(x)+8, int(y)-8, door.ID, 1, color.RGBA{R: 255, G: 230, B: 160, A: 255})
+		}
+	}
 }
 
 func routeLabel(route []RouteStep) string {

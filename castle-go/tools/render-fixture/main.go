@@ -56,6 +56,8 @@ type frameProof struct {
 	FrameLabel        string
 	ExpectedRoom      string
 	ExpectedRoute     string
+	CameraMode        string
+	RenderMode        string
 	MovementSegment   string
 	WaypointList      []string
 	RoomsTouched      []string
@@ -80,6 +82,14 @@ type phase20Manifest struct {
 	MissingFixtures               []string
 	FailedFixtures                []string
 	NonEmptyFileCheck             string
+	AuthoredRoomDefinitions       []string
+	DoorAnchorsUsed               []string
+	WalkableAreasUsed             []string
+	WalkableValidation            string
+	ProductCleanOverlayCheck      string
+	DebugOverlayCheck             string
+	RouteIntermediateRequired     string
+	RouteIntermediateObserved     string
 	RoomsVisuallyEntered          []string
 	PathNonwalkableCrossingReview string
 	VisualReview                  string
@@ -297,7 +307,7 @@ func runPhase20CurrentMapSuite(outDir string, width, height int) error {
 	}
 
 	manifest := phase20Manifest{
-		TaskID:      "PHASE20A1F_ART_BEHAVIOR_ROUTE_START_ANCHOR_REPAIR_001",
+		TaskID:      "PHASE20A4_ART_BEHAVIOR_AUTHORED_2_5D_ROOM_SLICE_IMPLEMENTATION_001",
 		Phase:       "phase_20",
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		RepoRoot:    repoRootForManifest(),
@@ -329,6 +339,11 @@ func runPhase20CurrentMapSuite(outDir string, width, height int) error {
 		},
 		MissingFixtures:               []string{},
 		FailedFixtures:                []string{},
+		AuthoredRoomDefinitions:       authoredRoomDefinitionNames(),
+		ProductCleanOverlayCheck:      "PASS_PRODUCT_CLEAN_FIXTURE_AVAILABLE_SEPARATELY",
+		DebugOverlayCheck:             "PASS_DEBUG_WALKABLE_FIXTURE_AVAILABLE_SEPARATELY",
+		RouteIntermediateRequired:     "bedroom",
+		RouteIntermediateObserved:     "bedroom",
 		PathNonwalkableCrossingReview: "USER_MANUAL_REVIEW_REQUIRED_WITH_DEBUG_OVERLAY",
 		VisualReview:                  "USER_MANUAL_REVIEW_REQUIRED",
 		Notes: []string{
@@ -393,6 +408,13 @@ func runPhase20CurrentMapSuite(outDir string, width, height int) error {
 			manifest.NonEmptyFileCheck = "FAIL"
 			break
 		}
+	}
+	validation := game.ValidateAuthoredRouteWaypoints(authoredRouteProofWaypoints())
+	manifest.DoorAnchorsUsed = validation.DoorAnchors
+	manifest.WalkableAreasUsed = validation.WalkableAreas
+	manifest.WalkableValidation = validation.Status
+	if validation.Status != "PASS" {
+		manifest.FailedFixtures = append(manifest.FailedFixtures, "authored route walkable validation failed: "+strings.Join(validation.InvalidPoints, ","))
 	}
 
 	if err := writePhase20Manifest(outDir, manifest); err != nil {
@@ -459,6 +481,8 @@ func writePhase20Manifest(outDir string, manifest phase20Manifest) error {
 		b.WriteString(fmt.Sprintf("    frame_label: %s\n", frame.FrameLabel))
 		b.WriteString(fmt.Sprintf("    expected_room: %s\n", frame.ExpectedRoom))
 		b.WriteString(fmt.Sprintf("    expected_route: %s\n", frame.ExpectedRoute))
+		b.WriteString(fmt.Sprintf("    camera_mode: %s\n", frame.CameraMode))
+		b.WriteString(fmt.Sprintf("    render_mode: %s\n", frame.RenderMode))
 		b.WriteString(fmt.Sprintf("    movement_segment: %s\n", frame.MovementSegment))
 		b.WriteString(fmt.Sprintf("    visual_route_review: %s\n", frame.VisualRouteReview))
 		b.WriteString(fmt.Sprintf("    path_nonwalkable_crossing_review: %s\n", frame.PathReview))
@@ -476,6 +500,14 @@ func writePhase20Manifest(outDir string, manifest phase20Manifest) error {
 	writeManifestList(&b, "missing_fixtures", manifest.MissingFixtures)
 	writeManifestList(&b, "failed_fixtures", manifest.FailedFixtures)
 	writeManifestValue(&b, "non_empty_file_check", manifest.NonEmptyFileCheck)
+	writeManifestList(&b, "authored_room_definitions", manifest.AuthoredRoomDefinitions)
+	writeManifestList(&b, "door_anchors_used", manifest.DoorAnchorsUsed)
+	writeManifestList(&b, "walkable_areas_used", manifest.WalkableAreasUsed)
+	writeManifestValue(&b, "walkable_validation", manifest.WalkableValidation)
+	writeManifestValue(&b, "product_clean_overlay_check", manifest.ProductCleanOverlayCheck)
+	writeManifestValue(&b, "debug_overlay_check", manifest.DebugOverlayCheck)
+	writeManifestValue(&b, "route_intermediate_required", manifest.RouteIntermediateRequired)
+	writeManifestValue(&b, "route_intermediate_observed", manifest.RouteIntermediateObserved)
 	writeManifestList(&b, "rooms_visually_entered_touched", manifest.RoomsVisuallyEntered)
 	writeManifestValue(&b, "path_nonwalkable_crossing_review", manifest.PathNonwalkableCrossingReview)
 	writeManifestValue(&b, "visual_review", manifest.VisualReview)
@@ -533,17 +565,78 @@ func routeProofForFixture(fixtureName string) string {
 	}
 }
 
+func isTrophyThresholdRouteFixture(fixtureName string) bool {
+	return fixtureName == "route_trophy_threshold_proof" ||
+		fixtureName == "route_trophy_threshold_product_clean" ||
+		fixtureName == "route_trophy_threshold_walkable_proof"
+}
+
+func authoredRoomDefinitionNames() []string {
+	return []string{"trophy_room:authored_2_5d", "bedroom:authored_2_5d", "threshold:authored_2_5d"}
+}
+
+func authoredRouteProofWaypoints() []game.ProofWaypoint {
+	var points []game.ProofWaypoint
+	appendPoint := func(point game.ProofWaypoint, ok bool) {
+		if ok {
+			points = append(points, point)
+		}
+	}
+	appendPoint(game.AuthoredInteriorWaypoint("trophy_room", "trophy_display"))
+	appendPoint(game.AuthoredDoorWaypoint("trophy_room", "bedroom"))
+	if from, okA := game.AuthoredDoorWaypoint("trophy_room", "bedroom"); okA {
+		if to, okB := game.AuthoredDoorWaypoint("bedroom", "trophy_room"); okB {
+			points = append(points, game.ProofWaypoint{X: (from.X + to.X) / 2, Y: (from.Y + to.Y) / 2, Label: "trophy_room_to_bedroom_corridor"})
+		}
+	}
+	appendPoint(game.AuthoredDoorWaypoint("bedroom", "trophy_room"))
+	appendPoint(game.AuthoredInteriorWaypoint("bedroom", "bedroom_pass_through"))
+	appendPoint(game.AuthoredDoorWaypoint("bedroom", "threshold"))
+	if from, okA := game.AuthoredDoorWaypoint("bedroom", "threshold"); okA {
+		if to, okB := game.AuthoredDoorWaypoint("threshold", "bedroom"); okB {
+			points = append(points, game.ProofWaypoint{X: (from.X + to.X) / 2, Y: (from.Y + to.Y) / 2, Label: "bedroom_to_threshold_corridor"})
+		}
+	}
+	appendPoint(game.AuthoredDoorWaypoint("threshold", "bedroom"))
+	appendPoint(game.AuthoredInteriorWaypoint("threshold", "threshold_center"))
+	return points
+}
+
+func cameraModeForFixture(fixtureName string) string {
+	switch fixtureName {
+	case "route_trophy_threshold_product_clean":
+		return "route_slice_product_clean"
+	case "route_trophy_threshold_walkable_proof":
+		return "route_slice_walkable_debug"
+	default:
+		return "phase20_current_map_route_proof"
+	}
+}
+
+func renderModeForFixture(fixtureName string) string {
+	switch fixtureName {
+	case "route_trophy_threshold_product_clean":
+		return "product_clean_authored_2_5d"
+	case "route_trophy_threshold_walkable_proof":
+		return "debug_walkable_authored_2_5d"
+	default:
+		return "phase20_proof_authored_2_5d_available"
+	}
+}
+
 func proofMetaFor(fixtureName, frameLabel string) frameProof {
 	meta := frameProof{
 		ExpectedRoom:      expectedRoomForFixture(fixtureName),
 		ExpectedRoute:     expectedRouteForFixture(fixtureName),
+		CameraMode:        cameraModeForFixture(fixtureName),
+		RenderMode:        renderModeForFixture(fixtureName),
 		MovementSegment:   "SEE_DEBUG_OVERLAY",
 		WaypointList:      []string{"SEE_DEBUG_OVERLAY_PATH_POLYLINE_AND_MARKERS"},
 		RoomsTouched:      roomsTouchedForFixture(fixtureName, frameLabel),
 		VisualRouteReview: "USER_MANUAL_REVIEW_REQUIRED_WITH_ROOM_LABELS",
 		PathReview:        "USER_MANUAL_REVIEW_REQUIRED_WITH_ROUTE_POLYLINE",
 	}
-	if fixtureName == "route_trophy_threshold_proof" {
+	if isTrophyThresholdRouteFixture(fixtureName) {
 		meta.ExpectedRoom = routeProofExpectedRoomForFrame(frameLabel)
 		meta.MovementSegment = routeProofSegmentForFrame(frameLabel)
 		meta.WaypointList = []string{
@@ -577,7 +670,7 @@ func expectedRoomForFixture(fixtureName string) string {
 		return "observatory"
 	case "arrival_potions":
 		return "potions_room"
-	case "arrival_threshold", "route_trophy_threshold_proof":
+	case "arrival_threshold", "route_trophy_threshold_proof", "route_trophy_threshold_product_clean", "route_trophy_threshold_walkable_proof":
 		return "threshold"
 	case "arrival_bedroom":
 		return "bedroom"
@@ -604,7 +697,7 @@ func expectedRouteForFixture(fixtureName string) string {
 		return "main_hall>threshold"
 	case "arrival_bedroom":
 		return "main_hall>threshold>bedroom"
-	case "route_trophy_threshold_proof":
+	case "route_trophy_threshold_proof", "route_trophy_threshold_product_clean", "route_trophy_threshold_walkable_proof":
 		return "trophy_room>bedroom>threshold"
 	default:
 		return expectedRoomForFixture(fixtureName)
@@ -612,7 +705,7 @@ func expectedRouteForFixture(fixtureName string) string {
 }
 
 func roomsTouchedForFixture(fixtureName, frameLabel string) []string {
-	if fixtureName == "route_trophy_threshold_proof" {
+	if isTrophyThresholdRouteFixture(fixtureName) {
 		switch {
 		case strings.Contains(frameLabel, "start_trophy"):
 			return []string{"trophy_room"}

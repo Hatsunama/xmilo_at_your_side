@@ -78,6 +78,10 @@ func Named(name string) (Sequence, error) {
 		return arrivalBedroom(), nil
 	case "route_trophy_threshold_proof":
 		return routeTrophyThresholdProof(), nil
+	case "route_trophy_threshold_product_clean":
+		return routeTrophyThresholdProductClean(), nil
+	case "route_trophy_threshold_walkable_proof":
+		return routeTrophyThresholdWalkableProof(), nil
 	case "topology_segment_proof":
 		return topologySegmentProof(), nil
 	default:
@@ -89,6 +93,7 @@ func Names() []string {
 	names := append([]string{}, AcceptanceNames()...)
 	names = append(names, "threshold_route_demo", "threshold_variant_demo", "home_idle_demo")
 	names = append(names, Phase20CurrentMapNames()...)
+	names = append(names, "route_trophy_threshold_product_clean", "route_trophy_threshold_walkable_proof")
 	names = append(names, "topology_segment_proof")
 	return names
 }
@@ -741,6 +746,20 @@ func routeTrophyThresholdProof() Sequence {
 			},
 		},
 	}
+}
+
+func routeTrophyThresholdProductClean() Sequence {
+	sequence := routeTrophyThresholdProof()
+	sequence.Name = "route_trophy_threshold_product_clean"
+	sequence.Description = "Product-clean authored 2.5D route slice without debug overlays."
+	return sequence
+}
+
+func routeTrophyThresholdWalkableProof() Sequence {
+	sequence := routeTrophyThresholdProof()
+	sequence.Name = "route_trophy_threshold_walkable_proof"
+	sequence.Description = "Debug proof for authored 2.5D door anchors, walkable bounds, and route path."
+	return sequence
 }
 
 func thresholdVariantDemo() Sequence {

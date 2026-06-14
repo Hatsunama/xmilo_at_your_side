@@ -100,6 +100,9 @@ func (c *Camera) AnchorToScreen(anchorID string) (float64, float64) {
 }
 
 func (c *Camera) AnchorToRoomScreen(roomID, anchorID string) (float64, float64) {
+	if point, ok := AuthoredInteriorWaypoint(roomID, anchorID); ok {
+		return point.X, point.Y
+	}
 	if CanonicalRoomID(roomID) == RoomMainHall {
 		if x, y, ok := c.dynamicOverviewAnchor(anchorID); ok {
 			return x, y
